@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/tariff-sync",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/documents/sweep",
+      "schedule": "20 * * * *"
+    }
+  ]
+}

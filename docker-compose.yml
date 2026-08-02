@@ -1,0 +1,17 @@
+# Optional local Postgres — the DATABASE_URL swap target (see CLAUDE.md).
+#   docker compose up -d
+#   export DATABASE_URL=postgres://mobytrade:mobytrade@localhost:5434/mobytrade
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: mobytrade
+      POSTGRES_PASSWORD: mobytrade
+      POSTGRES_DB: mobytrade
+    ports:
+      - "5434:5432"
+    volumes:
+      - mobytrade-pgdata:/var/lib/postgresql/data
+
+volumes:
+  mobytrade-pgdata:

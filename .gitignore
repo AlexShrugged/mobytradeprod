@@ -1,0 +1,19 @@
+# deps / build
+node_modules/
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# local data
+.pglite/
+.files/
+
+# env
+.env*
+!.env.example
+
+# misc
+.DS_Store
+.gstack/

@@ -1,0 +1,1 @@
+export { ReductoDocumentProcessor } from "./processor";
