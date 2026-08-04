@@ -39,9 +39,9 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // ---------------------------------------------------------------- org
 
 export const ORG_SEED = {
-  name: "Countless Industries",
-  importerOfRecord: "Countless Industries, Inc.",
-  inboxAddress: "docs@countless.mobytrade.app",
+  name: "Waystar Royco",
+  importerOfRecord: "Waystar Royco, Inc.",
+  inboxAddress: "docs@waystar.mobytrade.app",
 };
 
 // ---------------------------------------------------------------- parts
@@ -691,7 +691,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
   // -------------------------------------------------- integration sources
   const integrationSources: SourceSeed[] = [
     { kind: "manual_upload", name: "Manual upload", status: "active", config: {}, lastReceivedAt: at(-3, 15, 0), lastRunAt: null },
-    { kind: "sftp", name: "Broker document feed", status: "active", config: { host: "sftp.pacificbrokerage.example.com", folder: "/outbound/countless", filePattern: "*.pdf" }, lastReceivedAt: at(-2, 6, 30), lastRunAt: hoursAgo(2) },
+    { kind: "sftp", name: "Broker document feed", status: "active", config: { host: "sftp.pacificbrokerage.example.com", folder: "/outbound/waystar", filePattern: "*.pdf" }, lastReceivedAt: at(-2, 6, 30), lastRunAt: hoursAgo(2) },
     { kind: "email_inbox", name: "Document inbox", status: "active", config: { address: ORG_SEED.inboxAddress }, lastReceivedAt: at(-1, 16, 0), lastRunAt: null },
     { kind: "erp", name: "Acumatica", status: "not_configured", config: { provider: "acumatica" }, lastReceivedAt: null, lastRunAt: null },
   ];

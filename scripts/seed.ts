@@ -1,4 +1,4 @@
-// Deterministic demo seed for MobyTrade: "Countless Industries", an e-bike
+// Deterministic demo seed for MobyTrade: "Waystar Royco", an e-bike
 // importer, with ~6 months of entries/shipments/POs, a quote pipeline, two
 // refund claims, and the tariff reference tables — every date anchored to
 // the day the seed runs (see day()/at()) so the demo, including the

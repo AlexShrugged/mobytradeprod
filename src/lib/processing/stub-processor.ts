@@ -294,7 +294,7 @@ export class StubDocumentProcessor implements DocumentProcessor {
             entry_date: entryDate,
             port_of_entry: pick(ENTRY_PORTS, seed),
             entry_type: "01",
-            importer_of_record: "Countless Industries, Inc.",
+            importer_of_record: "Waystar Royco, Inc.",
             referenced_bols: pickSome(BOL_POOL, seed, 1 + (seed % 2)),
             referenced_pos: pickSome(PO_POOL, seed, 1 + (seed % 2)),
             // Header totals derived from the generated lines so the

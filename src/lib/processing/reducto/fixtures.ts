@@ -32,7 +32,7 @@ export const PORT_ENTRY_RESPONSE = [
     entry_date: cite("2026-07-01"),
     port_of_entry: cite("Los Angeles, CA"),
     entry_type: cite("01"),
-    importer_of_record: cite("Countless Industries, Inc."),
+    importer_of_record: cite("Waystar Royco, Inc."),
     referenced_bols: [cite("MAEU2264101"), cite("ONEY8811327")],
     referenced_pos: [cite("PO-2026-001")],
     // Stringified currency — must coerce to 15750.
@@ -111,7 +111,7 @@ export const PORT_ENTRY_RESPONSE_CH99_SPLIT = [
     entry_date: cite("2026-07-28"),
     port_of_entry: cite("Long Beach, CA"),
     entry_type: cite("01"),
-    importer_of_record: cite("Countless Industries, Inc."),
+    importer_of_record: cite("Waystar Royco, Inc."),
     referenced_bols: [cite("MAEU2264109")],
     referenced_pos: [],
     total_entered_value: cite("$8,750.00"),
