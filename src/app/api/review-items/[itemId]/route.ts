@@ -6,7 +6,7 @@ import {
 } from "@/lib/classification/service";
 import type { ReviewActionInput } from "@/lib/classification/review";
 import { db } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 
 const ACTIONS = ["accept", "reject", "acknowledge", "manual", "reopen"] as const;
 type Action = (typeof ACTIONS)[number];
@@ -21,7 +21,12 @@ export async function PATCH(
   const { itemId } = await params;
   const orgId = await getCurrentOrgId();
 
-  let body: { action?: unknown; code?: unknown; notes?: unknown };
+  let body: {
+    action?: unknown;
+    code?: unknown;
+    notes?: unknown;
+    effectiveDate?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -53,10 +58,30 @@ export async function PATCH(
   }
   const notes = typeof body.notes === "string" ? body.notes : undefined;
 
+  // Optional: date the commit ("reclassified from this day forward");
+  // absent means the code was always correct and history is corrected.
+  let effectiveDate: string | null = null;
+  if (body.effectiveDate != null && body.effectiveDate !== "") {
+    if (
+      typeof body.effectiveDate !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(body.effectiveDate)
+    ) {
+      return NextResponse.json(
+        { error: "effectiveDate must be a YYYY-MM-DD date." },
+        { status: 400 },
+      );
+    }
+    effectiveDate = body.effectiveDate;
+  }
+
   try {
+    const actor = await getCurrentActorName();
     const result = await db.transaction((tx) =>
-      // Actor is free text until auth lands.
-      applyReviewDecision(tx, orgId, itemId, input, { actor: "Alex", notes }),
+      applyReviewDecision(tx, orgId, itemId, input, {
+        actor,
+        notes,
+        effectiveDate,
+      }),
     );
     if (!result) {
       return NextResponse.json(

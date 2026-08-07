@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  diffQuoteAgainstPart,
+  diffQuoteAgainstSource,
   pickWinningQuote,
   poLineMatchesQuote,
   selectSupersededLineIds,
-  type PartSnapshot,
   type PoLineMatchInput,
   type QuoteLineMatchInput,
+  type SourceSnapshot,
 } from "./match";
 
 function po(over: Partial<PoLineMatchInput> = {}): PoLineMatchInput {
@@ -16,7 +16,7 @@ function po(over: Partial<PoLineMatchInput> = {}): PoLineMatchInput {
     unitPrice: 100,
     orderDate: "2026-06-15",
     currency: "USD",
-    supplierName: "Shenzhen E-Mobility Co.",
+    vendorId: "vendor-shenzhen",
     ...over,
   };
 }
@@ -27,13 +27,13 @@ function quote(over: Partial<QuoteLineMatchInput> = {}): QuoteLineMatchInput {
     unitCost: 100,
     currency: "USD",
     quoteDate: "2026-06-01",
-    supplierName: "Shenzhen E-Mobility Co.",
+    vendorId: "vendor-shenzhen",
     ...over,
   };
 }
 
 describe("poLineMatchesQuote", () => {
-  it("matches when part, date, price, currency, and supplier all agree", () => {
+  it("matches when part, date, price, currency, and vendor all agree", () => {
     expect(poLineMatchesQuote(po(), quote())).toBe(true);
   });
 
@@ -88,29 +88,17 @@ describe("poLineMatchesQuote", () => {
     expect(poLineMatchesQuote(po({ currency: "usd" }), quote())).toBe(true);
   });
 
-  it("supplier names gate only when both sides carry one", () => {
+  it("vendors gate only when both sides resolved one", () => {
     // Both present, different → block.
     expect(
-      poLineMatchesQuote(po({ supplierName: "Other Supplier Ltd." }), quote()),
+      poLineMatchesQuote(po({ vendorId: "vendor-other" }), quote()),
     ).toBe(false);
-    // Trim/casefold variants are the same supplier.
+    // Missing PO vendor does not block.
+    expect(poLineMatchesQuote(po({ vendorId: null }), quote())).toBe(true);
+    // Missing sheet vendor does not block either.
+    expect(poLineMatchesQuote(po(), quote({ vendorId: null }))).toBe(true);
     expect(
-      poLineMatchesQuote(
-        po({ supplierName: "  SHENZHEN e-mobility co. " }),
-        quote(),
-      ),
-    ).toBe(true);
-    // Missing PO supplier does not block.
-    expect(poLineMatchesQuote(po({ supplierName: null }), quote())).toBe(true);
-    // Missing sheet supplier does not block either.
-    expect(
-      poLineMatchesQuote(po(), quote({ supplierName: null })),
-    ).toBe(true);
-    expect(
-      poLineMatchesQuote(
-        po({ supplierName: null }),
-        quote({ supplierName: null }),
-      ),
+      poLineMatchesQuote(po({ vendorId: null }), quote({ vendorId: null })),
     ).toBe(true);
   });
 });
@@ -168,78 +156,72 @@ describe("selectSupersededLineIds", () => {
   const incoming = {
     id: "new",
     partId: "part-1",
-    supplierName: "Acme Trading",
+    vendorId: "vendor-acme",
   };
 
-  it("supersedes received lines for the same part and supplier only", () => {
+  it("supersedes received lines for the same part and vendor only", () => {
     const ids = selectSupersededLineIds(incoming, [
-      { id: "old-1", partId: "part-1", status: "received", supplierName: " acme TRADING " },
-      { id: "other-part", partId: "part-2", status: "received", supplierName: "Acme Trading" },
-      { id: "other-supplier", partId: "part-1", status: "received", supplierName: "Bolt Works" },
+      { id: "old-1", partId: "part-1", status: "received", vendorId: "vendor-acme" },
+      { id: "other-part", partId: "part-2", status: "received", vendorId: "vendor-acme" },
+      { id: "other-vendor", partId: "part-1", status: "received", vendorId: "vendor-bolt" },
     ]);
     expect(ids).toEqual(["old-1"]);
   });
 
   it("never supersedes decided lines — approved/applied/rejected survive re-ingestion", () => {
     const ids = selectSupersededLineIds(incoming, [
-      { id: "approved", partId: "part-1", status: "approved", supplierName: "Acme Trading" },
-      { id: "applied", partId: "part-1", status: "applied", supplierName: "Acme Trading" },
-      { id: "rejected", partId: "part-1", status: "rejected", supplierName: "Acme Trading" },
-      { id: "superseded", partId: "part-1", status: "superseded", supplierName: "Acme Trading" },
+      { id: "approved", partId: "part-1", status: "approved", vendorId: "vendor-acme" },
+      { id: "applied", partId: "part-1", status: "applied", vendorId: "vendor-acme" },
+      { id: "rejected", partId: "part-1", status: "rejected", vendorId: "vendor-acme" },
+      { id: "superseded", partId: "part-1", status: "superseded", vendorId: "vendor-acme" },
     ]);
     expect(ids).toEqual([]);
   });
 
   it("excludes the incoming line itself", () => {
     const ids = selectSupersededLineIds(incoming, [
-      { id: "new", partId: "part-1", status: "received", supplierName: "Acme Trading" },
+      { id: "new", partId: "part-1", status: "received", vendorId: "vendor-acme" },
     ]);
     expect(ids).toEqual([]);
   });
 
-  it("an unnamed sheet supersedes only other unnamed sheets", () => {
-    const unnamed = { id: "new", partId: "part-1", supplierName: null };
+  it("an unnamed sheet (null vendor) supersedes only other unnamed sheets", () => {
+    const unnamed = { id: "new", partId: "part-1", vendorId: null };
     const ids = selectSupersededLineIds(unnamed, [
-      { id: "named", partId: "part-1", status: "received", supplierName: "Acme Trading" },
-      { id: "blank", partId: "part-1", status: "received", supplierName: "  " },
-      { id: "nullish", partId: "part-1", status: "received", supplierName: null },
+      { id: "named", partId: "part-1", status: "received", vendorId: "vendor-acme" },
+      { id: "nullish", partId: "part-1", status: "received", vendorId: null },
     ]);
-    expect(ids).toEqual(["blank", "nullish"]);
+    expect(ids).toEqual(["nullish"]);
   });
 });
 
-describe("diffQuoteAgainstPart", () => {
-  const part = (over: Partial<PartSnapshot> = {}): PartSnapshot => ({
+describe("diffQuoteAgainstSource", () => {
+  const source = (over: Partial<NonNullable<SourceSnapshot>> = {}) => ({
     unitCost: "100.0000",
     countryOfOrigin: "CN",
-    manufacturer: "Shenzhen E-Mobility Co.",
     ...over,
   });
 
-  it("no diffs when the quote repeats the part's values", () => {
+  it("no diffs when the quote repeats the source's values", () => {
     expect(
-      diffQuoteAgainstPart(
-        {
-          unitCost: 100,
-          countryOfOrigin: "CN",
-          supplierName: "Shenzhen E-Mobility Co.",
-        },
-        part(),
+      diffQuoteAgainstSource(
+        { unitCost: 100, countryOfOrigin: "CN" },
+        source(),
       ),
     ).toEqual([]);
   });
 
   it("cost compares at 4-decimal precision, tolerating numeric round-trips", () => {
     expect(
-      diffQuoteAgainstPart(
-        { unitCost: 100, countryOfOrigin: null, supplierName: null },
-        part({ unitCost: "100.00" }),
+      diffQuoteAgainstSource(
+        { unitCost: 100, countryOfOrigin: null },
+        source({ unitCost: "100.00" }),
       ),
     ).toEqual([]);
 
-    const diffs = diffQuoteAgainstPart(
-      { unitCost: 97.5, countryOfOrigin: null, supplierName: null },
-      part(),
+    const diffs = diffQuoteAgainstSource(
+      { unitCost: 97.5, countryOfOrigin: null },
+      source(),
     );
     expect(diffs).toEqual([
       {
@@ -251,30 +233,36 @@ describe("diffQuoteAgainstPart", () => {
     ]);
   });
 
-  it("a null part cost records the seed write", () => {
-    const diffs = diffQuoteAgainstPart(
-      { unitCost: 12.3456, countryOfOrigin: null, supplierName: null },
-      part({ unitCost: null }),
+  it("a null source (vendor new for this part) seeds the full row", () => {
+    const diffs = diffQuoteAgainstSource(
+      { unitCost: 12.3456, countryOfOrigin: "vn" },
+      null,
     );
-    expect(diffs[0]).toMatchObject({
-      field: "unit_cost",
-      oldValue: null,
-      newValue: "12.3456",
-    });
+    expect(diffs).toEqual([
+      {
+        field: "unit_cost",
+        column: "unitCost",
+        oldValue: null,
+        newValue: "12.3456",
+      },
+      {
+        field: "country_of_origin",
+        column: "countryOfOrigin",
+        oldValue: null,
+        newValue: "VN",
+      },
+    ]);
   });
 
-  it("COO and manufacturer change only when the quote carries them", () => {
-    // Quote silent on COO/supplier → the part's values stand.
+  it("COO changes only when the quote carries one — never nulled out", () => {
+    // Quote silent on COO → the source's value stands.
     expect(
-      diffQuoteAgainstPart(
-        { unitCost: 100, countryOfOrigin: null, supplierName: null },
-        part(),
-      ),
+      diffQuoteAgainstSource({ unitCost: 100, countryOfOrigin: null }, source()),
     ).toEqual([]);
 
-    const diffs = diffQuoteAgainstPart(
-      { unitCost: 100, countryOfOrigin: "vn", supplierName: "Bolt Works" },
-      part(),
+    const diffs = diffQuoteAgainstSource(
+      { unitCost: 100, countryOfOrigin: "vn" },
+      source(),
     );
     expect(diffs).toEqual([
       {
@@ -283,24 +271,16 @@ describe("diffQuoteAgainstPart", () => {
         oldValue: "CN",
         newValue: "VN",
       },
-      {
-        field: "manufacturer",
-        column: "manufacturer",
-        oldValue: "Shenzhen E-Mobility Co.",
-        newValue: "Bolt Works",
-      },
     ]);
   });
 
   it("never emits an HTS field — quotes cannot write classification", () => {
-    const diffs = diffQuoteAgainstPart(
-      { unitCost: 1, countryOfOrigin: "VN", supplierName: "Bolt Works" },
-      part({ unitCost: null, countryOfOrigin: null, manufacturer: null }),
+    const diffs = diffQuoteAgainstSource(
+      { unitCost: 1, countryOfOrigin: "VN" },
+      null,
     );
     for (const d of diffs) {
-      expect(["unit_cost", "country_of_origin", "manufacturer"]).toContain(
-        d.field,
-      );
+      expect(["unit_cost", "country_of_origin"]).toContain(d.field);
     }
   });
 });

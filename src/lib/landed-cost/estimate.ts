@@ -6,8 +6,8 @@
 // Relative imports on purpose: this module is reachable from the tsx-run
 // seed script, which must not depend on bundler path aliases.
 
-import { HMF_RATE, MPF_RATE } from "../db/seed-data/tariff";
 import { computeExpectedCharges } from "../duty/calculator";
+import { HMF_RATE, MPF_RATE } from "../duty/fees";
 import type { ReferenceData } from "../duty/types";
 import { formatRate } from "../format";
 import { assembleLandedCost } from "./assemble";

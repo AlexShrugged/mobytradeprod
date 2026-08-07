@@ -51,8 +51,13 @@ function motorLine(): AuditableLine {
     htsCode: "8501.31.4000",
     htsCodeDigits: "8501314000",
     countryOfOrigin: "CN",
+    vendorId: null,
     enteredValue: "10000.00",
+    quantity: "100.0000",
     partHtsCode: "8501.31.4000",
+    partHtsCodeCurrent: "8501.31.4000",
+    partHtsCurrentSince: null,
+    partSources: [],
     charges: [
       charge("base_duty", "8501.31.4000", 0.04, "400.00"),
       charge("additional_duty", "9903.88.01", 0.25, "2500.00"),
@@ -72,7 +77,6 @@ function entry(
     totalDuty,
     sail,
     lines: [motorLine()],
-    linkedPos: [],
     linkedInvoices: [],
   };
 }

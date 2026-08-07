@@ -12,7 +12,10 @@ export type ClassifyInput = {
   sku: string;
   name: string;
   description: string | null;
-  countryOfOrigin: string | null;
+  /** Distinct origins across the part's (vendor, COO) source rows, sorted.
+   *  Classification is per-product — origin is context, not a decider — but
+   *  a real classifier may use it to sanity-check candidates. */
+  countriesOfOrigin: string[];
   /** The committed catalog code, if any. Provisional auto-selects are not
    *  committed and must be passed as null. */
   currentHtsCode: string | null;

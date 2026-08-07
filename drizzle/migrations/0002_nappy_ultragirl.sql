@@ -1,0 +1,1 @@
+ALTER TABLE "orgs" ADD COLUMN "default_actor_name" text;

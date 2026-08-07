@@ -23,7 +23,7 @@ import {
   HTS_SEED,
   STACKING_SEED,
 } from "../src/lib/db/seed-data/tariff";
-import { buildStory } from "../src/lib/db/seed-data/story";
+import { buildStory, VENDOR_SEED } from "../src/lib/db/seed-data/story";
 import type { DocLinkSeed } from "../src/lib/db/seed-data/story";
 import { normalizeHts } from "../src/lib/duty/calculator";
 import { loadReferenceData } from "../src/lib/duty/reference";
@@ -34,18 +34,24 @@ const FILES_DIR = "./.files";
 /** Entry numbers normalize to digits only ("231-4501287-4" → "23145012874"). */
 const normalizeEntryNumber = (n: string) => n.replace(/\D/g, "");
 
-/** Minimal valid single-page PDF; the comment line varies the byte size. */
-const placeholderPdf = (fileName: string) =>
-  [
+/** Minimal valid PDF with `pages` blank pages (packet parents are
+ *  multi-page); the comment line varies the byte size. */
+const placeholderPdf = (fileName: string, pages = 1) => {
+  const pageIds = Array.from({ length: pages }, (_, i) => `${3 + i} 0 R`);
+  return [
     "%PDF-1.4",
     `% MobyTrade seed placeholder — ${fileName}`,
     "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
-    "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
-    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj",
+    `2 0 obj << /Type /Pages /Kids [${pageIds.join(" ")}] /Count ${pages} >> endobj`,
+    ...pageIds.map(
+      (_, i) =>
+        `${3 + i} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj`,
+    ),
     "trailer << /Root 1 0 R >>",
     "%%EOF",
     "",
   ].join("\n");
+};
 
 async function main() {
   console.log("Seeding mobytrade database…");
@@ -69,9 +75,11 @@ async function main() {
   await db.delete(schema.entryLineCharges);
   await db.delete(schema.entryLineItems);
   await db.delete(schema.refundClaims);
+  await db.delete(schema.entryInvoices);
   await db.delete(schema.invoiceLineItems);
   await db.delete(schema.invoices);
   await db.delete(schema.fieldChanges);
+  await db.delete(schema.partClassifications);
   await db.delete(schema.reviewItems);
   await db.delete(schema.htsClassificationCandidates);
   await db.delete(schema.htsClassifications);
@@ -87,7 +95,9 @@ async function main() {
   await db.delete(schema.entries);
   await db.delete(schema.shipments);
   await db.delete(schema.purchaseOrders);
+  await db.delete(schema.partSources);
   await db.delete(schema.parts);
+  await db.delete(schema.vendors);
   await db.delete(schema.scenarios);
   await db.delete(schema.proposedMeasures);
   await db.delete(schema.measureRevisions);
@@ -101,6 +111,29 @@ async function main() {
   // ------------------------------------------------------------- org
   const [org] = await db.insert(schema.orgs).values(story.org).returning();
   const orgId = org.id;
+
+  // ------------------------------------------------------------- vendors
+  // Canonical names only (resolution is trim+casefold, so a suffix variant
+  // would mint a second vendor). Every supplier string in the story must
+  // resolve here — the lookups below throw on a miss.
+  const insertedVendors = await db
+    .insert(schema.vendors)
+    .values(
+      VENDOR_SEED.map((name) => ({
+        orgId,
+        name,
+        nameNormalized: name.trim().toLowerCase(),
+      })),
+    )
+    .returning({ id: schema.vendors.id, name: schema.vendors.name });
+  const vendorIdByNameMap = Object.fromEntries(
+    insertedVendors.map((v) => [v.name, v.id]),
+  );
+  const vendorIdByName = (name: string): string => {
+    const id = vendorIdByNameMap[name];
+    if (!id) throw new Error(`story references unknown vendor "${name}"`);
+    return id;
+  };
 
   // ------------------------------------------- tariff reference data
   // Global tables (no org): Chapter 99 measures + their rows, the base
@@ -186,20 +219,38 @@ async function main() {
   // ------------------------------------------------------------ documents
   // Inserted before quote sheets (which FK them); document_links land last,
   // once every linked entity exists. Placeholder PDFs are written to
-  // ./.files/ so downloads work; fileSize is the real byte count.
+  // ./.files/ so downloads work; fileSize is the real byte count. Packet
+  // children share their parent's file (storageKey + size) and only add a
+  // role + page range — no file of their own.
   mkdirSync(FILES_DIR, { recursive: true });
   const docIdByFile: Record<string, string> = {};
+  const fileSizeByName: Record<string, number> = {};
   for (const d of story.documents) {
-    const pdf = placeholderPdf(d.fileName);
-    writeFileSync(join(FILES_DIR, d.fileName), pdf);
+    let storageKey: string;
+    let fileSize: number;
+    if (d.packet) {
+      if (!docIdByFile[d.packet.parentFileName]) {
+        throw new Error(
+          `packet child ${d.fileName} listed before its parent ${d.packet.parentFileName}`,
+        );
+      }
+      storageKey = d.packet.parentFileName;
+      fileSize = fileSizeByName[d.packet.parentFileName];
+    } else {
+      const pdf = placeholderPdf(d.fileName, d.pages ?? 1);
+      writeFileSync(join(FILES_DIR, d.fileName), pdf);
+      storageKey = d.fileName;
+      fileSize = Buffer.byteLength(pdf);
+      fileSizeByName[d.fileName] = fileSize;
+    }
     const [doc] = await db
       .insert(schema.documents)
       .values({
         orgId,
         fileName: d.fileName,
-        fileSize: Buffer.byteLength(pdf),
+        fileSize,
         mimeType: "application/pdf",
-        storageKey: d.fileName,
+        storageKey,
         docType: d.docType,
         status: "processed",
         sourceId: sourceIdByKind[d.sourceKind],
@@ -207,6 +258,9 @@ async function main() {
         processedBy: "stub",
         uploadedAt: d.uploadedAt,
         processedAt: new Date(d.uploadedAt.getTime() + 90_000),
+        parentDocumentId: d.packet ? docIdByFile[d.packet.parentFileName] : null,
+        packetRole: d.packet?.role ?? null,
+        pageRange: d.packet?.pageRange ?? null,
       })
       .returning({ id: schema.documents.id });
     docIdByFile[d.fileName] = doc.id;
@@ -220,10 +274,7 @@ async function main() {
         orgId,
         sku: p.sku,
         name: p.name,
-        manufacturer: p.manufacturer,
         htsCode: p.htsCode,
-        countryOfOrigin: p.countryOfOrigin,
-        unitCost: p.unitCost,
         status: p.status,
         htsReviewStatus: p.htsReviewStatus,
         // Catalog onboarding predates the first PO, staggered so "SKU
@@ -237,6 +288,90 @@ async function main() {
   const partIdBySku = Object.fromEntries(insertedParts.map((p) => [p.sku, p.id]));
   const partName = Object.fromEntries(story.parts.map((p) => [p.sku, p.name]));
 
+  // Classification windows: story-driven history where present (the
+  // EB-DSP-LCD reclassification), else one open-start current window per
+  // part with a committed code — as-of audits then reproduce current-state
+  // behavior exactly for unreclassified parts.
+  const windowsBySku = new Map<string, typeof story.classificationWindows>();
+  for (const w of story.classificationWindows) {
+    const list = windowsBySku.get(w.sku) ?? [];
+    list.push(w);
+    windowsBySku.set(w.sku, list);
+  }
+  await db.insert(schema.partClassifications).values(
+    story.parts.flatMap((p, i) => {
+      const onboarded = p.status === "draft" ? at(-2, 9) : at(-210 + i * 3, 9);
+      const history = windowsBySku.get(p.sku);
+      if (history) {
+        return history.map((w) => ({
+          orgId,
+          partId: partIdBySku[p.sku],
+          htsCode: w.htsCode,
+          validFrom: w.validFrom,
+          validTo: w.validTo,
+          source: w.source,
+          actor: w.actor,
+          note: w.note,
+          createdAt: w.recordedAt,
+          updatedAt: w.recordedAt,
+        }));
+      }
+      if (p.htsCode === null) return [];
+      return [
+        {
+          orgId,
+          partId: partIdBySku[p.sku],
+          htsCode: p.htsCode,
+          validFrom: null as string | null,
+          validTo: null as string | null,
+          source: "seed",
+          actor: null as string | null,
+          note: null as string | null,
+          createdAt: onboarded,
+          updatedAt: onboarded,
+        },
+      ];
+    }),
+  );
+
+  // One field_changes row per reclassification transition so the events
+  // feed narrates it (occurredOn = the decision's recordedAt).
+  for (const [sku, history] of windowsBySku) {
+    const ordered = [...history].sort((a, b) =>
+      (a.validFrom ?? "").localeCompare(b.validFrom ?? ""),
+    );
+    for (let i = 1; i < ordered.length; i++) {
+      await db.insert(schema.fieldChanges).values({
+        orgId,
+        entityType: "part",
+        entityId: partIdBySku[sku],
+        field: "hts_code",
+        oldValue: ordered[i - 1].htsCode,
+        newValue: ordered[i].htsCode,
+        source: ordered[i].source,
+        actor: ordered[i].actor,
+        note: ordered[i].note,
+        createdAt: ordered[i].recordedAt,
+      });
+    }
+  }
+
+  // The (part, vendor) sourcing facts — COO and cost live here, not on the
+  // part. Timestamps track the part's onboarding.
+  await db.insert(schema.partSources).values(
+    story.parts.flatMap((p, i) =>
+      p.sources.map((s) => ({
+        orgId,
+        partId: partIdBySku[p.sku],
+        vendorId: vendorIdByName(s.vendor),
+        countryOfOrigin: s.countryOfOrigin,
+        unitCost: s.unitCost,
+        createdAt: p.status === "draft" ? at(-2, 9) : at(-210 + i * 3, 9),
+        updatedAt: p.status === "draft" ? at(-2, 9) : at(-210 + i * 3, 9),
+      })),
+    ),
+  );
+
   // ------------------------------------------------------ purchase orders
   const poIdByNumber: Record<string, string> = {};
   const poLineId: Record<string, string> = {}; // "PO-2026-005#1" → id
@@ -247,11 +382,11 @@ async function main() {
         orgId,
         poNumber: po.poNumber,
         supplierName: po.supplierName,
+        vendorId: vendorIdByName(po.supplierName),
         orderDate: po.orderDate,
         expectedDate: po.expectedDate,
         currency: "USD",
         totalAmount: po.totalAmount.toFixed(2),
-        status: po.status,
       })
       .returning({ id: schema.purchaseOrders.id });
     poIdByNumber[po.poNumber] = row.id;
@@ -266,6 +401,7 @@ async function main() {
           partId: partIdBySku[l.sku],
           sku: l.sku,
           description: partName[l.sku],
+          countryOfOrigin: l.countryOfOrigin ?? null,
           quantity: l.quantity.toFixed(4),
           unitPrice: l.unitPrice.toFixed(4),
           totalPrice: (Math.round(l.quantity * l.unitPrice * 100) / 100).toFixed(2),
@@ -302,7 +438,6 @@ async function main() {
         portOfEntry: e.portOfEntry,
         entryType: e.entryType,
         importerOfRecord: story.org.importerOfRecord,
-        status: e.status,
         totalEnteredValue: e.totals.enteredValue.toFixed(2),
         totalDuty: e.totals.duty.toFixed(2),
         totalBaseDuty: e.totals.baseDuty.toFixed(2),
@@ -327,6 +462,8 @@ async function main() {
           htsCode: line.htsCode,
           htsCodeDigits: normalizeHts(line.htsCode),
           countryOfOrigin: line.countryOfOrigin,
+          supplierName: line.supplierName,
+          vendorId: vendorIdByName(line.supplierName),
           quantity: line.quantity.toFixed(4),
           unitValue: line.unitValue.toFixed(4),
           enteredValue: line.enteredValue.toFixed(2),
@@ -367,6 +504,55 @@ async function main() {
       orgId,
       shipmentId: shipmentIdByNumber[s],
       purchaseOrderId: poIdByNumber[p],
+    })),
+  );
+
+  // ---------------------------------------------------- commercial invoices
+  // Directly linked to entries via entry_invoices — the CI is the primary
+  // document the variance rules compare against (see story.ts for the four
+  // planted findings).
+  const invoiceIdByNumber: Record<string, string> = {};
+  for (const inv of story.invoices) {
+    const [row] = await db
+      .insert(schema.invoices)
+      .values({
+        orgId,
+        invoiceNumber: inv.invoiceNumber,
+        purchaseOrderId: poIdByNumber[inv.poNumber],
+        supplierName: inv.supplierName,
+        vendorId: vendorIdByName(inv.supplierName),
+        invoiceDate: inv.invoiceDate,
+        currency: inv.currency,
+        totalAmount: inv.totalAmount.toFixed(2),
+        incoterms: inv.incoterms,
+      })
+      .returning({ id: schema.invoices.id });
+    invoiceIdByNumber[inv.invoiceNumber] = row.id;
+
+    await db.insert(schema.invoiceLineItems).values(
+      inv.lines.map((l) => ({
+        orgId,
+        invoiceId: row.id,
+        lineNumber: l.lineNumber,
+        partId: partIdBySku[l.sku] ?? null,
+        sku: l.sku,
+        description: l.description,
+        countryOfOrigin: l.countryOfOrigin,
+        htsCode: l.htsCode,
+        htsCodeDigits: l.htsCode ? normalizeHts(l.htsCode) : null,
+        quantity: l.quantity.toFixed(4),
+        unitPrice: l.unitPrice.toFixed(4),
+        totalPrice: (
+          l.totalPrice ?? Math.round(l.quantity * l.unitPrice * 100) / 100
+        ).toFixed(2),
+      })),
+    );
+  }
+  await db.insert(schema.entryInvoices).values(
+    story.entryInvoiceLinks.map(([e, i]) => ({
+      orgId,
+      entryId: entryIdByNumber[e],
+      invoiceId: invoiceIdByNumber[i],
     })),
   );
 
@@ -414,6 +600,7 @@ async function main() {
         orgId,
         documentId: qs.documentFile ? docIdByFile[qs.documentFile] : null,
         supplierName: qs.supplierName,
+        vendorId: vendorIdByName(qs.supplierName),
         quoteDate: qs.quoteDate,
         currency: "USD",
         validUntil: qs.validUntil,
@@ -456,6 +643,7 @@ async function main() {
       entry: entryIdByNumber,
       shipment: shipmentIdByNumber,
       purchase_order: poIdByNumber,
+      invoice: invoiceIdByNumber,
       quote_sheet: quoteSheetIdByKey,
       refund_claim: refundIdByKey,
       part: partIdBySku,
@@ -481,7 +669,8 @@ async function main() {
   // boot — audit_alerts are the auditor's computed output, never
   // hand-seeded — then hard-assert the planted findings on 231-4501311-9
   // (rate_mismatch line 1, missing_measure line 2, and NO finding for the
-  // $0 exclusion claim on line 3).
+  // $0 exclusion claim on line 3), the sourcing plant on 231-4501341-1,
+  // and the classification plant on 231-4501320-0.
   const ref = await loadReferenceData(db);
   for (const e of story.entries) {
     await auditEntry(db, orgId, entryIdByNumber[e.entryNumber], ref);
@@ -522,11 +711,71 @@ async function main() {
     `the $0 exclusion claim on line 3 must never be flagged, got: ${plantedKeys.join(", ")}`,
   );
 
+  // The sourcing plant on the air entry: EB-CTRL-V2 declared CN under the
+  // Hanoi vendor (catalog VN) — the coo_discrepancy must fire, and nothing
+  // else (the charges match the declared CN, so money rules stay quiet).
+  const sourcingKeys = keysByEntry.get(entryIdByNumber["231-4501341-1"]) ?? [];
+  assertSeed(
+    sourcingKeys.includes("coo_discrepancy:line2"),
+    `entry 231-4501341-1 must flag the declared-vs-catalog origin on line 2, got: ${sourcingKeys.join(", ")}`,
+  );
+  assertSeed(
+    sourcingKeys.length === 1,
+    `entry 231-4501341-1 must carry ONLY the origin finding, got: ${sourcingKeys.join(", ")}`,
+  );
+
+  // The classification plant: EB-BRK-HYD declared under the dutiable
+  // 8714.94.9000 while the catalog says 8714.94.3080 (free). Only the
+  // hts_discrepancy may fire — charges are internally consistent under the
+  // declared code, and classification doubt suspends the money rules.
+  const classificationKeys =
+    keysByEntry.get(entryIdByNumber["231-4501320-0"]) ?? [];
+  assertSeed(
+    classificationKeys.includes("hts_discrepancy:line1"),
+    `entry 231-4501320-0 must flag the brake misclassification, got: ${classificationKeys.join(", ")}`,
+  );
+  assertSeed(
+    classificationKeys.length === 1,
+    `entry 231-4501320-0 must carry ONLY the HTS finding, got: ${classificationKeys.join(", ")}`,
+  );
+
+  // ------------------------------------- CI-vs-entry plants (exact sets)
+  const assertExactKeys = (entryNumber: string, expected: string[]) => {
+    const got = [...(keysByEntry.get(entryIdByNumber[entryNumber]) ?? [])].sort();
+    const want = [...expected].sort();
+    assertSeed(
+      got.length === want.length && got.every((k, i) => k === want[i]),
+      `entry ${entryNumber} open alerts must be exactly [${want.join(", ")}], got: [${got.join(", ")}]`,
+    );
+  };
+  // Entry 2: the reclassification signal plus the CI origin plant and the
+  // CI's missing SKU (whose coverage gap also silences the header value
+  // check).
+  assertExactKeys("231-4501293-1", [
+    "hts_reclassified:line1",
+    "coo_discrepancy:invoice_sku:EB-DSP-LCD",
+    "invoice_sku_missing:invoice_sku:EB-MTR-500W",
+  ]);
+  // Entry 3: the CI prints a different 6-digit HS subheading for the
+  // controller; values match, so nothing else fires.
+  assertExactKeys("231-4501305-2", [
+    "invoice_hts_mismatch:invoice_sku:EB-CTRL-V2",
+  ]);
+  // Entry 6: $500 over-declared vs the CI — the header failure gates open
+  // the per-SKU value alert on the wheel.
+  assertExactKeys("231-4501334-6", [
+    "value_mismatch:invoice_total",
+    "value_mismatch:invoice_sku:EB-WHL-27F",
+  ]);
+
   // -------------------------------------------------------------- summary
   const count = async (table: Parameters<typeof db.$count>[0]) => db.$count(table);
   const counts = {
     orgs: await count(schema.orgs),
+    vendors: await count(schema.vendors),
     parts: await count(schema.parts),
+    part_sources: await count(schema.partSources),
+    part_classifications: await count(schema.partClassifications),
     purchase_orders: await count(schema.purchaseOrders),
     purchase_order_lines: await count(schema.purchaseOrderLines),
     shipments: await count(schema.shipments),
@@ -536,6 +785,9 @@ async function main() {
     entry_shipments: await count(schema.entryShipments),
     entry_purchase_orders: await count(schema.entryPurchaseOrders),
     shipment_purchase_orders: await count(schema.shipmentPurchaseOrders),
+    invoices: await count(schema.invoices),
+    invoice_line_items: await count(schema.invoiceLineItems),
+    entry_invoices: await count(schema.entryInvoices),
     refund_claims: await count(schema.refundClaims),
     quote_sheets: await count(schema.quoteSheets),
     quote_lines: await count(schema.quoteLines),

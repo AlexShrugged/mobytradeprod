@@ -7,6 +7,7 @@ import {
 } from "reductoai";
 
 import { getFileStore } from "@/lib/storage";
+import { mapSplitToManifest } from "../packet";
 import type {
   DocumentProcessor,
   ExtractionResult,
@@ -24,6 +25,8 @@ import {
   CLASSIFICATION_SCHEMA,
   classificationPrompt,
   EXTRACT_SCHEMAS,
+  SPLIT_CATEGORIES,
+  SPLIT_RULES,
   SYSTEM_PROMPTS,
 } from "./schemas";
 
@@ -31,22 +34,35 @@ import {
 // then the type-specific schema). The full parse and both extract payloads
 // are returned verbatim in `raw` so nothing the provider found is lost,
 // even when it doesn't map into ExtractionResult.
+//
+// Two packet variations:
+//   - entry_packet parents skip the typed extract and run split.run against
+//     the parse job instead; the manifest is the extraction.
+//   - packet children (input.packetRole set) parse only their pageRange of
+//     the shared parent bytes and skip classification — the split role is
+//     authoritative (classification has no assist-sheet vs invoice nuance),
+//     and a child must never re-split. jobid:// inputs ignore parsing
+//     config, so children re-upload and parse with settings.page_range
+//     rather than page-scoping the parent's parse job.
 export class ReductoDocumentProcessor implements DocumentProcessor {
   async process(input: ProcessInput): Promise<ProcessOutput> {
     const client = getReductoClient();
     const bytes = await getFileStore().get(input.storageKey);
+    const isPacketChild = input.packetRole != null;
 
     // Filled in as stages complete so a late failure still surfaces the
     // already-paid-for payloads via ProcessingError.
     let parsePart: RawExtraction["parse"] | null = null;
     let classifyPart: RawExtraction["classify"] = null;
     let extractPart: RawExtraction["extract"] = null;
+    let splitPart: RawExtraction["split"] = null;
     const envelope = (): RawExtraction | null =>
       parsePart && {
         provider: "reducto",
         parse: parsePart,
         classify: classifyPart,
         extract: extractPart,
+        split: splitPart,
         retrievedAt: new Date().toISOString(),
       };
 
@@ -55,7 +71,12 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
         file: await toFile(bytes, input.fileName, { type: input.mimeType }),
       });
 
-      const parsed = await client.parse.run({ input: upload.file_id });
+      const parsed = await client.parse.run({
+        input: upload.file_id,
+        ...(isPacketChild && input.pageRange?.length
+          ? { settings: { page_range: input.pageRange } }
+          : {}),
+      });
       if (!("result" in parsed)) {
         throw new ProcessingError(
           "Reducto returned an async parse response for a sync request.",
@@ -75,33 +96,55 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
       };
       const jobInput = `jobid://${parsed.job_id}`;
 
-      const classified = await client.extract.run({
-        input: jobInput,
-        instructions: {
-          schema: CLASSIFICATION_SCHEMA,
-          system_prompt: classificationPrompt(
-            input.fileName,
-            input.docTypeHint,
-          ),
-        },
-      });
-      if (!("result" in classified)) {
-        throw new ProcessingError(
-          "Reducto returned an async extract response for a sync request.",
-        );
+      let docType = input.docTypeHint;
+      if (!isPacketChild && docType !== "entry_packet") {
+        const classified = await client.extract.run({
+          input: jobInput,
+          instructions: {
+            schema: CLASSIFICATION_SCHEMA,
+            system_prompt: classificationPrompt(
+              input.fileName,
+              input.docTypeHint,
+            ),
+          },
+        });
+        if (!("result" in classified)) {
+          throw new ProcessingError(
+            "Reducto returned an async extract response for a sync request.",
+          );
+        }
+        classifyPart = {
+          jobId: classified.job_id ?? null,
+          usage: classified.usage,
+          response: classified.result,
+        };
+        docType = classifyFromResponse(classified.result, input.docTypeHint);
       }
-      classifyPart = {
-        jobId: classified.job_id ?? null,
-        usage: classified.usage,
-        response: classified.result,
-      };
-      const docType = classifyFromResponse(
-        classified.result,
-        input.docTypeHint,
-      );
 
       let extraction: ExtractionResult;
-      if (docType === "other") {
+      if (docType === "entry_packet") {
+        // A child can't be a packet — the split role said otherwise, and
+        // re-splitting would recurse.
+        if (isPacketChild) {
+          throw new ProcessingError(
+            "A packet part cannot itself be an entry packet.",
+          );
+        }
+        const split = await client.split.run({
+          input: jobInput,
+          split_description: SPLIT_CATEGORIES,
+          split_rules: SPLIT_RULES,
+        });
+        splitPart = {
+          jobId: null, // split responses carry no job id of their own
+          usage: split.usage,
+          response: split.result,
+        };
+        extraction = {
+          docType: "entry_packet",
+          fields: mapSplitToManifest(split.result.splits),
+        };
+      } else if (docType === "other") {
         extraction = {
           docType: "other",
           fields: {

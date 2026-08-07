@@ -1,11 +1,12 @@
-import { Download, FileText } from "lucide-react";
+import { Download, ExternalLink, FileText } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { docTypeLabel, formatBytes } from "@/lib/format";
 
 // One source document behind a domain record: file name, doc type, size,
-// whether the document created the record or merely references it, and a
-// download affordance (GET /api/documents/[id]/file) when documentId is set.
+// whether the document created the record or merely references it, and —
+// when documentId is set — open-in-browser and download affordances
+// (GET /api/documents/[id]/file, ?disposition=inline for viewing).
 export function DocumentChip({
   fileName,
   docType,
@@ -40,14 +41,26 @@ export function DocumentChip({
           {created ? createdLabel : "references it"}
         </Badge>
         {documentId ? (
-          <a
-            href={`/api/documents/${documentId}/file`}
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            title={`Download ${fileName}`}
-            aria-label={`Download ${fileName}`}
-          >
-            <Download className="size-4" />
-          </a>
+          <>
+            <a
+              href={`/api/documents/${documentId}/file?disposition=inline`}
+              target="_blank"
+              rel="noopener"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              title={`Open ${fileName}`}
+              aria-label={`Open ${fileName}`}
+            >
+              <ExternalLink className="size-4" />
+            </a>
+            <a
+              href={`/api/documents/${documentId}/file`}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              title={`Download ${fileName}`}
+              aria-label={`Download ${fileName}`}
+            >
+              <Download className="size-4" />
+            </a>
+          </>
         ) : null}
       </div>
     </div>

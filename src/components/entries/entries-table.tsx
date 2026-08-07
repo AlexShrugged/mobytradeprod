@@ -80,6 +80,14 @@ function DutiesFeesCell({ row }: { row: EntriesTableRow }) {
   );
 }
 
+// Per-column gutter overrides, applied to both the header and the body cell so
+// they stay aligned. Duties & fees is right-aligned and Refund is left-aligned,
+// so at the default p-2 the two columns' contents collide at the boundary with
+// 16px between them while every other neighbour pair gets far more.
+const COLUMN_CLASS: Record<string, string> = {
+  refund: "px-6",
+};
+
 // Column defs are additive on purpose: future customs columns slot in here
 // without touching the expansion UI.
 const columns: ColumnDef<EntriesTableRow>[] = [
@@ -197,6 +205,31 @@ const columns: ColumnDef<EntriesTableRow>[] = [
     ),
   },
   {
+    id: "dutiesAndFees",
+    header: () => <div className="text-right">Duties &amp; fees</div>,
+    cell: ({ row }) => <DutiesFeesCell row={row.original} />,
+  },
+  {
+    id: "refund",
+    // Left-aligned, unlike the two money columns before it: the stage pill
+    // trails the amount, so right-aligning would ragged the numbers and crowd
+    // the audit column next door.
+    header: "Refund",
+    cell: ({ row }) => {
+      if (row.original.kind === "future" || row.original.totalRefund === null) {
+        return <span className="tabular-nums text-muted-foreground">—</span>;
+      }
+      return (
+        <div className="flex items-center gap-2 whitespace-nowrap">
+          <Money value={row.original.totalRefund} tone="refund" />
+          {row.original.refundStage ? (
+            <StatusBadge status={row.original.refundStage} />
+          ) : null}
+        </div>
+      );
+    },
+  },
+  {
     id: "audit",
     header: "Audit",
     cell: ({ row }) =>
@@ -209,30 +242,6 @@ const columns: ColumnDef<EntriesTableRow>[] = [
           hasData={row.original.lineItemCount > 0}
         />
       ),
-  },
-  {
-    id: "dutiesAndFees",
-    header: () => <div className="text-right">Duties &amp; fees</div>,
-    cell: ({ row }) => <DutiesFeesCell row={row.original} />,
-  },
-  {
-    id: "refund",
-    header: () => <div className="text-right">Refund</div>,
-    cell: ({ row }) => {
-      if (row.original.kind === "future" || row.original.totalRefund === null) {
-        return (
-          <div className="text-right tabular-nums text-muted-foreground">—</div>
-        );
-      }
-      return (
-        <div className="flex items-center justify-end gap-2">
-          {row.original.refundStage ? (
-            <StatusBadge status={row.original.refundStage} />
-          ) : null}
-          <Money value={row.original.totalRefund} tone="refund" />
-        </div>
-      );
-    },
   },
 ];
 
@@ -340,7 +349,6 @@ function ExpandedEntry({ entry }: { entry: EntriesTableRow }) {
                   <TableHead>PO #</TableHead>
                   <TableHead>Supplier</TableHead>
                   <TableHead>Order date</TableHead>
-                  <TableHead>Status</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                 </TableRow>
               </TableHeader>
@@ -350,9 +358,6 @@ function ExpandedEntry({ entry }: { entry: EntriesTableRow }) {
                     <TableCell className="font-medium">{po.poNumber}</TableCell>
                     <TableCell>{po.supplierName ?? "—"}</TableCell>
                     <TableCell>{formatDate(po.orderDate)}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={po.status} />
-                    </TableCell>
                     <TableCell className="text-right">
                       <Money value={po.totalAmount} />
                     </TableCell>
@@ -384,7 +389,10 @@ export function EntriesTable({ rows }: { rows: EntriesTableRow[] }) {
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => (
-                <TableHead key={header.id}>
+                <TableHead
+                  key={header.id}
+                  className={COLUMN_CLASS[header.column.id]}
+                >
                   {header.isPlaceholder
                     ? null
                     : flexRender(
@@ -403,8 +411,8 @@ export function EntriesTable({ rows }: { rows: EntriesTableRow[] }) {
                 colSpan={columns.length}
                 className="h-24 text-center text-muted-foreground"
               >
-                No entries yet. Process port entry documents in Data
-                Management to create them.
+                No entries yet. Process port entry documents on the Data
+                page to create them.
               </TableCell>
             </TableRow>
           ) : (
@@ -422,7 +430,10 @@ export function EntriesTable({ rows }: { rows: EntriesTableRow[] }) {
                   onClick={row.getToggleExpandedHandler()}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
+                    <TableCell
+                      key={cell.id}
+                      className={COLUMN_CLASS[cell.column.id]}
+                    >
                       {flexRender(
                         cell.column.columnDef.cell,
                         cell.getContext(),

@@ -37,8 +37,24 @@ export function NewSkuDialog({
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [origin, setOrigin] = React.useState("");
-  const [manufacturer, setManufacturer] = React.useState("");
+  const [vendorName, setVendorName] = React.useState("");
   const [unitCost, setUnitCost] = React.useState("");
+  const [vendorNames, setVendorNames] = React.useState<string[]>([]);
+
+  // Known vendors feed the datalists on both tabs.
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/vendors")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const payload = (await res.json()) as { vendors: { name: string }[] };
+        if (!cancelled) setVendorNames(payload.vendors.map((v) => v.name));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Quote tab.
   const [supplier, setSupplier] = React.useState("");
@@ -70,14 +86,18 @@ export function NewSkuDialog({
       toast.error("Cost/unit must be a non-negative number.");
       return;
     }
+    if ((origin.trim() || cost !== null) && vendorName.trim() === "") {
+      toast.error("Origin and cost describe a vendor — name the vendor first.");
+      return;
+    }
     setBusy(true);
     try {
       await post("/api/parts", {
         sku: sku.trim(),
         name: name.trim(),
         description: description.trim() || null,
+        vendorName: vendorName.trim() || null,
         countryOfOrigin: origin.trim() || null,
-        manufacturer: manufacturer.trim() || null,
         unitCost: cost,
       });
       toast.success(`SKU ${sku.trim()} created.`);
@@ -141,13 +161,19 @@ export function NewSkuDialog({
   const quoteForm = (
     <div className="flex flex-col gap-3">
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field id="quote-supplier" label="Supplier">
+        <Field id="quote-supplier" label="Vendor">
           <Input
             id="quote-supplier"
+            list="quote-vendors"
             value={supplier}
             onChange={(e) => setSupplier(e.target.value)}
-            placeholder="Shenzhen Wheelworks"
+            placeholder={vendorNames[0] ?? "Vendor name"}
           />
+          <datalist id="quote-vendors">
+            {vendorNames.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
         </Field>
         <Field id="quote-date" label="Quote date">
           <Input
@@ -277,7 +303,7 @@ export function NewSkuDialog({
                       id="new-sku"
                       value={sku}
                       onChange={(e) => setSku(e.target.value)}
-                      placeholder="EB-MOTOR-750"
+                      placeholder="e.g. SKU-0001"
                       className="tabular-nums"
                     />
                   </Field>
@@ -286,7 +312,7 @@ export function NewSkuDialog({
                       id="new-name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="750W mid-drive motor"
+                      placeholder="Part name"
                     />
                   </Field>
                 </div>
@@ -298,6 +324,20 @@ export function NewSkuDialog({
                   />
                 </Field>
                 <div className="grid gap-3 sm:grid-cols-3">
+                  <Field id="new-vendor" label="Vendor">
+                    <Input
+                      id="new-vendor"
+                      list="new-sku-vendors"
+                      value={vendorName}
+                      onChange={(e) => setVendorName(e.target.value)}
+                      placeholder={vendorNames[0] ?? "Vendor name"}
+                    />
+                    <datalist id="new-sku-vendors">
+                      {vendorNames.map((n) => (
+                        <option key={n} value={n} />
+                      ))}
+                    </datalist>
+                  </Field>
                   <Field id="new-origin" label="Origin (2-letter)">
                     <Input
                       id="new-origin"
@@ -305,13 +345,6 @@ export function NewSkuDialog({
                       onChange={(e) => setOrigin(e.target.value)}
                       placeholder="CN"
                       maxLength={2}
-                    />
-                  </Field>
-                  <Field id="new-manufacturer" label="Manufacturer">
-                    <Input
-                      id="new-manufacturer"
-                      value={manufacturer}
-                      onChange={(e) => setManufacturer(e.target.value)}
                     />
                   </Field>
                   <Field id="new-cost" label="Cost/unit">
@@ -327,8 +360,10 @@ export function NewSkuDialog({
                   </Field>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Created active — a manual entry is its own approval. HTS
-                  codes arrive via classification, not this form.
+                  Created active — a manual entry is its own approval. Origin
+                  and cost belong to the named vendor&apos;s source (a SKU can
+                  have several vendors). HTS codes arrive via classification,
+                  not this form.
                 </p>
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" disabled={busy} onClick={onClose}>

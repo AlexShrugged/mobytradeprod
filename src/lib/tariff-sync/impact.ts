@@ -17,7 +17,6 @@ export type ImpactShipment = {
   sailedOnBoardDate: string | null;
   etd: string | null;
   eta: string | null;
-  status: string;
   /** Sum of linked PO totals, cents — the exposure basis. */
   poTotalCents: number;
 };
@@ -124,8 +123,8 @@ export function computeImpact(
   return rows;
 }
 
-/** In-transit = linked to no entry that has an entry_date (SHP-1008: no
- *  entry at all; a draft entry without a date still counts as in transit). */
+/** In-transit = linked to no entry that has an entry_date (no entry at
+ *  all, or a draft entry without a date, both count as in transit). */
 export async function loadInTransitShipments(
   db: DbClient,
   orgId: string,
@@ -167,7 +166,6 @@ export async function loadInTransitShipments(
     sailedOnBoardDate: s.sailedOnBoardDate,
     etd: s.etd,
     eta: s.eta,
-    status: s.status,
     poTotalCents: s.shipmentPurchaseOrders.reduce(
       (sum, spo) =>
         sum +

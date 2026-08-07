@@ -1,11 +1,17 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 
 import { auditEntry } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import { normalizeHts } from "@/lib/duty/calculator";
 import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
+import { findOrCreateVendor } from "@/lib/vendors/service";
 import type { EntryLineItemExtraction, ExtractionResult } from "./types";
+
+// ISO codes compare exact-match downstream (measure gating, COO audit rule).
+// The mappers normalize too — this is the write-side guarantee.
+const toCoo = (v: string | null | undefined): string | null =>
+  v?.trim().toUpperCase() || null;
 
 const DUTY_CHARGE_TYPES = new Set([
   "base_duty",
@@ -56,13 +62,18 @@ type LinkedEntity = (typeof schema.linkedEntityType.enumValues)[number];
 // everything touched. This is where the many-to-many graph gets built.
 //
 // Single-writer boundaries: this module owns the entry graph (entries,
-// shipments, POs + PO lines, invoices, refund claims, document_links); the
-// quote tables belong to quotes/service.ts, which the quote_sheet case
-// delegates into IN the same transaction.
+// shipments, POs + PO lines, invoices, entry_invoices, refund claims,
+// document_links); the quote tables belong to quotes/service.ts, which the
+// quote_sheet case delegates into IN the same transaction.
+//
+// ctx.parentDocumentId is set for packet children: sibling parts of the
+// same packet dock to each other through it (a CI links to the entries its
+// sibling 7501 created, and vice versa — parts process in any order).
 export async function linkExtraction(
   orgId: string,
   documentId: string,
   extraction: ExtractionResult,
+  ctx: { parentDocumentId?: string | null } = {},
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const links: { entityType: LinkedEntity; entityId: string; created: boolean }[] = [];
@@ -81,7 +92,6 @@ export async function linkExtraction(
           orgId,
           shipmentNumber: `SHP-${bol}`,
           billOfLading: bol,
-          status: "booked",
         })
         .returning({ id: schema.shipments.id });
       return { id: created.id, created: true };
@@ -97,9 +107,73 @@ export async function linkExtraction(
       if (existing) return { id: existing.id, created: false };
       const [created] = await tx
         .insert(schema.purchaseOrders)
-        .values({ orgId, poNumber, status: "open" })
+        .values({ orgId, poNumber })
         .returning({ id: schema.purchaseOrders.id });
       return { id: created.id, created: true };
+    };
+
+    // A stub invoice row for a number the 7501 references before the CI
+    // itself is ingested — the CI later upserts the same row by
+    // (org, invoice number), and existing entry_invoices rows keep pointing
+    // at it. Mirrors findOrCreatePoByNumber.
+    const findOrCreateInvoiceByNumber = async (invoiceNumber: string) => {
+      const existing = await tx.query.invoices.findFirst({
+        where: and(
+          eq(schema.invoices.orgId, orgId),
+          eq(schema.invoices.invoiceNumber, invoiceNumber),
+        ),
+      });
+      if (existing) return { id: existing.id, created: false };
+      const [created] = await tx
+        .insert(schema.invoices)
+        .values({ orgId, invoiceNumber })
+        .returning({ id: schema.invoices.id });
+      return { id: created.id, created: true };
+    };
+
+    const linkEntryInvoice = (entryId: string, invoiceId: string) =>
+      tx
+        .insert(schema.entryInvoices)
+        .values({ orgId, entryId, invoiceId })
+        .onConflictDoNothing();
+
+    // Entity ids of one type linked by SIBLING packet parts (other children
+    // of this document's parent) — the packet docking mechanism. Stale
+    // entry_invoices rows from a previous split are deliberately never
+    // garbage-collected here: they record a business link keyed by
+    // entry/invoice identity, and resolved audit state may hang off them.
+    const siblingEntityIds = async (entityType: LinkedEntity) => {
+      if (!ctx.parentDocumentId) return [];
+      const rows = await tx
+        .select({ entityId: schema.documentLinks.entityId })
+        .from(schema.documentLinks)
+        .innerJoin(
+          schema.documents,
+          eq(schema.documentLinks.documentId, schema.documents.id),
+        )
+        .where(
+          and(
+            eq(schema.documents.parentDocumentId, ctx.parentDocumentId),
+            eq(schema.documentLinks.entityType, entityType),
+            ne(schema.documentLinks.documentId, documentId),
+          ),
+        );
+      return [...new Set(rows.map((r) => r.entityId))];
+    };
+
+    // Declared supplier name → resolved vendor id (find-or-create) for a
+    // batch of extracted names. Distinct raw spellings that normalize alike
+    // land on one vendor row; blank names resolve to nothing.
+    const vendorIdsByName = async (rawNames: (string | null)[]) => {
+      const names = [
+        ...new Set(rawNames.filter((n): n is string => n !== null)),
+      ];
+      const map = new Map<string, string>();
+      for (const name of names) {
+        const vendor = await findOrCreateVendor(tx, orgId, name);
+        if (vendor) map.set(name, vendor.id);
+      }
+      return map;
     };
 
     // (org, sku) → part id for a batch of extracted SKUs, one inArray query.
@@ -142,7 +216,6 @@ export async function linkExtraction(
               portOfEntry: f.port_of_entry,
               entryType: f.entry_type,
               importerOfRecord: f.importer_of_record,
-              status: "draft",
             })
             .returning({ id: schema.entries.id });
           entryId = created.id;
@@ -173,6 +246,26 @@ export async function linkExtraction(
             created: po.created,
           });
         }
+        // Direct entry↔invoice links: (a) invoice numbers the 7501
+        // references (stub invoice rows for not-yet-ingested CIs), and
+        // (b) invoices created by sibling parts of the same packet.
+        for (const invoiceNumber of f.referenced_invoices) {
+          const invoice = await findOrCreateInvoiceByNumber(invoiceNumber);
+          await linkEntryInvoice(entryId, invoice.id);
+          links.push({
+            entityType: "invoice",
+            entityId: invoice.id,
+            created: invoice.created,
+          });
+        }
+        for (const invoiceId of await siblingEntityIds("invoice")) {
+          await linkEntryInvoice(entryId, invoiceId);
+          links.push({
+            entityType: "invoice",
+            entityId: invoiceId,
+            created: false,
+          });
+        }
 
         // Line items + declared charges: replace wholesale. Charges cascade
         // with their lines; audit alerts survive via set-null and re-attach
@@ -180,6 +273,9 @@ export async function linkExtraction(
         if (f.line_items.length > 0) {
           const partIdBySku = await partIdsBySku(
             f.line_items.map((li) => li.sku),
+          );
+          const vendorIdByName = await vendorIdsByName(
+            f.line_items.map((li) => li.supplier_name),
           );
 
           await tx
@@ -198,7 +294,11 @@ export async function linkExtraction(
                 description: li.description,
                 htsCode: li.hts_code,
                 htsCodeDigits: normalizeHts(li.hts_code),
-                countryOfOrigin: li.country_of_origin,
+                countryOfOrigin: toCoo(li.country_of_origin),
+                supplierName: li.supplier_name,
+                vendorId: li.supplier_name
+                  ? (vendorIdByName.get(li.supplier_name) ?? null)
+                  : null,
                 quantity: li.quantity?.toFixed(4) ?? null,
                 unitValue: li.unit_value?.toFixed(4) ?? null,
                 enteredValue: li.entered_value.toFixed(2),
@@ -362,6 +462,9 @@ export async function linkExtraction(
               eta: f.eta ?? existing.eta,
               sailedOnBoardDate:
                 f.shipped_on_board_date ?? existing.sailedOnBoardDate,
+              // The doc class evidences the mode (BOL vs AWB) — an extracted
+              // mode overwrites; the column default is not a fact to keep.
+              mode: f.mode ?? existing.mode,
               containerNumber: existing.containerNumber ?? f.container_number,
               carrier: existing.carrier ?? f.carrier,
               vessel: existing.vessel ?? f.vessel,
@@ -390,12 +493,12 @@ export async function linkExtraction(
               containerNumber: f.container_number,
               carrier: f.carrier,
               vessel: f.vessel,
+              mode: f.mode ?? undefined, // column default ("ocean") when unshown
               originPort: f.origin_port,
               destinationPort: f.destination_port,
               etd: f.etd,
               eta: f.eta,
               sailedOnBoardDate: f.shipped_on_board_date,
-              status: "booked",
             })
             .returning({ id: schema.shipments.id });
           shipmentId = created.id;
@@ -426,18 +529,24 @@ export async function linkExtraction(
             eq(schema.purchaseOrders.poNumber, f.po_number),
           ),
         });
+        const headerVendor = await findOrCreateVendor(
+          tx,
+          orgId,
+          f.supplier_name,
+        );
         if (existing) {
           poId = existing.id;
           // Stubs created from an entry/shipment's referenced PO numbers
           // carry no header detail; the PO document is authoritative for
           // its own number. Dated/priced header facts overwrite, the
           // supplier fills a gap (a human-entered name is not displaced by
-          // an extraction).
+          // an extraction) — the resolved vendor follows the same rule.
           await tx
             .update(schema.purchaseOrders)
             .set({
               orderDate: f.order_date ?? existing.orderDate,
               supplierName: existing.supplierName ?? f.supplier_name,
+              vendorId: existing.vendorId ?? headerVendor?.id ?? null,
               currency: f.currency,
               totalAmount: f.total_amount?.toFixed(2) ?? existing.totalAmount,
               updatedAt: new Date(),
@@ -451,10 +560,10 @@ export async function linkExtraction(
               orgId,
               poNumber: f.po_number,
               supplierName: f.supplier_name,
+              vendorId: headerVendor?.id ?? null,
               orderDate: f.order_date,
               currency: f.currency,
               totalAmount: f.total_amount?.toFixed(2),
-              status: "open",
             })
             .returning({ id: schema.purchaseOrders.id });
           poId = created.id;
@@ -479,6 +588,7 @@ export async function linkExtraction(
               partId: partIdBySku.get(li.sku) ?? null,
               sku: li.sku,
               description: li.description,
+              countryOfOrigin: toCoo(li.country_of_origin),
               quantity: li.quantity.toFixed(4),
               unitPrice: li.unit_price.toFixed(4),
               totalPrice: (
@@ -500,7 +610,7 @@ export async function linkExtraction(
         // quotes/service is the sole writer of quote tables and of
         // draft-part creation for unknown SKUs; delegate in-transaction.
         // Reprocessing inserts a fresh sheet whose lines auto-supersede the
-        // previous RECEIVED lines for the same (part, supplier); approved
+        // previous RECEIVED lines for the same (part, vendor); approved
         // lines survive machine re-ingestion by design.
         const result = await ingestQuoteSheet(tx, orgId, {
           documentId,
@@ -556,11 +666,19 @@ export async function linkExtraction(
         }
 
         // Upsert by (org, invoice number); reprocessing replaces the lines
-        // wholesale, the same pattern entry line items use.
+        // wholesale, the same pattern entry line items use. Unlike POs
+        // (gap-fill), the invoice document is always authoritative for its
+        // own supplier — name and resolved vendor both overwrite.
+        const invoiceVendor = await findOrCreateVendor(
+          tx,
+          orgId,
+          f.supplier_name,
+        );
         let invoiceId: string;
         const values = {
           purchaseOrderId: poId,
           supplierName: f.supplier_name,
+          vendorId: invoiceVendor?.id ?? null,
           invoiceDate: f.invoice_date,
           currency: f.currency,
           totalAmount: f.amount?.toFixed(2) ?? null,
@@ -604,6 +722,9 @@ export async function linkExtraction(
               partId: li.sku ? (partIdBySku.get(li.sku) ?? null) : null,
               sku: li.sku,
               description: li.description,
+              countryOfOrigin: toCoo(li.country_of_origin),
+              htsCode: li.hts_code,
+              htsCodeDigits: li.hts_code ? normalizeHts(li.hts_code) : null,
               quantity: li.quantity?.toFixed(4) ?? null,
               unitPrice: li.unit_price?.toFixed(4) ?? null,
               totalPrice: li.total_price.toFixed(2),
@@ -611,16 +732,38 @@ export async function linkExtraction(
           );
         }
 
-        // Invoice values feed the entry-vs-invoice audit rule; re-audit
-        // every entry that reaches this invoice through the linked PO.
-        if (poId) {
+        // Direct entry links — the CI is the primary document entries are
+        // audited against: (a) entries created by sibling parts of the same
+        // packet; (b) entries whose 7501 referenced this invoice number
+        // (their entry_invoices rows already point at the stub row this
+        // upsert filled in); (c) entries reachable through the shared PO,
+        // only when nothing links directly — PO-derived inference must not
+        // pollute direct links.
+        const touched = new Set<string>();
+        for (const siblingEntryId of await siblingEntityIds("entry")) {
+          touched.add(siblingEntryId);
+        }
+        const directRows = await tx.query.entryInvoices.findMany({
+          where: eq(schema.entryInvoices.invoiceId, invoiceId),
+          columns: { entryId: true },
+        });
+        const hasDirect = touched.size > 0 || directRows.length > 0;
+        for (const row of directRows) touched.add(row.entryId);
+        if (!hasDirect && poId) {
           const entryLinks = await tx.query.entryPurchaseOrders.findMany({
             where: eq(schema.entryPurchaseOrders.purchaseOrderId, poId),
             columns: { entryId: true },
           });
-          for (const el of entryLinks) {
-            await auditEntry(tx, orgId, el.entryId);
-          }
+          for (const el of entryLinks) touched.add(el.entryId);
+        }
+        for (const touchedEntryId of touched) {
+          await linkEntryInvoice(touchedEntryId, invoiceId);
+          links.push({
+            entityType: "entry",
+            entityId: touchedEntryId,
+            created: false,
+          });
+          await auditEntry(tx, orgId, touchedEntryId);
         }
         break;
       }
@@ -640,6 +783,11 @@ export async function linkExtraction(
         }
         break;
       }
+
+      // The packet parent creates no domain records — its children do the
+      // work; the manifest itself is the parent's extracted_data.
+      case "entry_packet":
+        break;
 
       case "other":
         break;

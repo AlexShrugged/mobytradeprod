@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { StubDocumentProcessor } from "./stub-processor";
+import { ORG_SEED, PART_SEED } from "@/lib/db/seed-data/story";
+import { buildSeedReferenceData, type DayFn } from "@/lib/db/seed-data/tariff";
+
+import { StubDocumentProcessor, type StubContext } from "./stub-processor";
 import type { ProcessInput } from "./types";
 
-const processor = new StubDocumentProcessor();
+// The stub fabricates against a snapshot of org data (loadStubContext in
+// the app); tests prime it straight from the seed modules — the same story
+// the demo db is seeded with.
+const day: DayFn = (offset) =>
+  new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+
+const ctx: StubContext = {
+  importerOfRecord: ORG_SEED.importerOfRecord,
+  parts: PART_SEED,
+  bolPool: ["MAEU2264101", "ONEY8811327", "EGLV1420067"],
+  poPool: ["PO-2026-001", "PO-2026-002", "PO-2026-003"],
+  entryPool: ["231-4501287-4", "231-4501293-1"],
+  reference: buildSeedReferenceData(day),
+};
+
+const processor = new StubDocumentProcessor(ctx);
 
 // The stub always returns raw: null; these tests assert on the extraction.
 async function extract(i: ProcessInput) {
@@ -20,13 +38,18 @@ function hashString(s: string): number {
   return Math.abs(h);
 }
 
-function input(fileName: string, docTypeHint: ProcessInput["docTypeHint"]): ProcessInput {
+function input(
+  fileName: string,
+  docTypeHint: ProcessInput["docTypeHint"],
+  overrides: Partial<ProcessInput> = {},
+): ProcessInput {
   return {
     storageKey: `test/${fileName}`,
     fileName,
     mimeType: "application/pdf",
     docTypeHint,
     attempt: 2, // skip the first-attempt failure injection
+    ...overrides,
   };
 }
 
@@ -45,6 +68,8 @@ describe("port_entry extraction", () => {
     const f = result.fields;
 
     expect(f.entry_number).toBe("231-4501320-0");
+    // Org identity comes from the context snapshot, never a literal.
+    expect(f.importer_of_record).toBe(ORG_SEED.importerOfRecord);
     expect(f.line_items.length).toBeGreaterThanOrEqual(3);
     expect(f.line_items.length).toBeLessThanOrEqual(5);
 
@@ -76,9 +101,10 @@ describe("port_entry extraction", () => {
     expect(Math.round((f.hmf_amount ?? 0) * 100)).toBe(hmf);
   });
 
-  it("reaches every discrepancy class across filenames", async () => {
-    // (seed + lineIndex) % 5 assigns classes; a 5-line entry (seed % 3 === 2)
-    // covers all five. Find one such filename deterministically.
+  it("reaches the discrepancy classes across filenames", async () => {
+    // (seed + lineIndex) % 6 assigns classes. A 5-line entry needs
+    // seed % 3 === 2, which forces seed % 6 into {2, 5} — either window
+    // covers both class 2 (the TW frame) and class 5 (the COO plant).
     let fileName = "";
     for (let i = 0; i < 50; i++) {
       const candidate = `entry-scan-${i}.pdf`;
@@ -95,8 +121,9 @@ describe("port_entry extraction", () => {
     expect(result.fields.line_items).toHaveLength(5);
 
     const seed = hashString(fileName);
-    const classes = result.fields.line_items.map((_, i) => (seed + i) % 5);
-    expect([...classes].sort()).toEqual([0, 1, 2, 3, 4]);
+    const classes = result.fields.line_items.map((_, i) => (seed + i) % 6);
+    expect(classes).toContain(2);
+    expect(classes).toContain(5);
 
     // Class 2 line is a TW frame that wrongly declares the reciprocal code.
     const frameLine = result.fields.line_items[classes.indexOf(2)];
@@ -104,6 +131,25 @@ describe("port_entry extraction", () => {
     expect(
       frameLine.charges.some((c) => c.hts_code === "9903.01.25"),
     ).toBe(true);
+
+    // Class 5 line is the dual-sourced controller declared under its SECOND
+    // vendor's name but with the primary source's origin — only the
+    // COO-vs-catalog audit rule should fire on it.
+    const cooLine = result.fields.line_items[classes.indexOf(5)];
+    expect(cooLine.sku).toBe("EB-CTRL-V2");
+    expect(cooLine.supplier_name).toBe("Hanoi Precision Components");
+    expect(cooLine.country_of_origin).toBe("CN");
+  });
+
+  it("names the per-line supplier from the part's primary source", async () => {
+    const result = await extract(
+      input("entry-231-4501320-0.pdf", "port_entry"),
+    );
+    if (result.docType !== "port_entry") throw new Error("wrong docType");
+    for (const li of result.fields.line_items) {
+      expect(li.supplier_name).toBeTruthy();
+      expect(li.country_of_origin).toMatch(/^[A-Z]{2}$/);
+    }
   });
 
   it("fails on the first attempt for unlucky filenames, then succeeds", async () => {
@@ -184,14 +230,25 @@ describe("quote_sheet extraction", () => {
     expect(f.line_items).toHaveLength(2);
 
     const [known, unknown] = f.line_items;
-    // Known catalog SKU (seeded) — the re-quote path.
-    expect(known.sku).toBe("EB-SDL-CMF");
+    // Known line: a catalog part re-quoted by its own primary vendor at or
+    // below the current cost — the re-quote path.
+    const catalog = new Map(
+      PART_SEED.filter((p) => p.htsCode !== null && p.status === "active").map(
+        (p) => [p.sku, p],
+      ),
+    );
+    const part = catalog.get(known.sku);
+    expect(part).toBeDefined();
     expect(known.unit_cost).toBeGreaterThan(0);
-    expect(known.unit_cost).toBeLessThanOrEqual(9.8);
+    expect(known.unit_cost).toBeLessThanOrEqual(
+      Number(part!.sources[0].unitCost),
+    );
+    expect(f.supplier_name).toBe(part!.sources[0].vendor);
     // Supplier's claimed HTS rides along but never drives money.
-    expect(known.hts_code).toBe("8714.95.0000");
+    expect(known.hts_code).toBe(part!.htsCode);
     // Unknown SKU — ingestion auto-creates a draft part for it.
     expect(unknown.sku).toBe("EB-RCK-ALU");
+    expect(catalog.has(unknown.sku)).toBe(false);
     expect(unknown.unit_cost).toBeGreaterThan(0);
     expect(unknown.line_number).toBe(2);
   });
@@ -200,5 +257,66 @@ describe("quote_sheet extraction", () => {
     const a = await extract(input("pricing-2026-q3.pdf", "quote_sheet"));
     const b = await extract(input("pricing-2026-q3.pdf", "quote_sheet"));
     expect(a).toEqual(b);
+  });
+});
+
+describe("entry_packet extraction", () => {
+  it("returns a stable manifest whose assist sheet routes to other", async () => {
+    const a = await extract(input("test-entry-packet-1.pdf", "entry_packet"));
+    const b = await extract(input("test-entry-packet-1.pdf", "entry_packet"));
+    expect(a).toEqual(b);
+    if (a.docType !== "entry_packet") throw new Error("wrong docType");
+    expect(a.fields.parts.map((p) => [p.role, p.doc_type])).toEqual([
+      ["entry_summary_7501", "port_entry"],
+      ["commercial_invoice", "commercial_invoice"],
+      ["packing_list", "packing_list"],
+      // The look-alike lesson: an assist sheet is never an invoice.
+      ["assist_sheet", "other"],
+    ]);
+    // Pages tile the 6-page fixture without overlap.
+    expect(a.fields.parts.flatMap((p) => p.pages)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("keeps sibling children consistent via the shared storageKey", async () => {
+    // Children of one packet share the parent's storageKey and differ only
+    // in fileName/role — the invoice pair must agree in either order.
+    const storageKey = "packets/2026/08/abc123.pdf";
+    const entryChild = await extract(
+      input("packet — Entry summary (pp. 1–2).pdf", "port_entry", {
+        storageKey,
+        packetRole: "entry_summary_7501",
+        pageRange: [1, 2],
+      }),
+    );
+    const invoiceChild = await extract(
+      input("packet — Commercial invoice (pp. 3–4).pdf", "commercial_invoice", {
+        storageKey,
+        packetRole: "commercial_invoice",
+        pageRange: [3, 4],
+      }),
+    );
+    if (entryChild.docType !== "port_entry") throw new Error("wrong docType");
+    if (invoiceChild.docType !== "commercial_invoice")
+      throw new Error("wrong docType");
+
+    expect(entryChild.fields.referenced_invoices).toHaveLength(1);
+    expect(entryChild.fields.referenced_invoices[0]).toBe(
+      invoiceChild.fields.invoice_number,
+    );
+    expect(invoiceChild.fields.po_number).toBe(
+      entryChild.fields.referenced_pos[0],
+    );
+    // Packet CI lines carry the catalog HTS for the CI-vs-entry check.
+    for (const li of invoiceChild.fields.line_items) {
+      expect(li.hts_code).toBeTruthy();
+    }
+  });
+
+  it("standalone port entries reference no invoices", async () => {
+    const result = await extract(
+      input("entry-231-4501320-0.pdf", "port_entry"),
+    );
+    if (result.docType !== "port_entry") throw new Error("wrong docType");
+    expect(result.fields.referenced_invoices).toEqual([]);
   });
 });

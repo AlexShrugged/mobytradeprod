@@ -1,4 +1,5 @@
 import { DocumentsTable } from "@/components/data/documents-table";
+import { PageHeader } from "@/components/page-header";
 import { SourceCards } from "@/components/data/source-cards";
 import { UploadDropzone } from "@/components/data/upload-dropzone";
 import {
@@ -24,13 +25,10 @@ export default async function DataPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Data</h1>
-        <p className="text-sm text-muted-foreground">
-          Document uploads, intake channels, and integrations — managed in one
-          place.
-        </p>
-      </div>
+      <PageHeader
+        title="Data"
+        info="Document uploads, intake channels, and integrations in one place."
+      />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">

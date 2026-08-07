@@ -35,6 +35,7 @@ export const PORT_ENTRY_RESPONSE = [
     importer_of_record: cite("Waystar Royco, Inc."),
     referenced_bols: [cite("MAEU2264101"), cite("ONEY8811327")],
     referenced_pos: [cite("PO-2026-001")],
+    referenced_invoices: [cite("SVD-8841")],
     // Stringified currency — must coerce to 15750.
     total_entered_value: cite("$15,750.00"),
     total_duty: cite(2756.25),
@@ -47,7 +48,9 @@ export const PORT_ENTRY_RESPONSE = [
         sku: cite("EB-HUB-250"),
         description: cite("Rear hub motor 250W"),
         hts_code: cite("8501.31.4000"),
-        country_of_origin: cite("CN"),
+        // Lowercase in the document — must uppercase (exact-match downstream).
+        country_of_origin: cite("cn"),
+        supplier_name: cite("Shenzhen Volt Dynamics"),
         quantity: cite(100),
         unit_value: cite("$105.00"),
         entered_value: cite("$10,500.00"),
@@ -221,6 +224,7 @@ export const PURCHASE_ORDER_RESPONSE = [
         line_number: cite(1),
         sku: cite("EB-BAT-48"),
         description: cite("48V battery pack"),
+        country_of_origin: cite("cn"),
         quantity: cite(200),
         unit_price: cite(180),
       },
@@ -250,6 +254,9 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
         line_number: cite("1"),
         sku: cite("EB-BAT-48V"),
         description: cite("48V 14Ah Lithium Battery Pack"),
+        country_of_origin: cite("CN"),
+        // 6-digit HS code as suppliers often print — captured verbatim.
+        hts_code: cite("850760"),
         quantity: cite("100"),
         unit_price: cite("$312.00"),
         total_price: cite("$31,200.00"),
@@ -257,6 +264,7 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
       // No extended total — dropped (nothing to reconcile against).
       { sku: cite("EB-CTRL-V2"), quantity: cite(10), unit_price: cite(42.3) },
       {
+        // No hts_code on the line — maps to null.
         sku: cite("EB-MTR-500W"),
         total_price: cite("$10,700.00"),
       },
@@ -369,6 +377,9 @@ export const REFUND_REPORT_RESPONSE = [
 // Classification runs without citations — plain values.
 export const CLASSIFY_RESPONSE = [{ doc_type: "port_entry" }];
 export const CLASSIFY_RESPONSE_INVALID = [{ doc_type: "tax form" }];
+export const CLASSIFY_RESPONSE_PACKET = [{ doc_type: "entry_packet" }];
+// assist_sheet is a classification-only label with no docType of its own.
+export const CLASSIFY_RESPONSE_ASSIST = [{ doc_type: "assist_sheet" }];
 
 // A port_entry response missing the required identifier.
 export const PORT_ENTRY_RESPONSE_NO_NUMBER = [

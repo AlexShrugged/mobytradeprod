@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/page-header";
 import { PartsView } from "@/components/parts/parts-view";
 import { getHtsReviewQueue, getParts } from "@/lib/db/queries/parts";
 
@@ -19,12 +20,10 @@ export default async function PartsPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Parts</h1>
-        <p className="text-sm text-muted-foreground">
-          Your SKU catalog — costs, origins, HTS classification, and quotes.
-        </p>
-      </div>
+      <PageHeader
+        title="Parts"
+        info="Your SKU catalog: costs, origins, HTS classification, and quotes."
+      />
       <PartsView
         parts={parts}
         queue={queue}

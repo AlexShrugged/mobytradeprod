@@ -40,27 +40,28 @@
 
 :root {
   --radius: 0.625rem;
-  --background: #fafafa;
-  --foreground: #0a0a0a;
+  /* Cool (slate) neutral ramp — hue ~215°, subtle blue cast throughout. */
+  --background: #f1f5f9;
+  --foreground: #0f172a;
   --card: #ffffff;
-  --card-foreground: #0a0a0a;
+  --card-foreground: #0f172a;
   --popover: #ffffff;
-  --popover-foreground: #0a0a0a;
-  --primary: #18181b;
-  --primary-foreground: #fafafa;
-  --secondary: #27272a;
-  --secondary-foreground: #fafafa;
-  --muted: #f4f4f5;
-  --muted-foreground: #3f3f46;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
+  --popover-foreground: #0f172a;
+  --primary: #0f172a;
+  --primary-foreground: #f8fafc;
+  --secondary: #334155;
+  --secondary-foreground: #f8fafc;
+  --muted: #f1f5f9;
+  --muted-foreground: #3f4c63;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
   --destructive: #ef4444;
-  --border: #e4e4e7;
+  --border: #e2e8f0;
   --input: #ffffff;
-  --input-border: #d4d4d8;
-  --ring: #a1a1aa;
-  --tertiary: #52525b;
-  --faint: #d4d4d8;
+  --input-border: #cbd5e1;
+  --ring: #94a3b8;
+  --tertiary: #475569;
+  --faint: #cbd5e1;
   /* Validated categorical palette (dataviz skill, light surface #ffffff). */
   --chart-1: #2a78d6;
   --chart-2: #1baf7a;
@@ -70,27 +71,28 @@
 }
 
 .dark {
-  --background: #0c0c0e;
-  --foreground: #ececef;
-  --card: #161618;
-  --card-foreground: #ececef;
-  --popover: #161618;
-  --popover-foreground: #ececef;
-  --primary: #ececef;
-  --primary-foreground: #0c0c0e;
-  --secondary: #ccccd0;
-  --secondary-foreground: #0c0c0e;
-  --muted: #1e1e21;
-  --muted-foreground: #9393a0;
-  --accent: #1c1c1f;
-  --accent-foreground: #dadadf;
+  /* Same ramp, cool-shifted: hue ~217°, lightness steps preserved. */
+  --background: #0b0d12;
+  --foreground: #e8edf4;
+  --card: #14171e;
+  --card-foreground: #e8edf4;
+  --popover: #14171e;
+  --popover-foreground: #e8edf4;
+  --primary: #e8edf4;
+  --primary-foreground: #0b0d12;
+  --secondary: #c9d2de;
+  --secondary-foreground: #0b0d12;
+  --muted: #1c2029;
+  --muted-foreground: #8f9aae;
+  --accent: #1a1e26;
+  --accent-foreground: #d5dce6;
   --destructive: #ef4444;
-  --border: #27272a;
-  --input: #161618;
-  --input-border: #303033;
-  --ring: #52525b;
-  --tertiary: #66666e;
-  --faint: #37373c;
+  --border: #252a34;
+  --input: #14171e;
+  --input-border: #2e343f;
+  --ring: #4f586a;
+  --tertiary: #636e82;
+  --faint: #353c49;
   /* Same hues re-stepped for the dark surface (#161618) and validated as a set. */
   --chart-1: #3987e5;
   --chart-2: #199e70;

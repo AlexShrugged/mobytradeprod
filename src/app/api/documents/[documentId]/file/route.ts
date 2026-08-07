@@ -4,10 +4,19 @@ import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 import { getFileStore } from "@/lib/storage";
 
-// Streams a stored document back to the browser — the download affordance on
-// event provenance panels and the documents table.
+// mimeType is browser-supplied at upload — inline HTML/SVG from the same
+// origin would be a stored-XSS vector, so those always download.
+const INLINE_BLOCKED = new Set([
+  "text/html",
+  "image/svg+xml",
+  "application/xhtml+xml",
+]);
+
+// Streams a stored document back to the browser. Default disposition is
+// attachment (download); ?disposition=inline opens it in the browser for
+// types that are safe to render.
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ documentId: string }> },
 ) {
   const { documentId } = await params;
@@ -34,10 +43,16 @@ export async function GET(
     );
   }
 
+  const mimeType = doc.mimeType || "application/octet-stream";
+  const inline =
+    new URL(req.url).searchParams.get("disposition") === "inline" &&
+    !INLINE_BLOCKED.has(mimeType);
+
   return new Response(new Uint8Array(bytes), {
     headers: {
-      "Content-Type": doc.mimeType || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${doc.fileName.replace(/"/g, "")}"`,
+      "Content-Type": mimeType,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${doc.fileName.replace(/"/g, "")}"`,
+      "X-Content-Type-Options": "nosniff",
       "Cache-Control": "no-store",
     },
   });

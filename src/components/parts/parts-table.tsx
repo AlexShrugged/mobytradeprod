@@ -24,10 +24,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { PartRow } from "@/lib/db/queries/parts";
+import type { CentsRange, PartRow } from "@/lib/db/queries/parts";
 import type { PartHtsReviewStatusValue } from "@/lib/db/schema";
-import { formatCents, formatMoney } from "@/lib/format";
+import { formatCents } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+/** "$42.30" when the vendors agree, "$42.30–$44.10" when they don't. */
+function formatCentsRange(range: CentsRange): string {
+  return range.min === range.max
+    ? formatCents(range.min)
+    : `${formatCents(range.min)}–${formatCents(range.max)}`;
+}
 
 const reviewStatusMeta: Record<
   PartHtsReviewStatusValue,
@@ -131,49 +138,67 @@ export function PartsTable({
         ),
       },
       {
-        accessorKey: "countryOfOrigin",
-        header: "Origin",
-        cell: ({ row }) => (
-          <EditableCell
-            endpoint={`/api/parts/${row.original.id}/fields`}
-            field="countryOfOrigin"
-            value={row.original.countryOfOrigin ?? ""}
-            placeholder="add"
-            className="w-fit"
-          />
-        ),
+        // The (vendor, origin) sourcing summary — per-vendor detail and
+        // editing live in the expansion's Sources card.
+        id: "sourcing",
+        header: "Sourcing",
+        cell: ({ row }) => {
+          const sources = row.original.sources;
+          if (sources.length === 0) {
+            return <span className="text-muted-foreground">—</span>;
+          }
+          const origins = [
+            ...new Set(
+              sources
+                .map((s) => s.countryOfOrigin)
+                .filter((c): c is string => c !== null),
+            ),
+          ];
+          const originLabel = origins.length > 0 ? origins.join(", ") : "—";
+          const detail = sources
+            .map((s) => `${s.vendorName} · ${s.countryOfOrigin ?? "no origin"}`)
+            .join("\n");
+          if (sources.length === 1) {
+            return (
+              <span title={detail}>
+                {sources[0].vendorName}
+                <span className="text-muted-foreground"> · {originLabel}</span>
+              </span>
+            );
+          }
+          return (
+            <span title={detail}>
+              {sources.length} vendors
+              <span className="text-muted-foreground"> · {originLabel}</span>
+            </span>
+          );
+        },
       },
       {
-        accessorKey: "manufacturer",
-        header: "Manufacturer",
-        cell: ({ row }) => (
-          <EditableCell
-            endpoint={`/api/parts/${row.original.id}/fields`}
-            field="manufacturer"
-            value={row.original.manufacturer ?? ""}
-            placeholder="add"
-          />
-        ),
-      },
-      {
-        accessorKey: "unitCost",
+        id: "unitCost",
         header: () => <div className="text-right">Cost/unit</div>,
-        cell: ({ row }) => (
-          <EditableCell
-            endpoint={`/api/parts/${row.original.id}/fields`}
-            field="unitCost"
-            type="number"
-            value={row.original.unitCost ?? ""}
-            display={
-              row.original.unitCost === null
-                ? undefined
-                : formatMoney(row.original.unitCost)
-            }
-            placeholder="add"
-            className="text-right tabular-nums"
-            inputClassName="text-right"
-          />
-        ),
+        cell: ({ row }) => {
+          const range = row.original.costRangeCents;
+          if (range === null) {
+            return (
+              <div className="text-right tabular-nums text-muted-foreground">
+                —
+              </div>
+            );
+          }
+          return (
+            <div
+              className="text-right tabular-nums"
+              title={
+                range.min === range.max
+                  ? undefined
+                  : "Vendors quote different costs — expand the row for per-vendor detail."
+              }
+            >
+              {formatCentsRange(range)}
+            </div>
+          );
+        },
       },
       {
         id: "hts",
@@ -259,7 +284,8 @@ export function PartsTable({
         header: () => <div className="text-right">Est. landed/unit</div>,
         cell: ({ row }) => {
           const part = row.original;
-          if (part.estimatedPerUnitCents === null) {
+          const range = part.estimatedRangeCents;
+          if (range === null) {
             return (
               <div className="text-right tabular-nums text-muted-foreground">
                 —
@@ -267,6 +293,10 @@ export function PartsTable({
             );
           }
           const isDraft = part.status === "draft";
+          const spread =
+            range.min !== range.max
+              ? " The spread is per-vendor: origin decides which measures apply."
+              : "";
           return (
             <div
               className={cn(
@@ -275,12 +305,12 @@ export function PartsTable({
               )}
               title={
                 isDraft
-                  ? `${ESTIMATE_TITLE} Draft SKU — inputs come from an unapproved quote.`
-                  : ESTIMATE_TITLE
+                  ? `${ESTIMATE_TITLE}${spread} Draft SKU — inputs come from an unapproved quote.`
+                  : `${ESTIMATE_TITLE}${spread}`
               }
             >
               {part.estimateIncomplete ? "≥ " : ""}
-              {formatCents(part.estimatedPerUnitCents)}
+              {formatCentsRange(range)}
             </div>
           );
         },

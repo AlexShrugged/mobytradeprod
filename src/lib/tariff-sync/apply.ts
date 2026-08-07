@@ -12,6 +12,7 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import * as schema from "../db/schema";
 import { normalizeHts } from "../duty/calculator";
+import { dayBefore } from "../effective-dating";
 import type { DbClient } from "../duty/reference";
 import type { LiveMeasureSnapshot, ProposedMeasureChange } from "./types";
 
@@ -82,11 +83,9 @@ export function planRevisionApply(
   return { action: "update_in_place" };
 }
 
-export function dayBefore(isoDate: string): string {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
+// Moved to the shared effective-dating module; re-exported for existing
+// importers (base-apply, tests).
+export { dayBefore };
 
 export type ApplyResult = {
   applied: number;

@@ -18,21 +18,24 @@ const toneClasses: Record<Tone, string> = {
 };
 
 const statusMeta: Record<string, { label: string; tone: Tone }> = {
-  // entries
+  // entries — DERIVED states (entries/status.ts): filed by construction
+  // (an entry row only exists because a 7501 was processed), liquidated
+  // from refund-claim liquidation dates. "released" does not exist: no
+  // ingested document evidences CBP release. (draft is shared with parts.)
   draft: { label: "Draft", tone: "neutral" },
   filed: { label: "Filed", tone: "blue" },
-  released: { label: "Released", tone: "green" },
   liquidated: { label: "Liquidated", tone: "violet" },
   // future entries (derived projection)
   projected: { label: "Projected", tone: "amber" },
   // shipments
+  // Shipment lifecycle — DERIVED states (shipments/status.ts); "delivered"
+  // does not exist: nothing we ingest can prove delivery.
   booked: { label: "Booked", tone: "neutral" },
   in_transit: { label: "In transit", tone: "blue" },
   arrived: { label: "Arrived", tone: "green" },
-  delivered: { label: "Delivered", tone: "violet" },
-  // POs
+  // POs carry no status (receipt is a warehouse event nothing we ingest
+  // evidences); "open"/"received"/"closed" remain for other domains.
   open: { label: "Open", tone: "blue" },
-  partially_received: { label: "Partially received", tone: "amber" },
   received: { label: "Received", tone: "green" },
   closed: { label: "Closed", tone: "neutral" },
   // documents
@@ -61,6 +64,23 @@ const statusMeta: Record<string, { label: string; tone: Tone }> = {
   paused: { label: "Paused", tone: "neutral" },
   error: { label: "Error", tone: "red" },
   not_configured: { label: "Not configured", tone: "neutral" },
+  // variances (audit alert types) + entry-line state pills
+  hts_discrepancy: { label: "HTS mismatch", tone: "amber" },
+  hts_reclassified: { label: "Reclassified", tone: "violet" },
+  coo_discrepancy: { label: "Origin mismatch", tone: "amber" },
+  rate_mismatch: { label: "Rate mismatch", tone: "red" },
+  amount_mismatch: { label: "Duty mismatch", tone: "red" },
+  missing_measure: { label: "Missing measure", tone: "red" },
+  unexpected_measure: { label: "Unexpected measure", tone: "violet" },
+  value_mismatch: { label: "Value mismatch", tone: "blue" },
+  data_unreconciled: { label: "Unreconciled", tone: "neutral" },
+  sail_date_assumption: { label: "Sail assumed", tone: "blue" },
+  // CI-vs-entry document comparisons
+  quantity_discrepancy: { label: "Quantity mismatch", tone: "amber" },
+  invoice_hts_mismatch: { label: "CI HTS mismatch", tone: "amber" },
+  invoice_sku_missing: { label: "Not on invoice", tone: "blue" },
+  invoice_comparison_skipped: { label: "CI skipped", tone: "neutral" },
+  needs_review: { label: "Needs review", tone: "amber" },
 };
 
 export function StatusBadge({

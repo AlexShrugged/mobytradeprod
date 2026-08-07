@@ -27,11 +27,9 @@ const chargeTypeMeta: Record<string, { label: string; tone: string }> = {
 
 export function LineCharges({ line }: { line: LineItemDetail }) {
   return (
+    // No heading — this renders directly under the row (or card title) that
+    // already names the line and SKU.
     <div className="flex flex-col gap-2 bg-muted/30 px-12 py-4">
-      <h4 className="text-sm font-medium">
-        Charges — line {line.lineNumber}
-        {line.sku ? ` · ${line.sku}` : ""}
-      </h4>
       <div className="rounded-md border bg-background">
         <Table>
           <TableHeader>

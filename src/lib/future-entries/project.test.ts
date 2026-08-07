@@ -48,7 +48,6 @@ function shipment(over: Partial<ProjectableShipment>): ProjectableShipment {
     etd: day(-14),
     eta: day(4),
     sailedOnBoardDate: day(-13),
-    status: "in_transit",
     ...over,
   };
 }
@@ -57,7 +56,7 @@ const activePart = (htsCode: string, coo: string) => ({
   status: "active",
   htsCode,
   htsCodeProvisional: false,
-  countryOfOrigin: coo,
+  sources: [{ vendorId: "vendor-shenzhen", countryOfOrigin: coo }],
 });
 
 // PO-2026-009's shape: a CN motor line and a CN battery line.
@@ -65,14 +64,14 @@ function motorBatteryPo(): ProjectablePurchaseOrder {
   return {
     id: "po1",
     poNumber: "PO-9001",
-    supplierName: "Shenzhen Volt Dynamics Co.",
+    supplierName: "Shenzhen Volt Dynamics",
+    vendorId: "vendor-shenzhen",
     orderDate: day(-30),
     currency: "USD",
     totalAmount: "81225.00",
-    status: "open",
     lines: [
-      { sku: "EB-MTR-750W", description: "750W Mid-Drive Motor", quantity: "150", unitPrice: "289.5000", totalPrice: "43425.00", part: activePart("8501.31.4000", "CN") },
-      { sku: "EB-BAT-48V", description: "48V 14Ah Lithium Battery Pack", quantity: "120", unitPrice: "315.0000", totalPrice: "37800.00", part: activePart("8507.60.0020", "CN") },
+      { sku: "EB-MTR-750W", description: "750W Mid-Drive Motor", countryOfOrigin: null, quantity: "150", unitPrice: "289.5000", totalPrice: "43425.00", part: activePart("8501.31.4000", "CN") },
+      { sku: "EB-BAT-48V", description: "48V 14Ah Lithium Battery Pack", countryOfOrigin: null, quantity: "120", unitPrice: "315.0000", totalPrice: "37800.00", part: activePart("8507.60.0020", "CN") },
     ],
   };
 }
@@ -94,23 +93,23 @@ describe("projectFutureEntries", () => {
   it("projects only unentered shipments still headed for customs", () => {
     const rows = project(
       [
-        // In transit, no entry — projected.
+        // Sailed (in transit), ETA ahead, no entry — projected.
         { ...shipment({ id: "a", shipmentNumber: "SHP-A" }), purchaseOrders: [] },
-        // Delivered behind an entry — excluded by the entry link.
-        { ...shipment({ id: "b", shipmentNumber: "SHP-B", status: "delivered", eta: day(-30) }), purchaseOrders: [] },
-        // Arrived, ETA in the past, no entry link — no longer projectable.
-        { ...shipment({ id: "c", shipmentNumber: "SHP-C", status: "arrived", eta: day(-2) }), purchaseOrders: [] },
+        // Behind an entry — excluded by the entry link.
+        { ...shipment({ id: "b", shipmentNumber: "SHP-B", eta: day(-30) }), purchaseOrders: [] },
+        // ETA in the past, no entry link — derived arrived, past projecting.
+        { ...shipment({ id: "c", shipmentNumber: "SHP-C", eta: day(-2) }), purchaseOrders: [] },
         // Booked with no dates at all — still a future entry.
-        { ...shipment({ id: "d", shipmentNumber: "SHP-D", status: "booked", etd: null, eta: null, sailedOnBoardDate: null }), purchaseOrders: [] },
-        // Arrived but ETA today — a stale status must not hide it.
-        { ...shipment({ id: "e", shipmentNumber: "SHP-E", status: "arrived", eta: day(0) }), purchaseOrders: [] },
+        { ...shipment({ id: "d", shipmentNumber: "SHP-D", etd: null, eta: null, sailedOnBoardDate: null }), purchaseOrders: [] },
+        // ETA today — derived arrived (the goods are at port), not projected.
+        { ...shipment({ id: "e", shipmentNumber: "SHP-E", eta: day(0) }), purchaseOrders: [] },
       ],
       ["b"],
     );
 
-    expect(rows.map((r) => r.id)).toEqual(["future:e", "future:a", "future:d"]);
+    expect(rows.map((r) => r.id)).toEqual(["future:a", "future:d"]);
     // ETA order, ETA-less bookings last.
-    expect(rows.map((r) => r.projectedEntryDate)).toEqual([day(0), day(4), null]);
+    expect(rows.map((r) => r.projectedEntryDate)).toEqual([day(4), null]);
   });
 
   it("estimates lines, duties, and nominal fees from committed catalog data", () => {
@@ -170,9 +169,9 @@ describe("projectFutureEntries", () => {
       ...motorBatteryPo(),
       lines: [
         // Draft part: nothing on it is committed — codeless for estimates.
-        { sku: "EB-CHG-52V", description: "52V 4A Fast Charger", quantity: "200", unitPrice: "21.7500", totalPrice: "4350.00", part: { status: "draft", htsCode: "8504.40.9550", htsCodeProvisional: false, countryOfOrigin: "CN" } },
+        { sku: "EB-CHG-52V", description: "52V 4A Fast Charger", countryOfOrigin: null, quantity: "200", unitPrice: "21.7500", totalPrice: "4350.00", part: { status: "draft", htsCode: "8504.40.9550", htsCodeProvisional: false, sources: [{ vendorId: "vendor-shenzhen", countryOfOrigin: "CN" }] } },
         // Provisional code: auto-selected, unreviewed — never drives money.
-        { sku: "EB-CHG-48V", description: "48V 3A Battery Charger", quantity: "100", unitPrice: "18.5000", totalPrice: "1850.00", part: { status: "active", htsCode: "8504.40.9550", htsCodeProvisional: true, countryOfOrigin: "CN" } },
+        { sku: "EB-CHG-48V", description: "48V 3A Battery Charger", countryOfOrigin: null, quantity: "100", unitPrice: "18.5000", totalPrice: "1850.00", part: { status: "active", htsCode: "8504.40.9550", htsCodeProvisional: true, sources: [{ vendorId: "vendor-shenzhen", countryOfOrigin: "CN" }] } },
       ],
     };
     const [row] = project([{ ...shipment({}), purchaseOrders: [po] }]);

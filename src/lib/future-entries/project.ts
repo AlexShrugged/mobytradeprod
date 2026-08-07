@@ -9,10 +9,11 @@
 // the calculator over committed catalog codes, and MPF/HMF from nominal
 // rates — CBP's per-entry minimums and caps are unknowable pre-entry.
 
-import { HMF_RATE, MPF_RATE } from "../db/seed-data/tariff";
 import { computeExpectedCharges, normalizeHts } from "../duty/calculator";
+import { HMF_RATE, MPF_RATE } from "../duty/fees";
 import { resolveSailInfo } from "../duty/sail";
 import type { ReferenceData, SailBasis, SailInfo } from "../duty/types";
+import { deriveShipmentStatus } from "../shipments/status";
 import { classifyShipment, type ImpactMeasure } from "../tariff-sync/impact";
 
 export type ProjectableShipment = {
@@ -28,12 +29,13 @@ export type ProjectableShipment = {
   etd: string | null;
   eta: string | null;
   sailedOnBoardDate: string | null;
-  status: string;
 };
 
 export type ProjectablePoLine = {
   sku: string | null;
   description: string | null;
+  /** Origin as logged on the PO line itself — the strongest signal. */
+  countryOfOrigin: string | null;
   quantity: string | null; // numeric string, as drizzle returns it
   unitPrice: string | null;
   totalPrice: string | null;
@@ -41,7 +43,8 @@ export type ProjectablePoLine = {
     status: string;
     htsCode: string | null;
     htsCodeProvisional: boolean;
-    countryOfOrigin: string | null;
+    /** The part's (vendor, COO) sourcing rows. */
+    sources: { vendorId: string; countryOfOrigin: string | null }[];
   } | null;
 };
 
@@ -49,10 +52,11 @@ export type ProjectablePurchaseOrder = {
   id: string;
   poNumber: string;
   supplierName: string | null;
+  /** Resolved header vendor — picks the matching part source for COO. */
+  vendorId: string | null;
   orderDate: string | null;
   currency: string;
   totalAmount: string | null;
-  status: string;
   lines: ProjectablePoLine[];
 };
 
@@ -121,18 +125,42 @@ function worseBasis(a: SailBasis, b: SailBasis): SailBasis {
 }
 
 /**
- * One FutureEntry per shipment that is still headed for customs: status
- * booked/in_transit (or ETA today or later — a stale status must not hide
- * live exposure) and no entry_shipments row.
+ * Projected line COO preference: the PO line's own declared origin wins;
+ * else the (part, PO-vendor) source row; else the part's single source when
+ * exactly one exists (unambiguous); else unknown — and country-gated
+ * measures silently drop out of the estimate, today's degradation. Draft
+ * parts contribute nothing: their sources are quote claims.
+ */
+export function resolveProjectedCoo(
+  declared: string | null,
+  poVendorId: string | null,
+  part: {
+    status: string;
+    sources: { vendorId: string; countryOfOrigin: string | null }[];
+  } | null,
+): string | null {
+  if (declared !== null) return declared;
+  if (!part || part.status === "draft") return null;
+  if (poVendorId !== null) {
+    const vendorSource = part.sources.find((s) => s.vendorId === poVendorId);
+    if (vendorSource?.countryOfOrigin) return vendorSource.countryOfOrigin;
+  }
+  if (part.sources.length === 1) return part.sources[0].countryOfOrigin;
+  return null;
+}
+
+/**
+ * One FutureEntry per shipment that is still headed for customs: no
+ * entry_shipments row and a derived status short of "arrived" (booked or
+ * in transit — see shipments/status.ts; an ETA that has passed means the
+ * goods are at port and past projecting).
  */
 export function projectFutureEntries(input: ProjectionInput): FutureEntry[] {
   const projected = input.shipments
     .filter(
       (s) =>
         !input.enteredShipmentIds.has(s.id) &&
-        (s.status === "booked" ||
-          s.status === "in_transit" ||
-          (s.eta !== null && s.eta >= input.today)),
+        deriveShipmentStatus(s, false, input.today) !== "arrived",
     )
     .map((s) => projectOne(s, input));
 
@@ -177,7 +205,11 @@ function projectOne(
             ? line.part
             : null;
         const htsCode = committed?.htsCode ?? null;
-        const countryOfOrigin = committed?.countryOfOrigin ?? null;
+        const countryOfOrigin = resolveProjectedCoo(
+          line.countryOfOrigin,
+          po.vendorId,
+          line.part,
+        );
 
         let baseDutyCents: number | null = null;
         let additionalDutiesCents: number | null = null;

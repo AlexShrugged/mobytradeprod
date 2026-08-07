@@ -2,27 +2,15 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
 import { db, schema } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 
-// Inline edits for simple catalog fields. HTS changes are deliberately NOT
-// accepted here — they go through PATCH /api/parts/:partId, which routes
-// them via the classification service (review-queue supersede + re-audit).
-const EDITABLE_FIELDS = new Set([
-  "name",
-  "description",
-  "countryOfOrigin",
-  "unitCost",
-  "manufacturer",
-]);
-
-// field_changes.field names (snake_case, matching the "hts_code" precedent).
-const FIELD_CHANGE_NAMES: Record<string, string> = {
-  name: "name",
-  description: "description",
-  countryOfOrigin: "country_of_origin",
-  unitCost: "unit_cost",
-  manufacturer: "manufacturer",
-};
+// Inline edits for the part's OWN simple fields. Cost and country of origin
+// live on the (part, vendor) source rows — those edit through
+// /api/parts/:partId/sources/:sourceId. HTS changes are deliberately NOT
+// accepted here either — they go through PATCH /api/parts/:partId, which
+// routes them via the classification service (review-queue supersede +
+// re-audit).
+const EDITABLE_FIELDS = new Set(["name", "description"]);
 
 export async function PATCH(
   request: Request,
@@ -62,42 +50,10 @@ export async function PATCH(
       case "description":
         patch.description = value || null;
         break;
-      case "manufacturer":
-        patch.manufacturer = value || null;
-        break;
-      case "countryOfOrigin": {
-        if (value === null || value === "") {
-          patch.countryOfOrigin = null;
-          break;
-        }
-        const coo = value.toUpperCase();
-        if (!/^[A-Z]{2}$/.test(coo)) {
-          return NextResponse.json(
-            { error: "Country of origin must be a 2-letter ISO code." },
-            { status: 400 },
-          );
-        }
-        patch.countryOfOrigin = coo;
-        break;
-      }
-      case "unitCost": {
-        if (value === null || value === "") {
-          patch.unitCost = null;
-          break;
-        }
-        const cost = Number(value);
-        if (!Number.isFinite(cost) || cost < 0) {
-          return NextResponse.json(
-            { error: "Unit cost must be a non-negative number." },
-            { status: 400 },
-          );
-        }
-        patch.unitCost = cost.toFixed(4);
-        break;
-      }
     }
   }
 
+  const actor = await getCurrentActorName();
   const result = await db.transaction(async (tx) => {
     const part = await tx.query.parts.findFirst({
       where: and(eq(schema.parts.id, partId), eq(schema.parts.orgId, orgId)),
@@ -120,11 +76,11 @@ export async function PATCH(
         orgId,
         entityType: "part",
         entityId: partId,
-        field: FIELD_CHANGE_NAMES[key as string] ?? (key as string),
+        field: key as string,
         oldValue,
         newValue,
         source: "manual_edit",
-        actor: "Alex", // free text until auth lands
+        actor,
       });
     }
 

@@ -1,11 +1,10 @@
 import "server-only";
 
-import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 
 import type { ReviewProposal } from "@/lib/classification/service";
 import { db, schema } from "@/lib/db";
 import type {
-  EntryStatus,
   HtsClassification,
   HtsClassificationCandidate,
   Part,
@@ -14,10 +13,7 @@ import type {
 } from "@/lib/db/schema";
 import { normalizeHts } from "@/lib/duty/calculator";
 import { loadReferenceData } from "@/lib/duty/reference";
-import {
-  computeEstimatedLandedCost,
-  type EstimateInput,
-} from "@/lib/landed-cost/estimate";
+import { computeEstimatedLandedCost } from "@/lib/landed-cost/estimate";
 import { rollupBySku, type RollupLine } from "@/lib/landed-cost/rollup";
 import { getCurrentOrgId } from "@/lib/org";
 
@@ -30,21 +26,9 @@ const centsOf = (v: string | null): number | null =>
 
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-// Actuals mean "what we really paid": the entry has been filed with CBP.
-// Draft entries never feed the last-actual column.
-const ACTUAL_ENTRY_STATUSES: readonly EntryStatus[] = [
-  "filed",
-  "released",
-  "liquidated",
-];
-
-function estimateInputOf(part: Part): EstimateInput {
-  return {
-    unitCostCents: centsOf(part.unitCost),
-    htsDigits: part.htsCode === null ? null : normalizeHts(part.htsCode),
-    countryOfOrigin: part.countryOfOrigin,
-  };
-}
+// Actuals mean "what we really paid": every entry qualifies — an entry row
+// only exists because a 7501 was processed, so it is filed by construction
+// (see entries/status.ts).
 
 // ---------------------------------------------------------------- part rows
 
@@ -71,16 +55,20 @@ export type PartQuoteRow = {
   partCreated: boolean;
   // Sheet context, denormalized so the row renders without a join lookup.
   supplierName: string | null;
+  /** Resolved sheet vendor — the source row a decided quote would write. */
+  vendorId: string | null;
   quoteDate: string | null;
   documentId: string | null;
   /** Estimated landed/unit at the QUOTE's cost + origin under the PART's
    *  committed HTS — the supplier's claimed HTS is shown for reference only,
-   *  so quote estimates stay comparable to the catalog estimate. */
+   *  so quote estimates stay comparable to the catalog estimate. Origin
+   *  falls back to the sheet vendor's source COO when the line has none. */
   estimatedPerUnitCents: number | null;
   estimateIncomplete: boolean;
-  /** Quote cost minus current official cost, cents. Null when the part has
-   *  no official cost yet or the quote is in a non-USD currency (the catalog
-   *  cost is implicitly USD — cross-currency deltas would be noise). */
+  /** Quote cost minus THIS VENDOR's current official cost (the (part,
+   *  vendor) source row), cents. Null when that vendor has no source cost
+   *  yet or the quote is in a non-USD currency (source costs are implicitly
+   *  USD — cross-currency deltas would be noise). */
   deltaVsCurrentCents: number | null;
   /** Approved line with a newer received line for the same part — the human
    *  decision stands (approved lines are never auto-superseded), but the UI
@@ -94,11 +82,36 @@ export type PartQuoteCounts = {
   applied: number;
 };
 
-export type PartRow = Part & {
-  /** Estimated landed cost for one unit as of today (duty-inclusive). For
-   *  draft parts this runs on quote-claimed data — display-only; the UI
-   *  labels draft rows. */
+export type CentsRange = { min: number; max: number };
+
+/** One (part, vendor) sourcing row — the unit rendered in the SourcesCard.
+ *  Cost/COO are the catalog facts; the estimate derives from them under the
+ *  part's committed HTS. */
+export type PartSourceRow = {
+  id: string;
+  vendorId: string;
+  vendorName: string;
+  countryOfOrigin: string | null;
+  unitCost: string | null;
+  /** Estimated landed cost for one unit from THIS vendor as of today. */
   estimatedPerUnitCents: number | null;
+  estimateIncomplete: boolean;
+  /** Quote lines from this vendor for this part. */
+  quoteCounts: PartQuoteCounts;
+};
+
+export type PartRow = Part & {
+  /** The part's vendor sources, vendor-name order. For draft parts these
+   *  carry quote-claimed data — display-only; the UI labels draft rows. */
+  sources: PartSourceRow[];
+  /** Min/max across source costs (cents); null when no source has a cost.
+   *  min === max when the vendors agree (or there is one). */
+  costRangeCents: CentsRange | null;
+  /** Min/max across source landed estimates (cents). Dual-sourcing spread
+   *  is THE signal here — a CN and a VN source of one SKU can land far
+   *  apart under country-gated measures. */
+  estimatedRangeCents: CentsRange | null;
+  /** True when any source's estimate is missing pieces. */
   estimateIncomplete: boolean;
   /** Per-unit landed cost on the most recent filed entry carrying this SKU. */
   actualLatestPerUnitCents: number | null;
@@ -122,36 +135,46 @@ export type PartRow = Part & {
 export async function getParts(): Promise<PartRow[]> {
   const orgId = await getCurrentOrgId();
 
-  const [parts, ref, quoteLines, actualLines, openItems] = await Promise.all([
-    db.query.parts.findMany({
-      where: eq(schema.parts.orgId, orgId),
-      orderBy: asc(schema.parts.sku),
-    }),
-    loadReferenceData(db),
-    db.query.quoteLines.findMany({
-      where: eq(schema.quoteLines.orgId, orgId),
-      with: {
-        quoteSheet: {
-          columns: {
-            id: true,
-            supplierName: true,
-            quoteDate: true,
-            documentId: true,
-            createdAt: true,
+  const [parts, ref, quoteLines, partSources, actualLines, openItems] =
+    await Promise.all([
+      db.query.parts.findMany({
+        where: eq(schema.parts.orgId, orgId),
+        orderBy: asc(schema.parts.sku),
+      }),
+      loadReferenceData(db),
+      db.query.quoteLines.findMany({
+        where: eq(schema.quoteLines.orgId, orgId),
+        with: {
+          quoteSheet: {
+            columns: {
+              id: true,
+              supplierName: true,
+              vendorId: true,
+              quoteDate: true,
+              documentId: true,
+              createdAt: true,
+            },
           },
         },
-      },
-    }),
-    fetchActualRollupLines(orgId),
-    db.query.reviewItems.findMany({
-      where: and(
-        eq(schema.reviewItems.orgId, orgId),
-        eq(schema.reviewItems.itemType, "hts_classification"),
-        eq(schema.reviewItems.status, "pending"),
-      ),
-      columns: { id: true, subjectId: true },
-    }),
-  ]);
+      }),
+      db.query.partSources.findMany({
+        // The parts page shows today's sourcing facts: current windows only.
+        where: and(
+          eq(schema.partSources.orgId, orgId),
+          isNull(schema.partSources.validTo),
+        ),
+        with: { vendor: { columns: { name: true } } },
+      }),
+      fetchActualRollupLines(orgId),
+      db.query.reviewItems.findMany({
+        where: and(
+          eq(schema.reviewItems.orgId, orgId),
+          eq(schema.reviewItems.itemType, "hts_classification"),
+          eq(schema.reviewItems.status, "pending"),
+        ),
+        columns: { id: true, subjectId: true },
+      }),
+    ]);
 
   const latestByPartId = new Map(
     rollupBySku(actualLines)
@@ -167,7 +190,19 @@ export async function getParts(): Promise<PartRow[]> {
     linesByPartId.set(line.partId, list);
   }
 
+  const sourcesByPartId = new Map<string, typeof partSources>();
+  for (const source of partSources) {
+    const list = sourcesByPartId.get(source.partId) ?? [];
+    list.push(source);
+    sourcesByPartId.set(source.partId, list);
+  }
+
   const asOf = today();
+  const rangeOf = (values: (number | null)[]): CentsRange | null => {
+    const present = values.filter((v): v is number => v !== null);
+    if (present.length === 0) return null;
+    return { min: Math.min(...present), max: Math.max(...present) };
+  };
 
   return parts.map((part) => {
     const partLines = linesByPartId.get(part.id) ?? [];
@@ -186,30 +221,77 @@ export async function getParts(): Promise<PartRow[]> {
     });
 
     const counts: PartQuoteCounts = { received: 0, approved: 0, applied: 0 };
+    const countsByVendor = new Map<string, PartQuoteCounts>();
     let newestReceivedAt = 0;
     for (const l of partLines) {
+      const vendorId = l.quoteSheet.vendorId;
+      let vendorCounts = vendorId ? countsByVendor.get(vendorId) : undefined;
+      if (vendorId && !vendorCounts) {
+        vendorCounts = { received: 0, approved: 0, applied: 0 };
+        countsByVendor.set(vendorId, vendorCounts);
+      }
       if (l.status === "received") {
         counts.received += 1;
+        if (vendorCounts) vendorCounts.received += 1;
         newestReceivedAt = Math.max(newestReceivedAt, l.createdAt.getTime());
-      } else if (l.status === "approved") counts.approved += 1;
-      else if (l.status === "applied") counts.applied += 1;
+      } else if (l.status === "approved") {
+        counts.approved += 1;
+        if (vendorCounts) vendorCounts.approved += 1;
+      } else if (l.status === "applied") {
+        counts.applied += 1;
+        if (vendorCounts) vendorCounts.applied += 1;
+      }
     }
 
     const partHtsDigits =
       part.htsCode === null ? null : normalizeHts(part.htsCode);
-    const partCostCents = centsOf(part.unitCost);
+
+    const sourceRows = sourcesByPartId.get(part.id) ?? [];
+    const sourceByVendorId = new Map(sourceRows.map((s) => [s.vendorId, s]));
+    const sources: PartSourceRow[] = sourceRows
+      .map((s) => {
+        const estimated = computeEstimatedLandedCost(
+          {
+            unitCostCents: centsOf(s.unitCost),
+            htsDigits: partHtsDigits,
+            countryOfOrigin: s.countryOfOrigin,
+          },
+          ref,
+          asOf,
+        );
+        return {
+          id: s.id,
+          vendorId: s.vendorId,
+          vendorName: s.vendor.name,
+          countryOfOrigin: s.countryOfOrigin,
+          unitCost: s.unitCost,
+          estimatedPerUnitCents: estimated?.perUnitCents ?? null,
+          estimateIncomplete: estimated?.incomplete ?? false,
+          quoteCounts: countsByVendor.get(s.vendorId) ?? {
+            received: 0,
+            approved: 0,
+            applied: 0,
+          },
+        };
+      })
+      .sort((a, b) => a.vendorName.localeCompare(b.vendorName));
 
     const quotes: PartQuoteRow[] = sorted.map((l) => {
       const quoteCostCents = centsOf(l.unitCost) as number;
+      const sheetVendorSource = l.quoteSheet.vendorId
+        ? sourceByVendorId.get(l.quoteSheet.vendorId)
+        : undefined;
       const estimated = computeEstimatedLandedCost(
         {
           unitCostCents: quoteCostCents,
           htsDigits: partHtsDigits,
-          countryOfOrigin: l.countryOfOrigin ?? part.countryOfOrigin,
+          countryOfOrigin:
+            l.countryOfOrigin ?? sheetVendorSource?.countryOfOrigin ?? null,
         },
         ref,
         asOf,
       );
+      const vendorCostCents = centsOf(sheetVendorSource?.unitCost ?? null);
       return {
         id: l.id,
         quoteSheetId: l.quoteSheetId,
@@ -229,13 +311,14 @@ export async function getParts(): Promise<PartRow[]> {
         appliedAt: l.appliedAt,
         partCreated: l.partCreated,
         supplierName: l.quoteSheet.supplierName,
+        vendorId: l.quoteSheet.vendorId,
         quoteDate: l.quoteSheet.quoteDate,
         documentId: l.quoteSheet.documentId,
         estimatedPerUnitCents: estimated?.perUnitCents ?? null,
         estimateIncomplete: estimated?.incomplete ?? false,
         deltaVsCurrentCents:
-          partCostCents !== null && l.currency === "USD"
-            ? quoteCostCents - partCostCents
+          vendorCostCents !== null && l.currency === "USD"
+            ? quoteCostCents - vendorCostCents
             : null,
         newerReceivedExists:
           l.status === "approved" &&
@@ -243,14 +326,17 @@ export async function getParts(): Promise<PartRow[]> {
       };
     });
 
-    const estimated = computeEstimatedLandedCost(estimateInputOf(part), ref, asOf);
     const latest = latestByPartId.get(part.id);
     const pendingChanges = counts.approved > 0;
 
     return {
       ...part,
-      estimatedPerUnitCents: estimated?.perUnitCents ?? null,
-      estimateIncomplete: estimated?.incomplete ?? false,
+      sources,
+      costRangeCents: rangeOf(sources.map((s) => centsOf(s.unitCost))),
+      estimatedRangeCents: rangeOf(
+        sources.map((s) => s.estimatedPerUnitCents),
+      ),
+      estimateIncomplete: sources.some((s) => s.estimateIncomplete),
       actualLatestPerUnitCents: latest?.perUnitCents ?? null,
       actualLatestEntryNumber: latest?.entryNumber ?? null,
       actualLatestEntryDate: latest?.entryDate ?? null,
@@ -267,22 +353,19 @@ export async function getParts(): Promise<PartRow[]> {
   });
 }
 
-/** Entry lines (with charges) from filed entries, shaped for rollupBySku.
- *  The entry-status filter runs in code — filtering a `with` relation would
- *  drop the charges join, and actual line volume is modest. */
+/** Entry lines (with charges) from filed entries, shaped for rollupBySku. */
 async function fetchActualRollupLines(orgId: string): Promise<RollupLine[]> {
   const rows = await db.query.entryLineItems.findMany({
     where: eq(schema.entryLineItems.orgId, orgId),
     with: {
       charges: true,
       entry: {
-        columns: { id: true, entryNumber: true, entryDate: true, status: true },
+        columns: { id: true, entryNumber: true, entryDate: true },
       },
     },
   });
 
   return rows
-    .filter((li) => ACTUAL_ENTRY_STATUSES.includes(li.entry.status))
     .map((li) => ({
       partId: li.partId,
       sku: li.sku,

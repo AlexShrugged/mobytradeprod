@@ -1,15 +1,17 @@
+import type { DbClient } from "@/lib/db";
 import type { DocumentTypeValue } from "@/lib/db/schema";
 
 import { ReductoDocumentProcessor } from "./reducto";
-import { StubDocumentProcessor } from "./stub-processor";
+import { loadStubContext, StubDocumentProcessor } from "./stub-processor";
 import type { DocumentProcessor } from "./types";
 
 // With REDUCTO_API_KEY set, documents go through real Reducto extraction;
-// without it, the deterministic stub. Everything downstream only sees the
-// interface.
-export function getProcessor(): DocumentProcessor {
+// without it, the deterministic stub, primed with a snapshot of the org's
+// current data so fabricated documents reference real records. Everything
+// downstream only sees the interface.
+export async function getProcessor(db: DbClient): Promise<DocumentProcessor> {
   if (process.env.REDUCTO_API_KEY) return new ReductoDocumentProcessor();
-  return new StubDocumentProcessor();
+  return new StubDocumentProcessor(await loadStubContext(db));
 }
 
 // Filename-based classification at upload time. Reducto classification
@@ -24,6 +26,9 @@ export function inferDocType(fileName: string): DocumentTypeValue {
     name.includes("es022")
   )
     return "refund_report";
+  // Before the "entry" check: packet filenames usually contain "entry" too
+  // ("entry-packet-...", broker "ACH PACKET-...").
+  if (name.includes("packet")) return "entry_packet";
   if (name.includes("entry")) return "port_entry";
   if (name.includes("bol") || name.includes("shipment") || name.includes("awb"))
     return "shipment";

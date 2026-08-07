@@ -1,17 +1,15 @@
 // The pure decision logic behind quotes/service.ts — quote↔PO matching,
-// winner selection, auto-supersede selection, and the part-field diff an
-// application implies. No DB, no IO, test-pinned: the service only executes
-// what these functions decide, so the semantics that matter (price
-// tolerance, supplier gating, "approved lines are never auto-superseded",
+// winner selection, auto-supersede selection, and the (part, vendor) source
+// diff an application implies. No DB, no IO, test-pinned: the service only
+// executes what these functions decide, so the semantics that matter (price
+// tolerance, vendor gating, "approved lines are never auto-superseded",
 // "HTS never flows from a quote") are all provable here without a database.
 //
+// Vendors compare by RESOLVED id (vendors/service.ts find-or-creates from
+// declared names), so matching survives a vendor rename and never re-parses
+// name strings.
+//
 // Relative imports on purpose — reachable from the tsx seed script.
-
-/** Casefolded, trimmed supplier key; empty/whitespace collapses to null. */
-export function normalizeSupplier(name: string | null | undefined): string | null {
-  const key = name?.trim().toLowerCase() ?? "";
-  return key === "" ? null : key;
-}
 
 export type PoLineMatchInput = {
   /** purchase_order_lines.part_id — null never matches. */
@@ -21,7 +19,8 @@ export type PoLineMatchInput = {
   // --- PO header context ---
   orderDate: string | null; // ISO date
   currency: string;
-  supplierName: string | null;
+  /** Resolved header vendor; null when the PO named no supplier. */
+  vendorId: string | null;
 };
 
 export type QuoteLineMatchInput = {
@@ -30,7 +29,8 @@ export type QuoteLineMatchInput = {
   currency: string;
   // --- sheet context ---
   quoteDate: string | null; // ISO date
-  supplierName: string | null;
+  /** Resolved sheet vendor; null when the sheet named no supplier. */
+  vendorId: string | null;
 };
 
 // Floating-point guard for the tolerance boundary: a diff exactly AT the
@@ -45,8 +45,8 @@ const EPSILON = 1e-9;
  *     side never block (the price agreement is the strong signal);
  *   - price agreement: |po.unitPrice − quote.unitCost| ≤ max($0.01, 0.5% of
  *     the quote), same currency only;
- *   - supplier names (trim/casefold) gate only when BOTH sides carry one —
- *     a PO without a supplier does not block.
+ *   - vendors gate only when BOTH sides resolved one — a PO without a
+ *     supplier does not block.
  */
 export function poLineMatchesQuote(
   po: PoLineMatchInput,
@@ -73,12 +73,10 @@ export function poLineMatchesQuote(
     return false;
   }
 
-  const poSupplier = normalizeSupplier(po.supplierName);
-  const quoteSupplier = normalizeSupplier(quote.supplierName);
   if (
-    poSupplier !== null &&
-    quoteSupplier !== null &&
-    poSupplier !== quoteSupplier
+    po.vendorId !== null &&
+    quote.vendorId !== null &&
+    po.vendorId !== quote.vendorId
   ) {
     return false;
   }
@@ -117,30 +115,28 @@ export type SupersedeCandidate = {
   id: string;
   partId: string;
   status: string;
-  /** The candidate line's SHEET supplier. */
-  supplierName: string | null;
+  /** The candidate line's SHEET vendor (resolved). */
+  vendorId: string | null;
 };
 
 /**
  * Which existing lines a newly ingested one pushes aside: RECEIVED lines
- * for the same (part, supplier). Approved/applied/rejected lines are human
+ * for the same (part, vendor). Approved/applied/rejected lines are human
  * decisions and are NEVER auto-superseded — the UI flags "newer quote
- * exists" instead. Suppliers compare trim/casefolded; an unnamed sheet only
- * supersedes other unnamed sheets (it cannot displace a named supplier's
- * standing quote).
+ * exists" instead. An unnamed sheet (null vendor) only supersedes other
+ * unnamed sheets — it cannot displace a named vendor's standing quote.
  */
 export function selectSupersededLineIds(
-  incoming: { id: string; partId: string; supplierName: string | null },
+  incoming: { id: string; partId: string; vendorId: string | null },
   existing: SupersedeCandidate[],
 ): string[] {
-  const supplier = normalizeSupplier(incoming.supplierName);
   return existing
     .filter(
       (line) =>
         line.id !== incoming.id &&
         line.status === "received" &&
         line.partId === incoming.partId &&
-        normalizeSupplier(line.supplierName) === supplier,
+        line.vendorId === incoming.vendorId,
     )
     .map((line) => line.id);
 }
@@ -148,66 +144,56 @@ export function selectSupersededLineIds(
 export type QuoteApplyValues = {
   unitCost: number;
   countryOfOrigin: string | null;
-  /** Sheet supplier — becomes the part's manufacturer when set. */
-  supplierName: string | null;
 };
 
-export type PartSnapshot = {
+/** The (part, vendor) source row's current facts; null = no source yet. */
+export type SourceSnapshot = {
   unitCost: string | null; // numeric column round-trips as text
   countryOfOrigin: string | null;
-  manufacturer: string | null;
-};
+} | null;
 
-export type PartFieldDiff = {
+export type SourceFieldDiff = {
   /** field_changes.field (snake_case, matching "hts_code" precedent). */
-  field: "unit_cost" | "country_of_origin" | "manufacturer";
-  /** The parts column to patch. */
-  column: "unitCost" | "countryOfOrigin" | "manufacturer";
+  field: "unit_cost" | "country_of_origin";
+  /** The part_sources column to patch. */
+  column: "unitCost" | "countryOfOrigin";
   oldValue: string | null;
   newValue: string;
 };
 
 /**
- * The part writes an applied (or draft-finalizing) quote implies: unit cost
- * whenever it differs, COO and manufacturer only when the quote actually
- * carries them AND they differ. HTS is structurally absent — a supplier's
- * claimed code routes through the classification service, never through
- * quote application.
+ * The (part, vendor) source writes an applied (or draft-finalizing) quote
+ * implies: unit cost whenever it differs, COO only when the quote actually
+ * carries one AND it differs — a quote can never null out a standing COO.
+ * A null source (the vendor is new for this part) seeds a full row. HTS is
+ * structurally absent — a supplier's claimed code routes through the
+ * classification service, never through quote application.
  */
-export function diffQuoteAgainstPart(
+export function diffQuoteAgainstSource(
   quote: QuoteApplyValues,
-  part: PartSnapshot,
-): PartFieldDiff[] {
-  const diffs: PartFieldDiff[] = [];
+  source: SourceSnapshot,
+): SourceFieldDiff[] {
+  const diffs: SourceFieldDiff[] = [];
 
   const newCost = quote.unitCost.toFixed(4);
-  const oldCost = part.unitCost === null ? null : Number(part.unitCost).toFixed(4);
+  const oldCost =
+    source?.unitCost == null ? null : Number(source.unitCost).toFixed(4);
   if (oldCost !== newCost) {
     diffs.push({
       field: "unit_cost",
       column: "unitCost",
-      oldValue: part.unitCost,
+      oldValue: source?.unitCost ?? null,
       newValue: newCost,
     });
   }
 
   const coo = quote.countryOfOrigin?.trim().toUpperCase() || null;
-  if (coo !== null && coo !== part.countryOfOrigin) {
+  if (coo !== null && coo !== (source?.countryOfOrigin ?? null)) {
     diffs.push({
       field: "country_of_origin",
       column: "countryOfOrigin",
-      oldValue: part.countryOfOrigin,
+      oldValue: source?.countryOfOrigin ?? null,
       newValue: coo,
-    });
-  }
-
-  const manufacturer = quote.supplierName?.trim() || null;
-  if (manufacturer !== null && manufacturer !== part.manufacturer) {
-    diffs.push({
-      field: "manufacturer",
-      column: "manufacturer",
-      oldValue: part.manufacturer,
-      newValue: manufacturer,
     });
   }
 

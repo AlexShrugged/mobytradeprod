@@ -9,6 +9,7 @@ export type EventType =
   | "shipment_sailed"
   | "shipment_arrived"
   | "entry_filed"
+  | "invoice_received"
   | "refund_update"
   | "quote_received"
   | "quote_approved"
@@ -29,6 +30,7 @@ export type EventEntityRef = {
     | "entry"
     | "shipment"
     | "purchase_order"
+    | "invoice"
     | "part"
     | "quote_sheet"
     | "refund_claim"
@@ -80,6 +82,7 @@ export const EVENT_FILTER_GROUPS = {
   entries: ["entry_filed"],
   shipments: ["shipment_sailed", "shipment_arrived"],
   pos: ["po_placed"],
+  invoices: ["invoice_received"],
   quotes: ["quote_received", "quote_approved", "quote_applied"],
   classification: ["hts_changed", "tariff_rate_change"],
   refunds: ["refund_update"],

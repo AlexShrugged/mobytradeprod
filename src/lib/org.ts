@@ -29,3 +29,14 @@ export async function getCurrentOrg() {
   }
   return org;
 }
+
+// The human recorded as actor/decidedBy on manual edits and decisions. v1
+// has exactly one — the operator named on the org row (seeded data, never a
+// source-code literal). When auth (Clerk) lands, this becomes the
+// authenticated user's display name — callers never need to change.
+// Call OUTSIDE db.transaction: a global-db query inside a tx deadlocks on
+// PGlite (single session — the tx holds its lock).
+export async function getCurrentActorName(): Promise<string> {
+  const org = await getCurrentOrg();
+  return org.defaultActorName ?? org.name;
+}

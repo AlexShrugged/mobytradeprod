@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { sweepAudits } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 import {
   applyRevision,
   ApplyValidationError,
@@ -69,6 +69,7 @@ export async function PATCH(
   const body = parsed.data;
 
   try {
+    const actor = await getCurrentActorName();
     const result = await db.transaction(async (tx) => {
       const revision = await tx.query.measureRevisions.findFirst({
         where: eq(schema.measureRevisions.id, revisionId),
@@ -112,7 +113,7 @@ export async function PATCH(
           .set({
             status: "rejected",
             resolutionAction: "reject",
-            decidedBy: "Alex", // free text until auth lands
+            decidedBy: actor,
             decidedAt: new Date(),
             notes: body.notes ?? item.notes,
             updatedAt: new Date(),
@@ -140,7 +141,7 @@ export async function PATCH(
         .set({
           status: "approved",
           resolutionAction: "accept",
-          decidedBy: "Alex", // free text until auth lands
+          decidedBy: actor,
           decidedAt: new Date(),
           notes: body.notes ?? item.notes,
           updatedAt: new Date(),

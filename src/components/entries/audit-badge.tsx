@@ -1,12 +1,13 @@
-import { AlertTriangle, CircleAlert, Info, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, CircleAlert, Info } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 export type OpenAlertCounts = { error: number; warning: number; info: number };
 
 // Compact audit summary for a table row: the worst open severity with its
-// count, "clear" when audited with no findings, em dash when there is nothing
-// to audit yet.
+// count, a bare green check when audited with no findings — the same mark the
+// line-items table uses for a clean line — em dash when there is nothing to
+// audit yet.
 export function AuditBadge({
   counts,
   hasData,
@@ -20,8 +21,11 @@ export function AuditBadge({
   const total = counts.error + counts.warning + counts.info;
   if (total === 0) {
     return (
-      <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
-        <ShieldCheck className="size-3.5" /> clear
+      <span title="No open findings on this entry">
+        <Check
+          className="size-4 text-emerald-600 dark:text-emerald-400"
+          aria-label="No open findings on this entry"
+        />
       </span>
     );
   }

@@ -4,7 +4,9 @@ import { ProcessingError } from "../types";
 import {
   cite,
   CLASSIFY_RESPONSE,
+  CLASSIFY_RESPONSE_ASSIST,
   CLASSIFY_RESPONSE_INVALID,
+  CLASSIFY_RESPONSE_PACKET,
   COMMERCIAL_INVOICE_RESPONSE,
   PACKING_LIST_RESPONSE,
   PORT_ENTRY_RESPONSE,
@@ -84,6 +86,20 @@ describe("classifyFromResponse", () => {
     );
   });
 
+  it("passes entry_packet through (it is a real docType)", () => {
+    expect(classifyFromResponse(CLASSIFY_RESPONSE_PACKET, "port_entry")).toBe(
+      "entry_packet",
+    );
+  });
+
+  it("maps the classification-only assist_sheet label to other", () => {
+    // Protects standalone assist-sheet uploads from the commercial_invoice
+    // pipeline — an assist sheet must never become an Invoice.
+    expect(
+      classifyFromResponse(CLASSIFY_RESPONSE_ASSIST, "commercial_invoice"),
+    ).toBe("other");
+  });
+
   it("falls back to other when the hint is other", () => {
     expect(classifyFromResponse([{}], "other")).toBe("other");
   });
@@ -102,6 +118,16 @@ describe("port_entry mapping", () => {
     expect(f.hmf_amount).toBe(19.69);
     expect(f.referenced_bols).toEqual(["MAEU2264101", "ONEY8811327"]);
     expect(f.referenced_pos).toEqual(["PO-2026-001"]);
+    expect(f.referenced_invoices).toEqual(["SVD-8841"]);
+  });
+
+  it("defaults referenced_invoices to [] when the entry logs none", () => {
+    const split = mapExtractToResult(
+      "port_entry",
+      PORT_ENTRY_RESPONSE_CH99_SPLIT,
+    );
+    if (split.docType !== "port_entry") throw new Error("wrong docType");
+    expect(split.fields.referenced_invoices).toEqual([]);
   });
 
   it("drops lines without an HTS code and numbers unnumbered lines", () => {
@@ -110,6 +136,13 @@ describe("port_entry mapping", () => {
     expect(f.line_items[1].line_number).toBe(2);
     expect(f.line_items[1].hts_code).toBe("8714.91.3000");
     expect(f.line_items[1].charges).toEqual([]);
+  });
+
+  it("uppercases COO and captures the per-line supplier", () => {
+    // "cn" in the document — downstream measure gating is exact-match.
+    expect(f.line_items[0].country_of_origin).toBe("CN");
+    expect(f.line_items[0].supplier_name).toBe("Shenzhen Volt Dynamics");
+    expect(f.line_items[1].supplier_name).toBeNull();
   });
 
   it("coerces charge rates/amounts and clamps unknown charge types", () => {
@@ -212,6 +245,8 @@ describe("purchase_order mapping", () => {
         line_number: 1,
         sku: "EB-BAT-48",
         description: "48V battery pack",
+        // "cn" in the document — uppercased on map.
+        country_of_origin: "CN",
         quantity: 200,
         unit_price: 180,
       },
@@ -221,6 +256,7 @@ describe("purchase_order mapping", () => {
         line_number: 3,
         sku: "EB-CTRL-V2",
         description: null,
+        country_of_origin: null,
         quantity: 50,
         unit_price: 42.3,
       },
@@ -249,6 +285,9 @@ describe("commercial_invoice mapping", () => {
           line_number: 1,
           sku: "EB-BAT-48V",
           description: "48V 14Ah Lithium Battery Pack",
+          country_of_origin: "CN",
+          // The 6-digit HS code as printed — kept verbatim.
+          hts_code: "850760",
           quantity: 100,
           unit_price: 312,
           total_price: 31200,
@@ -259,6 +298,8 @@ describe("commercial_invoice mapping", () => {
           line_number: 3,
           sku: "EB-MTR-500W",
           description: null,
+          country_of_origin: null,
+          hts_code: null,
           quantity: null,
           unit_price: null,
           total_price: 10700,

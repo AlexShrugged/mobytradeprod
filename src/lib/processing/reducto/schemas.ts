@@ -1,4 +1,5 @@
 import type { DocumentTypeValue } from "@/lib/db/schema";
+import type { SplitCategory } from "reductoai/resources/split";
 
 // JSON Schemas for Reducto extraction. Field names mirror the *Extraction
 // types in ../types.ts exactly (snake_case), so the mapper validates and
@@ -6,7 +7,12 @@ import type { DocumentTypeValue } from "@/lib/db/schema";
 // drive extraction quality: date formats, rate conventions, CBP form
 // specifics.
 
-export type ExtractableDocType = Exclude<DocumentTypeValue, "other">;
+// entry_packet has no extract schema — packets are split into children, and
+// the children extract under their own docType.
+export type ExtractableDocType = Exclude<
+  DocumentTypeValue,
+  "other" | "entry_packet"
+>;
 
 const date = (what: string) => ({
   type: ["string", "null"],
@@ -31,20 +37,27 @@ export const CLASSIFICATION_SCHEMA = {
         "packing_list",
         "quote_sheet",
         "refund_report",
+        "entry_packet",
+        "assist_sheet",
         "other",
       ],
       description:
         "The document's type. port_entry: a US CBP Form 7501 Entry Summary " +
-        "or similar customs entry declaration. shipment: an ocean bill of " +
-        "lading, air waybill, or shipment confirmation. purchase_order: a " +
-        "buyer's purchase order to a supplier. commercial_invoice: a " +
-        "supplier's commercial invoice for goods. packing_list: a packing " +
-        "list or packing slip for a shipment. quote_sheet: a supplier " +
-        "pricing/quotation sheet quoting unit costs per part number (not an " +
-        "invoice — it prices an offer, it does not bill for shipped goods). " +
-        "refund_report: a CBP ACE ES-022-style refund/liquidation report " +
-        "listing entry summary numbers with refund amounts. other: none of " +
-        "the above.",
+        "or similar customs entry declaration, ALONE in this file. shipment: " +
+        "an ocean bill of lading, air waybill, or shipment confirmation. " +
+        "purchase_order: a buyer's purchase order to a supplier. " +
+        "commercial_invoice: a supplier's commercial invoice for goods. " +
+        "packing_list: a packing list or packing slip for a shipment. " +
+        "quote_sheet: a supplier pricing/quotation sheet quoting unit costs " +
+        "per part number (not an invoice — it prices an offer, it does not " +
+        "bill for shipped goods). refund_report: a CBP ACE ES-022-style " +
+        "refund/liquidation report listing entry summary numbers with refund " +
+        "amounts. entry_packet: a bundled multi-document broker packet — a " +
+        "CBP 7501 entry summary PLUS supporting documents (commercial " +
+        "invoice, packing list, bill of lading...) in one file. assist_sheet: " +
+        "a worksheet of statutory additions to customs value (tooling, " +
+        "molds, furnished materials) — columnar like an invoice but NOT a " +
+        "commercial invoice. other: none of the above.",
     },
   },
   required: ["doc_type"],
@@ -125,6 +138,12 @@ const ENTRY_LINE_ITEM_SCHEMA = {
       type: ["string", "null"],
       description: "ISO 3166-1 alpha-2 country of origin code, e.g. CN, TW.",
     },
+    supplier_name: {
+      type: ["string", "null"],
+      description:
+        "The foreign supplier / manufacturer named for this line, if the " +
+        "entry shows one (e.g. next to the MID). Entries can span vendors.",
+    },
     quantity: { type: ["number", "null"] },
     unit_value: money("Per-unit value"),
     entered_value: {
@@ -149,7 +168,7 @@ const PORT_ENTRY_SCHEMA = {
       type: "string",
       description:
         "The CBP entry number in XXX-XXXXXXX-X format (filer code, entry " +
-        "number, check digit), e.g. 231-4501287-4.",
+        "number, check digit), e.g. 300-1234567-8.",
     },
     entry_date: date("Entry date"),
     port_of_entry: {
@@ -171,6 +190,13 @@ const PORT_ENTRY_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description: "Every purchase order number referenced on the entry.",
+    },
+    referenced_invoices: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Every commercial invoice number referenced on the entry or its " +
+        "broker worksheets.",
     },
     total_entered_value: money("Total entered value from the header"),
     total_duty: money("Total duty from the header (all duty, excluding MPF/HMF)"),
@@ -199,6 +225,14 @@ const SHIPMENT_SCHEMA = {
     container_number: { type: ["string", "null"] },
     carrier: { type: ["string", "null"] },
     vessel: { type: ["string", "null"] },
+    mode: {
+      type: ["string", "null"],
+      enum: ["ocean", "air", "truck", "rail", null],
+      description:
+        "The transport mode this document evidences: ocean for a bill of " +
+        "lading, air for an air waybill, truck/rail for road or rail " +
+        "documents. Null only when the document genuinely does not show it.",
+    },
     origin_port: { type: ["string", "null"] },
     destination_port: { type: ["string", "null"] },
     etd: date("Estimated/actual departure date"),
@@ -237,6 +271,12 @@ const PURCHASE_ORDER_SCHEMA = {
           },
           sku: { type: "string", description: "Part number / SKU." },
           description: { type: ["string", "null"] },
+          country_of_origin: {
+            type: ["string", "null"],
+            description:
+              "ISO 3166-1 alpha-2 country of origin code logged on the " +
+              "line, e.g. CN, VN.",
+          },
           quantity: { type: "number" },
           unit_price: money("Per-unit price"),
         },
@@ -278,6 +318,19 @@ const COMMERCIAL_INVOICE_SCHEMA = {
             description: "Part number / SKU.",
           },
           description: { type: ["string", "null"] },
+          country_of_origin: {
+            type: ["string", "null"],
+            description:
+              "ISO 3166-1 alpha-2 country of origin code logged on the " +
+              "line, e.g. CN, VN.",
+          },
+          hts_code: {
+            type: ["string", "null"],
+            description:
+              "The HTS/HS tariff code printed on the line, 6-10 digits as " +
+              "shown, e.g. 8501.31.4000 or 850760. Null when the invoice " +
+              "doesn't log one.",
+          },
           quantity: { type: ["number", "null"] },
           unit_price: money("Per-unit price"),
           total_price: money("Extended line total"),
@@ -449,7 +502,8 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "and unit price.",
   commercial_invoice:
     "This is a supplier's commercial invoice. Capture the invoice number, " +
-    "referenced purchase order, currency, total, and incoterms.",
+    "referenced purchase order, currency, total, incoterms, and every goods " +
+    "line — including any HTS/HS tariff code printed on the line, verbatim.",
   packing_list:
     "This is a packing list for an export shipment. Capture the bill of " +
     "lading, carton count, gross weight, and purchase order references.",
@@ -464,3 +518,62 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "against one entry summary number. claim_status is the CBP decision; " +
     "refund_status is the Treasury payout state — capture both as printed.",
 };
+
+// Section categories for splitting an entry packet. Names feed
+// packet.normalizeRole, so keep them aligned with the packet role
+// vocabulary. assist_sheet gets its own category — without one the splitter
+// labels those columnar pages "invoice" and the assist amounts become a
+// bogus commercial invoice.
+export const SPLIT_CATEGORIES: SplitCategory[] = [
+  {
+    name: "Entry Summary 7501",
+    description:
+      "A US CBP Form 7501 Entry Summary or its continuation sheets: the " +
+      "customs declaration with entry number, HTS lines, entered values, " +
+      "and duty/fee amounts.",
+  },
+  {
+    name: "Commercial Invoice",
+    description:
+      "A supplier's commercial invoice billing for shipped goods: invoice " +
+      "number, seller/buyer, goods lines with quantities and prices.",
+  },
+  {
+    name: "Assist Sheet",
+    description:
+      "A worksheet of statutory additions to customs value — tooling, " +
+      "molds, materials the importer furnished to the manufacturer. " +
+      "Columnar like an invoice but NOT a commercial invoice.",
+  },
+  {
+    name: "Packing List",
+    description:
+      "A packing list or packing slip: cartons, weights, and shipment " +
+      "contents without prices.",
+  },
+  {
+    name: "Transport Document",
+    description:
+      "An ocean bill of lading, air waybill, arrival notice, or telex " +
+      "release for the shipment.",
+  },
+  {
+    name: "Certificate of Origin",
+    description: "A certificate of origin attesting where goods were made.",
+  },
+  {
+    name: "HTS Code List",
+    description:
+      "A tariff/HTS code worksheet listing classification codes per part.",
+  },
+  {
+    name: "Other",
+    description: "Any page that fits none of the other categories.",
+  },
+];
+
+// Free-form guidance for the split call.
+export const SPLIT_RULES =
+  "This is a customs broker entry packet. Each CBP 7501 continuation sheet " +
+  "belongs to the Entry Summary 7501 section. Keep each distinct document's " +
+  "pages together in one section.";

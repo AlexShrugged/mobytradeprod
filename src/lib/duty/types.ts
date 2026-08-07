@@ -70,6 +70,16 @@ export type ReferenceData = {
   // resolution falls back to the current row in htsByDigits, which is
   // byte-identical to the pre-windowing behavior.
   baseWindowsByDigits?: Map<string, HtsRef[]>;
+  // Entry-date windows (from the parent measure) in which each exemption
+  // Ch99 digits string is actually an exemption. htsByDigits keeps only the
+  // row backing the LATEST measure window, so without this map an exemption
+  // check is blind to windows — a code exempt under one window would read
+  // as exempt (or not) forever. Optional with the same fallback contract:
+  // absent → the current htsByDigits row's exemption flag decides.
+  exemptionsByDigits?: Map<
+    string,
+    { effectiveDate: string; endDate: string | null }[]
+  >;
   measures: MeasureRef[];
   // Pre-sorted by (effectiveDate, insertion order) — the application order.
   stackingRules: StackingRuleRef[];

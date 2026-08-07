@@ -11,7 +11,56 @@ import * as schema from "../db/schema";
 import { loadReferenceData, type DbClient } from "../duty/reference";
 import { resolveSailInfo } from "../duty/sail";
 import type { ReferenceData } from "../duty/types";
+import { resolveWindow } from "../effective-dating";
 import { computeEntryAlerts, type AuditableEntry } from "./rules";
+
+/** Per-vendor as-of resolution of a part's sourcing windows: for each
+ *  vendor, the window containing the entry date wins, falling back to the
+ *  vendor's current window (pre-window entries keep today's expectation,
+ *  exactly as before windowing existed). A vendor with no containing and no
+ *  current window — removed before the entry, or added after with no open
+ *  row — drops out entirely. */
+function resolveSourcesAsOf(
+  sources: (schema.PartSource & { vendor: schema.Vendor })[],
+  entryDate: string | null,
+): { vendorId: string; vendorName: string; countryOfOrigin: string | null }[] {
+  const byVendor = new Map<string, typeof sources>();
+  for (const s of sources) {
+    const rows = byVendor.get(s.vendorId);
+    if (rows) rows.push(s);
+    else byVendor.set(s.vendorId, [s]);
+  }
+  const resolved = [];
+  for (const rows of byVendor.values()) {
+    const hit = resolveWindow(rows, entryDate);
+    if (hit) {
+      resolved.push({
+        vendorId: hit.vendorId,
+        vendorName: hit.vendor.name,
+        countryOfOrigin: hit.countryOfOrigin,
+      });
+    }
+  }
+  return resolved;
+}
+
+/** Key-order-insensitive deep equality for alert details. jsonb round-trips
+ *  do not preserve key order, so a raw JSON.stringify comparison would
+ *  spuriously mismatch and rewrite every open row on every audit. */
+function stableStringify(v: unknown): string {
+  if (v === undefined) return "null";
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const record = v as Record<string, unknown>;
+  const body = Object.keys(record)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(record[k])}`)
+    .join(",");
+  return `{${body}}`;
+}
+
+const detailsEqual = (a: unknown, b: unknown): boolean =>
+  stableStringify(a ?? null) === stableStringify(b ?? null);
 
 export async function auditEntry(
   db: DbClient,
@@ -28,10 +77,20 @@ export async function auditEntry(
     ),
     with: {
       lineItems: {
-        with: { part: true, charges: true },
+        with: {
+          // Sources and classifications are deliberately loaded WITHOUT a
+          // current-window filter: the auditor is the one reader that
+          // resolves windows as of the entry date.
+          part: {
+            with: {
+              sources: { with: { vendor: true } },
+              classifications: true,
+            },
+          },
+          charges: true,
+        },
         orderBy: (li, { asc }) => [asc(li.lineNumber)],
       },
-      entryPurchaseOrders: { with: { purchaseOrder: true } },
       entryShipments: { with: { shipment: true } },
     },
   });
@@ -50,16 +109,40 @@ export async function auditEntry(
       htsCode: li.htsCode,
       htsCodeDigits: li.htsCodeDigits,
       countryOfOrigin: li.countryOfOrigin,
+      vendorId: li.vendorId,
       enteredValue: li.enteredValue,
-      // A provisional (classifier-auto-selected, unreviewed) catalog code
-      // must never drive compliance findings — only committed codes count.
-      // Draft parts (quote-created, not yet official) are the same story:
-      // nothing on a draft part is a committed fact, so its code is treated
-      // as absent too.
+      quantity: li.quantity,
+      // Classification windows hold committed codes only (provisional codes
+      // never create one), resolved AS OF the entry date so historical
+      // entries audit against the code of their day; undated entries and
+      // entries predating every window fall back to the current window.
+      // Draft parts (quote-created, not yet official) are guarded out:
+      // nothing on a draft part is a committed fact.
       partHtsCode:
-        li.part && !li.part.htsCodeProvisional && li.part.status !== "draft"
-          ? li.part.htsCode
+        li.part && li.part.status !== "draft"
+          ? (resolveWindow(li.part.classifications, entry.entryDate)?.htsCode ??
+            null)
           : null,
+      // Today's opinion, for the reclassified-after-filing signal.
+      partHtsCodeCurrent:
+        li.part && li.part.status !== "draft"
+          ? (li.part.classifications.find((c) => c.validTo === null)?.htsCode ??
+            null)
+          : null,
+      partHtsCurrentSince:
+        li.part && li.part.status !== "draft"
+          ? (li.part.classifications.find((c) => c.validTo === null)
+              ?.validFrom ?? null)
+          : null,
+      // Sourcing facts resolved per vendor as of the entry date. A vendor
+      // whose windows are all closed before (or opened after) the entry date
+      // drops out — a removed source stops constraining later entries but
+      // still constrains in-window ones. Same draft guard: a draft part's
+      // sourcing rows are quote claims, not committed facts.
+      partSources:
+        li.part && li.part.status !== "draft"
+          ? resolveSourcesAsOf(li.part.sources, entry.entryDate)
+          : [],
       charges: li.charges.map((c) => ({
         id: c.id,
         chargeType: c.chargeType,
@@ -69,31 +152,48 @@ export async function auditEntry(
         amount: c.amount,
       })),
     })),
-    linkedPos: entry.entryPurchaseOrders.map((epo) => ({
-      poNumber: epo.purchaseOrder.poNumber,
-      totalAmount: epo.purchaseOrder.totalAmount,
-    })),
     linkedInvoices: [],
   };
 
-  // Invoices reach an entry through its POs (no direct link exists).
-  const poIds = entry.entryPurchaseOrders.map((epo) => epo.purchaseOrderId);
-  if (poIds.length > 0) {
-    const invoiceRows = await db.query.invoices.findMany({
-      where: and(
-        eq(schema.invoices.orgId, orgId),
-        inArray(schema.invoices.purchaseOrderId, poIds),
-      ),
-      with: { lineItems: { columns: { totalPrice: true } } },
+  // Invoices link DIRECTLY via entry_invoices (written by the linker's
+  // packet/reference/PO-fallback passes) — the via-PO load was retired when
+  // CIs became the primary variance source (PO scope never matched entry
+  // scope). linkedEntryCount feeds the single-entry applicability gate.
+  const invoiceLinks = await db.query.entryInvoices.findMany({
+    where: eq(schema.entryInvoices.entryId, entryId),
+    with: {
+      invoice: {
+        with: {
+          lineItems: { orderBy: (li, { asc }) => [asc(li.lineNumber)] },
+        },
+      },
+    },
+  });
+  if (invoiceLinks.length > 0) {
+    const invoiceIds = invoiceLinks.map((l) => l.invoiceId);
+    const allLinks = await db.query.entryInvoices.findMany({
+      where: inArray(schema.entryInvoices.invoiceId, invoiceIds),
+      columns: { invoiceId: true },
     });
-    auditable.linkedInvoices = invoiceRows.map((inv) => ({
-      invoiceNumber: inv.invoiceNumber,
-      totalAmount: inv.totalAmount,
-      lineTotalSum: inv.lineItems
-        .reduce((sum, li) => sum + Number(li.totalPrice), 0)
-        .toFixed(2),
-      lineCount: inv.lineItems.length,
-    }));
+    const entryCount = new Map<string, number>();
+    for (const l of allLinks)
+      entryCount.set(l.invoiceId, (entryCount.get(l.invoiceId) ?? 0) + 1);
+    auditable.linkedInvoices = invoiceLinks
+      .map(({ invoice }) => ({
+        invoiceNumber: invoice.invoiceNumber,
+        currency: invoice.currency,
+        totalAmount: invoice.totalAmount,
+        lines: invoice.lineItems.map((li) => ({
+          sku: li.sku,
+          htsCode: li.htsCode,
+          htsCodeDigits: li.htsCodeDigits,
+          countryOfOrigin: li.countryOfOrigin,
+          quantity: li.quantity,
+          totalPrice: li.totalPrice,
+        })),
+        linkedEntryCount: entryCount.get(invoice.id) ?? 1,
+      }))
+      .sort((a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber));
   }
 
   const desired = computeEntryAlerts(auditable, ref);
@@ -119,7 +219,11 @@ export async function auditEntry(
       ex.severity === d.severity &&
       ex.label === d.label &&
       ex.message === d.message &&
-      ex.lineItemId === d.lineItemId;
+      ex.lineItemId === d.lineItemId &&
+      // Details drift too (e.g. a retroactive window change moves the
+      // expected amount) — refresh open rows so the persisted snapshot
+      // matches the live expectation.
+      detailsEqual(ex.details, d.details);
     if (unchanged) continue;
     await db
       .update(schema.auditAlerts)

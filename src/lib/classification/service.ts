@@ -7,12 +7,13 @@
 //
 // Relative imports on purpose — reachable from the tsx seed script.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { reauditEntriesForPart, type ReauditSummary } from "../audit/auditor";
 import * as schema from "../db/schema";
 import { normalizeHts } from "../duty/calculator";
 import { loadReferenceData, type DbClient } from "../duty/reference";
+import { planCommitWindow } from "../effective-dating";
 import { getClassifier } from "./index";
 import {
   applyReviewAction,
@@ -39,6 +40,68 @@ export type ReviewProposal = {
 const committedCodeOf = (part: schema.Part): string | null =>
   part.htsCodeProvisional ? null : part.htsCode;
 
+/** Maintain the part's effective-dated classification windows alongside the
+ *  parts.hts_code projection. A null effectiveDate is a CORRECTION ("this
+ *  code was always right") and rewrites the current window in place; a date
+ *  is a RECLASSIFICATION and tiles a new window from that day, closing the
+ *  predecessor at day − 1. Returns true when a window row was written —
+ *  the precise re-audit trigger, since a backdated tile changes historical
+ *  as-of expectations even when the current code also moves. */
+async function commitClassificationWindow(
+  db: DbClient,
+  orgId: string,
+  partId: string,
+  code: string,
+  effectiveDate: string | null,
+  meta: {
+    source: string;
+    actor?: string | null;
+    note?: string | null;
+    reviewItemId?: string | null;
+  },
+): Promise<boolean> {
+  const current = await db.query.partClassifications.findFirst({
+    where: and(
+      eq(schema.partClassifications.partId, partId),
+      isNull(schema.partClassifications.validTo),
+    ),
+  });
+
+  if (current && normalizeHts(current.htsCode) === normalizeHts(code)) {
+    return false; // Same committed code — nothing to record.
+  }
+
+  const rowMeta = {
+    source: meta.source,
+    actor: meta.actor ?? null,
+    note: meta.note ?? null,
+    reviewItemId: meta.reviewItemId ?? null,
+  };
+  const plan = planCommitWindow(current ?? null, effectiveDate);
+  if (plan.action === "update_in_place") {
+    await db
+      .update(schema.partClassifications)
+      .set({ htsCode: code, ...rowMeta, updatedAt: new Date() })
+      .where(eq(schema.partClassifications.id, current!.id));
+    return true;
+  }
+  if (plan.action === "tile") {
+    await db
+      .update(schema.partClassifications)
+      .set({ validTo: plan.closePredecessorAt, updatedAt: new Date() })
+      .where(eq(schema.partClassifications.id, current!.id));
+  }
+  await db.insert(schema.partClassifications).values({
+    orgId,
+    partId,
+    htsCode: code,
+    validFrom: plan.action === "insert_first" ? plan.validFrom : effectiveDate,
+    validTo: null,
+    ...rowMeta,
+  });
+  return true;
+}
+
 export async function classifyPart(
   db: DbClient,
   orgId: string,
@@ -49,6 +112,13 @@ export async function classifyPart(
 } | null> {
   const part = await db.query.parts.findFirst({
     where: and(eq(schema.parts.id, partId), eq(schema.parts.orgId, orgId)),
+    with: {
+      sources: {
+        columns: { countryOfOrigin: true },
+        // Classifier input is the part as sourced TODAY: current windows only.
+        where: (s, { isNull: isNullOp }) => isNullOp(s.validTo),
+      },
+    },
   });
   if (!part) return null;
 
@@ -58,7 +128,13 @@ export async function classifyPart(
     sku: part.sku,
     name: part.name,
     description: part.description,
-    countryOfOrigin: part.countryOfOrigin,
+    countriesOfOrigin: [
+      ...new Set(
+        part.sources
+          .map((s) => s.countryOfOrigin)
+          .filter((c): c is string => c !== null),
+      ),
+    ].sort(),
     currentHtsCode: committedCode,
   };
   const result = await getClassifier().classify(input, ref);
@@ -170,7 +246,7 @@ export async function applyReviewDecision(
   orgId: string,
   itemId: string,
   input: ReviewActionInput,
-  opts: { actor?: string; notes?: string } = {},
+  opts: { actor?: string; notes?: string; effectiveDate?: string | null } = {},
 ): Promise<ReviewDecisionResult | null> {
   const item = await db.query.reviewItems.findFirst({
     where: and(
@@ -226,6 +302,29 @@ export async function applyReviewDecision(
     .set(partPatch)
     .where(eq(schema.parts.id, part.id))
     .returning();
+
+  // A cleared provisional needs no window work: provisional codes never
+  // created one (review.ts guarantees no committed code existed).
+  const windowWritten =
+    effect.commitCode !== null &&
+    (await commitClassificationWindow(
+      db,
+      orgId,
+      part.id,
+      effect.commitCode,
+      opts.effectiveDate ?? null,
+      {
+        source:
+          input.action === "manual"
+            ? "review:manual"
+            : input.action === "accept"
+              ? "review:accept"
+              : "review:reject",
+        actor: opts.actor,
+        note: opts.notes,
+        reviewItemId: item.id,
+      },
+    ));
 
   if (effect.commitCode !== null && item.payloadId) {
     await db
@@ -287,9 +386,12 @@ export async function applyReviewDecision(
     });
   }
 
-  // Re-audit only when the code the auditor sees actually changed. A
-  // cleared provisional was already invisible to it.
+  // Re-audit when the classification history changed (a window write covers
+  // backdated tiles, which move historical as-of expectations) or when the
+  // code the auditor sees today changed. A cleared provisional was already
+  // invisible to it.
   const reaudit =
+    windowWritten ||
     normalizeCommitted(beforeCommitted) !== normalizeCommitted(afterCommitted)
       ? await reauditEntriesForPart(db, orgId, part.id)
       : null;
@@ -302,7 +404,7 @@ export async function updatePartHts(
   orgId: string,
   partId: string,
   code: string,
-  opts: { actor?: string; note?: string } = {},
+  opts: { actor?: string; note?: string; effectiveDate?: string | null } = {},
 ): Promise<{ part: schema.Part; reaudit: ReauditSummary | null } | null> {
   assertValidCommitCode(code);
 
@@ -312,6 +414,14 @@ export async function updatePartHts(
   if (!part) return null;
 
   const beforeCommitted = committedCodeOf(part);
+  const windowWritten = await commitClassificationWindow(
+    db,
+    orgId,
+    partId,
+    code,
+    opts.effectiveDate ?? null,
+    { source: "manual_edit", actor: opts.actor, note: opts.note },
+  );
 
   const [updatedPart] = await db
     .update(schema.parts)
@@ -353,6 +463,7 @@ export async function updatePartHts(
   }
 
   const reaudit =
+    windowWritten ||
     normalizeCommitted(beforeCommitted) !== normalizeCommitted(code)
       ? await reauditEntriesForPart(db, orgId, partId)
       : null;

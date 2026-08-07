@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, count, desc, eq, isNotNull, or } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 
 import type { OpenAlertCounts } from "@/components/entries/audit-badge";
 import { db, schema } from "@/lib/db";
@@ -13,7 +13,10 @@ import {
 import { computeExpectedCharges } from "@/lib/duty/calculator";
 import { loadReferenceData } from "@/lib/duty/reference";
 import { resolveSailInfo } from "@/lib/duty/sail";
-import type { SailBasis } from "@/lib/duty/types";
+import type { ReferenceData, SailBasis } from "@/lib/duty/types";
+import { resolveWindow } from "@/lib/effective-dating";
+import { deriveEntryStatus } from "@/lib/entries/status";
+import { deriveShipmentStatus } from "@/lib/shipments/status";
 import {
   projectFutureEntries,
   type FutureEntry,
@@ -121,7 +124,6 @@ export type EntryPurchaseOrderRow = {
   orderDate: string | null;
   currency: string;
   totalAmount: string | null;
-  status: string;
 };
 
 export type EntryRow = {
@@ -197,6 +199,7 @@ export async function getEntries(): Promise<EntryRow[]> {
           refundStatus: true,
           refundClassAmount: true,
           refundInterestAmount: true,
+          liquidationDate: true,
         },
       }),
       loadSailWindows(),
@@ -212,8 +215,12 @@ export async function getEntries(): Promise<EntryRow[]> {
   }
   // When an entry has several claims, surface the stage of the largest one.
   const stageByEntry = new Map<string, { stage: RefundStage; cents: number }>();
+  const claimsByEntry = new Map<string, { liquidationDate: string | null }[]>();
   for (const c of linkedClaims) {
     if (!c.entryId) continue;
+    const claims = claimsByEntry.get(c.entryId) ?? [];
+    claims.push({ liquidationDate: c.liquidationDate });
+    claimsByEntry.set(c.entryId, claims);
     const cents =
       Math.round(Number(c.refundClassAmount) * 100) +
       Math.round(Number(c.refundInterestAmount) * 100);
@@ -233,7 +240,7 @@ export async function getEntries(): Promise<EntryRow[]> {
     entryDate: entry.entryDate,
     portOfEntry: entry.portOfEntry,
     entryType: entry.entryType,
-    status: entry.status,
+    status: deriveEntryStatus(claimsByEntry.get(entry.id) ?? [], today),
     totalEnteredValue: entry.totalEnteredValue,
     totalDuty: entry.totalDuty,
     totalBaseDuty: entry.totalBaseDuty,
@@ -261,7 +268,8 @@ export async function getEntries(): Promise<EntryRow[]> {
       etd: shipment.etd,
       eta: shipment.eta,
       sailedOnBoardDate: shipment.sailedOnBoardDate,
-      status: shipment.status,
+      // Reached through an entry link, which is itself arrival evidence.
+      status: deriveShipmentStatus(shipment, true, today),
       poNumbers: shipment.shipmentPurchaseOrders.map(
         (spo) => spo.purchaseOrder.poNumber,
       ),
@@ -274,7 +282,6 @@ export async function getEntries(): Promise<EntryRow[]> {
       orderDate: purchaseOrder.orderDate,
       currency: purchaseOrder.currency,
       totalAmount: purchaseOrder.totalAmount,
-      status: purchaseOrder.status,
     })),
   }));
 }
@@ -314,7 +321,20 @@ export async function getFutureEntries(): Promise<FutureEntryRow[]> {
       with: {
         shipmentPurchaseOrders: {
           with: {
-            purchaseOrder: { with: { lines: { with: { part: true } } } },
+            purchaseOrder: {
+              with: {
+                lines: {
+                  with: {
+                    part: {
+                      with: {
+                        // Projections are forward-looking: current windows only.
+                        sources: { where: (s, { isNull }) => isNull(s.validTo) },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -342,18 +362,18 @@ export async function getFutureEntries(): Promise<FutureEntryRow[]> {
       etd: s.etd,
       eta: s.eta,
       sailedOnBoardDate: s.sailedOnBoardDate,
-      status: s.status,
       purchaseOrders: s.shipmentPurchaseOrders.map(({ purchaseOrder }) => ({
         id: purchaseOrder.id,
         poNumber: purchaseOrder.poNumber,
         supplierName: purchaseOrder.supplierName,
+        vendorId: purchaseOrder.vendorId,
         orderDate: purchaseOrder.orderDate,
         currency: purchaseOrder.currency,
         totalAmount: purchaseOrder.totalAmount,
-        status: purchaseOrder.status,
         lines: purchaseOrder.lines.map((l) => ({
           sku: l.sku,
           description: l.description,
+          countryOfOrigin: l.countryOfOrigin,
           quantity: l.quantity,
           unitPrice: l.unitPrice,
           totalPrice: l.totalPrice,
@@ -362,7 +382,10 @@ export async function getFutureEntries(): Promise<FutureEntryRow[]> {
                 status: l.part.status,
                 htsCode: l.part.htsCode,
                 htsCodeProvisional: l.part.htsCodeProvisional,
-                countryOfOrigin: l.part.countryOfOrigin,
+                sources: l.part.sources.map((src) => ({
+                  vendorId: src.vendorId,
+                  countryOfOrigin: src.countryOfOrigin,
+                })),
               }
             : null,
         })),
@@ -403,7 +426,8 @@ export async function getFutureEntries(): Promise<FutureEntryRow[]> {
         etd: f.shipment.etd,
         eta: f.shipment.eta,
         sailedOnBoardDate: f.shipment.sailedOnBoardDate,
-        status: f.shipment.status,
+        // Projected = not entered; the derived state is booked/in_transit.
+        status: deriveShipmentStatus(f.shipment, false, today),
         poNumbers: f.purchaseOrders.map((po) => po.poNumber),
         // No entry, so no entry date — the flag always evaluates.
         tariffFlag: tariffFlagFor(null, f.shipment, sailWindows, today),
@@ -416,7 +440,6 @@ export async function getFutureEntries(): Promise<FutureEntryRow[]> {
       orderDate: po.orderDate,
       currency: po.currency,
       totalAmount: po.totalAmount,
-      status: po.status,
     })),
   }));
 }
@@ -557,12 +580,19 @@ export type LineItemDetail = {
   description: string | null;
   htsCode: string;
   countryOfOrigin: string | null;
+  /** Per-line supplier as declared on the 7501 — entries can span vendors. */
+  supplierName: string | null;
   quantity: string | null;
   unitValue: string | null;
   enteredValue: string;
   partId: string | null;
-  /** The committed catalog code; null when absent or merely provisional. */
+  /** The committed catalog code AS OF the entry date; null when absent or
+   *  merely provisional. */
   catalogHtsCode: string | null;
+  /** The committed catalog code under the CURRENT classification window —
+   *  differs from catalogHtsCode when the part was reclassified after this
+   *  entry was filed. */
+  catalogHtsCodeCurrent: string | null;
   /** A classifier-auto-selected code awaiting review — display-only. */
   catalogProvisionalCode: string | null;
   htsMismatch: boolean;
@@ -639,16 +669,41 @@ export type EntryDetail = {
   lineItems: LineItemDetail[];
   alerts: AlertRow[];
   refundClaims: RefundClaimDetail[];
-  shipments: { id: string; shipmentNumber: string; status: string }[];
+  shipments: {
+    id: string;
+    shipmentNumber: string;
+    status: string;
+    /** Paperwork homed under this record (created it, or references it and
+     *  was created nowhere else). */
+    documents: EntryDocument[];
+  }[];
   purchaseOrders: {
     id: string;
     poNumber: string;
     supplierName: string | null;
     currency: string;
     totalAmount: string | null;
-    status: string;
+    documents: EntryDocument[];
   }[];
+  /** Commercial invoices directly linked via entry_invoices — the document
+   *  truth the variance rules compare against. entryCount > 1 marks an
+   *  invoice spanning entries (line comparison skipped). */
+  invoices: {
+    id: string;
+    invoiceNumber: string;
+    supplierName: string | null;
+    currency: string;
+    totalAmount: string | null;
+    invoiceDate: string | null;
+    entryCount: number;
+    documents: EntryDocument[];
+  }[];
+  /** Every document linked to the ENTRY itself (the flat provenance list —
+   *  what the variance detail page renders). */
   documents: EntryDocument[];
+  /** Entry-homed paperwork: documents that belong to the entry rather than
+   *  to one of its shipments/POs/invoices (the 7501, refund reports…). */
+  entryPaperwork: EntryDocument[];
 };
 
 const SEVERITY_ORDER = { error: 0, warning: 1, info: 2 } as const;
@@ -656,6 +711,7 @@ const BASIS_RANK = { exact: 0, estimated: 1, assumed: 2 } as const;
 
 export async function getEntryDetail(
   entryId: string,
+  preloadedRef?: ReferenceData,
 ): Promise<EntryDetail | null> {
   const orgId = await getCurrentOrgId();
 
@@ -663,21 +719,46 @@ export async function getEntryDetail(
     where: eq(schema.entries.id, entryId),
     with: {
       lineItems: {
-        with: { part: true, charges: true },
+        with: { part: { with: { classifications: true } }, charges: true },
         orderBy: (li, { asc }) => [asc(li.lineNumber)],
       },
       auditAlerts: true,
       refundClaims: true,
       entryShipments: { with: { shipment: true } },
       entryPurchaseOrders: { with: { purchaseOrder: true } },
+      entryInvoices: { with: { invoice: true } },
     },
   });
   if (!entry || entry.orgId !== orgId) return null;
 
+  // How many entries each linked invoice spans — the applicability signal
+  // the variance rules gate on, surfaced as context ("spans N entries").
+  const linkedInvoiceIds = entry.entryInvoices.map((ei) => ei.invoiceId);
+  const invoiceLinkRows = linkedInvoiceIds.length
+    ? await db.query.entryInvoices.findMany({
+        where: inArray(schema.entryInvoices.invoiceId, linkedInvoiceIds),
+        columns: { invoiceId: true },
+      })
+    : [];
+  const invoiceEntryCount = new Map<string, number>();
+  for (const row of invoiceLinkRows) {
+    invoiceEntryCount.set(
+      row.invoiceId,
+      (invoiceEntryCount.get(row.invoiceId) ?? 0) + 1,
+    );
+  }
+
+  const linkedShipmentIds = entry.entryShipments.map((es) => es.shipmentId);
+  const linkedPoIds = entry.entryPurchaseOrders.map(
+    (epo) => epo.purchaseOrderId,
+  );
+
   const [ref, documentRows] = await Promise.all([
-    loadReferenceData(db),
-    // Source documents via provenance links; raw_extraction never leaves
-    // the server (it can be multiple MB per row).
+    preloadedRef ?? loadReferenceData(db),
+    // Source documents via provenance links — for the entry itself AND its
+    // linked shipments/POs/invoices, so paperwork renders under the record
+    // it belongs to. raw_extraction never leaves the server (it can be
+    // multiple MB per row).
     db
       .select({
         id: schema.documents.id,
@@ -685,6 +766,8 @@ export async function getEntryDetail(
         docType: schema.documents.docType,
         fileSize: schema.documents.fileSize,
         created: schema.documentLinks.created,
+        entityType: schema.documentLinks.entityType,
+        entityId: schema.documentLinks.entityId,
       })
       .from(schema.documentLinks)
       .innerJoin(
@@ -694,12 +777,66 @@ export async function getEntryDetail(
       .where(
         and(
           eq(schema.documentLinks.orgId, orgId),
-          eq(schema.documentLinks.entityType, "entry"),
-          eq(schema.documentLinks.entityId, entryId),
+          or(
+            and(
+              eq(schema.documentLinks.entityType, "entry"),
+              eq(schema.documentLinks.entityId, entryId),
+            ),
+            linkedShipmentIds.length
+              ? and(
+                  eq(schema.documentLinks.entityType, "shipment"),
+                  inArray(schema.documentLinks.entityId, linkedShipmentIds),
+                )
+              : undefined,
+            linkedPoIds.length
+              ? and(
+                  eq(schema.documentLinks.entityType, "purchase_order"),
+                  inArray(schema.documentLinks.entityId, linkedPoIds),
+                )
+              : undefined,
+            linkedInvoiceIds.length
+              ? and(
+                  eq(schema.documentLinks.entityType, "invoice"),
+                  inArray(schema.documentLinks.entityId, linkedInvoiceIds),
+                )
+              : undefined,
+          ),
         ),
       )
       .orderBy(desc(schema.documents.uploadedAt)),
   ]);
+
+  // Home each document under exactly ONE group so it never renders twice:
+  // an entry-created link wins (the 7501 also mints stub sub-records, but
+  // it IS the entry's paperwork), then the sub-record it created (a BOL's
+  // home is its shipment, a CI's its invoice), then the first sub-record it
+  // merely references (a packing list under its shipment), else the entry.
+  const linksByDoc = new Map<string, typeof documentRows>();
+  for (const row of documentRows) {
+    const list = linksByDoc.get(row.id) ?? [];
+    list.push(row);
+    linksByDoc.set(row.id, list);
+  }
+  const docsByHome = new Map<string, EntryDocument[]>();
+  for (const links of linksByDoc.values()) {
+    const home =
+      links.find((l) => l.entityType === "entry" && l.created) ??
+      links.find((l) => l.entityType !== "entry" && l.created) ??
+      links.find((l) => l.entityType !== "entry") ??
+      links[0];
+    const key = `${home.entityType}:${home.entityId}`;
+    const list = docsByHome.get(key) ?? [];
+    list.push({
+      id: home.id,
+      fileName: home.fileName,
+      docType: home.docType,
+      fileSize: home.fileSize,
+      created: home.created,
+    });
+    docsByHome.set(key, list);
+  }
+  const homeDocs = (entityType: string, entityId: string) =>
+    docsByHome.get(`${entityType}:${entityId}`) ?? [];
 
   const openKeys = new Set(
     entry.auditAlerts
@@ -815,10 +952,18 @@ export async function getEntryDetail(
           }))
       : [];
 
-    // Mirror the auditor's provisional guard: an unreviewed auto-selected
-    // code never drives the mismatch badge, only a neutral provisional one.
-    const catalogHtsCode =
-      li.part && !li.part.htsCodeProvisional ? li.part.htsCode : null;
+    // Committed classification windows resolved AS OF the entry date — the
+    // expectation that governed the filing — plus today's window for the
+    // "reclassified since filing" hint. Provisional codes never create
+    // windows, so the auditor's provisional guard is implicit here.
+    const catalogHtsCode = li.part
+      ? (resolveWindow(li.part.classifications, entry.entryDate)?.htsCode ??
+        null)
+      : null;
+    const catalogHtsCodeCurrent = li.part
+      ? (li.part.classifications.find((c) => c.validTo === null)?.htsCode ??
+        null)
+      : null;
     const catalogProvisionalCode =
       li.part && li.part.htsCodeProvisional ? li.part.htsCode : null;
     const lineAlerts = entry.auditAlerts.filter(
@@ -847,11 +992,13 @@ export async function getEntryDetail(
       description: li.description,
       htsCode: li.htsCode,
       countryOfOrigin: li.countryOfOrigin,
+      supplierName: li.supplierName,
       quantity: li.quantity,
       unitValue: li.unitValue,
       enteredValue: li.enteredValue,
       partId: li.partId,
       catalogHtsCode,
+      catalogHtsCodeCurrent,
       catalogProvisionalCode,
       htsMismatch:
         catalogHtsCode !== null &&
@@ -929,7 +1076,7 @@ export async function getEntryDetail(
     portOfEntry: entry.portOfEntry,
     entryType: entry.entryType,
     importerOfRecord: entry.importerOfRecord,
-    status: entry.status,
+    status: deriveEntryStatus(entry.refundClaims, todayIso()),
     totalEnteredValue: entry.totalEnteredValue,
     totalDuty: entry.totalDuty,
     totalBaseDuty: entry.totalBaseDuty,
@@ -955,6 +1102,7 @@ export async function getEntryDetail(
         })),
       ),
       ref,
+      entry.entryDate,
     ),
     effectiveDutyRate: effectiveDutyRate(
       dutyCents,
@@ -967,7 +1115,9 @@ export async function getEntryDetail(
     shipments: entry.entryShipments.map(({ shipment }) => ({
       id: shipment.id,
       shipmentNumber: shipment.shipmentNumber,
-      status: shipment.status,
+      // Reached through an entry link, which is itself arrival evidence.
+      status: deriveShipmentStatus(shipment, true, todayIso()),
+      documents: homeDocs("shipment", shipment.id),
     })),
     purchaseOrders: entry.entryPurchaseOrders.map(({ purchaseOrder }) => ({
       id: purchaseOrder.id,
@@ -975,14 +1125,29 @@ export async function getEntryDetail(
       supplierName: purchaseOrder.supplierName,
       currency: purchaseOrder.currency,
       totalAmount: purchaseOrder.totalAmount,
-      status: purchaseOrder.status,
+      documents: homeDocs("purchase_order", purchaseOrder.id),
     })),
-    documents: documentRows.map((d) => ({
-      id: d.id,
-      fileName: d.fileName,
-      docType: d.docType,
-      fileSize: d.fileSize,
-      created: d.created,
-    })),
+    invoices: entry.entryInvoices
+      .map(({ invoice }) => ({
+        id: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        supplierName: invoice.supplierName,
+        currency: invoice.currency,
+        totalAmount: invoice.totalAmount,
+        invoiceDate: invoice.invoiceDate,
+        entryCount: invoiceEntryCount.get(invoice.id) ?? 1,
+        documents: homeDocs("invoice", invoice.id),
+      }))
+      .sort((a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber)),
+    documents: documentRows
+      .filter((d) => d.entityType === "entry")
+      .map((d) => ({
+        id: d.id,
+        fileName: d.fileName,
+        docType: d.docType,
+        fileSize: d.fileSize,
+        created: d.created,
+      })),
+    entryPaperwork: homeDocs("entry", entryId),
   };
 }

@@ -1,4 +1,8 @@
-import type { ChargeTypeValue, DocumentTypeValue } from "@/lib/db/schema";
+import type {
+  ChargeTypeValue,
+  DocumentTypeValue,
+  PacketRoleValue,
+} from "@/lib/db/schema";
 
 // One declared duty/fee line on a 7501 declaration line. Amounts are
 // dollars; rates are decimal fractions. A $0 amount is an exclusion claim.
@@ -15,6 +19,9 @@ export type EntryLineItemExtraction = {
   description: string | null;
   hts_code: string;
   country_of_origin: string | null;
+  // Per-line supplier/manufacturer as shown on the entry — entries can span
+  // vendors, and the (vendor, SKU) pair is what defines the expected origin.
+  supplier_name: string | null;
   quantity: number | null;
   unit_value: number | null;
   entered_value: number;
@@ -29,6 +36,10 @@ export type PortEntryExtraction = {
   importer_of_record: string | null;
   referenced_bols: string[];
   referenced_pos: string[];
+  // Commercial invoice numbers referenced on the entry — the linker turns
+  // these into direct entry_invoices links (creating a stub invoice row when
+  // the CI hasn't been ingested yet, same pattern as referenced_pos).
+  referenced_invoices: string[];
   total_entered_value: number | null;
   total_duty: number | null;
   mpf_amount: number | null;
@@ -41,6 +52,9 @@ export type ShipmentExtraction = {
   container_number: string | null;
   carrier: string | null;
   vessel: string | null;
+  // Evidenced by the document class itself (ocean BOL vs air waybill vs
+  // road/rail docs); null when the document doesn't show it.
+  mode: "ocean" | "air" | "truck" | "rail" | null;
   origin_port: string | null;
   destination_port: string | null;
   etd: string | null;
@@ -58,6 +72,8 @@ export type PurchaseOrderLineExtraction = {
   line_number: number;
   sku: string;
   description: string | null;
+  // Origin as logged on the PO line, when the document carries one.
+  country_of_origin: string | null;
   quantity: number;
   unit_price: number;
 };
@@ -75,6 +91,11 @@ export type InvoiceLineItemExtraction = {
   line_number: number;
   sku: string | null;
   description: string | null;
+  // Origin as logged on the invoice line, when the document carries one.
+  country_of_origin: string | null;
+  // HTS/HS code as printed — often 6/8-digit HS, not full 10-digit HTS, and
+  // frequently absent. Feeds the CI-vs-entry HTS variance check.
+  hts_code: string | null;
   quantity: number | null;
   unit_price: number | null;
   total_price: number;
@@ -144,6 +165,21 @@ export type RefundReportExtraction = {
   claims: RefundClaimExtraction[];
 };
 
+// One part of a split entry packet. The manifest (parts[]) is the parent
+// document's extracted_data; each part becomes a child documents row.
+export type PacketPartExtraction = {
+  part_index: number; // 1-based position in the packet
+  role: PacketRoleValue;
+  doc_type: DocumentTypeValue; // via roleToDocType — the child's docType
+  title: string | null; // the splitter's free-form section name
+  pages: number[]; // 1-indexed pages of the parent PDF, sorted
+  confidence: "high" | "low" | null;
+};
+
+export type EntryPacketExtraction = {
+  parts: PacketPartExtraction[];
+};
+
 export type ExtractionResult =
   | { docType: "port_entry"; fields: PortEntryExtraction }
   | { docType: "shipment"; fields: ShipmentExtraction }
@@ -152,6 +188,7 @@ export type ExtractionResult =
   | { docType: "packing_list"; fields: PackingListExtraction }
   | { docType: "quote_sheet"; fields: QuoteSheetExtraction }
   | { docType: "refund_report"; fields: RefundReportExtraction }
+  | { docType: "entry_packet"; fields: EntryPacketExtraction }
   | { docType: "other"; fields: Record<string, unknown> };
 
 export type ProcessInput = {
@@ -162,6 +199,14 @@ export type ProcessInput = {
   /** 1 on first processing, 2+ on reprocess. The stub uses this to let
    *  retries succeed; a real extractor ignores it. */
   attempt: number;
+  /** Set on packet children: which pages of the shared parent PDF are this
+   *  document. Providers scope their parse to these pages. */
+  pageRange?: number[] | null;
+  /** Set on packet children. Marks "I am a packet part": the split role is
+   *  authoritative, so providers skip classification (which has no assist
+   *  category and would misroute assist sheets to commercial_invoice) and
+   *  must never re-split. */
+  packetRole?: PacketRoleValue | null;
 };
 
 // Complete provider payloads, retained verbatim in documents.raw_extraction
@@ -176,6 +221,9 @@ export type RawExtraction = {
   classify: { jobId: string | null; usage: unknown; response: unknown } | null;
   /** The typed extract response, citations included; null for "other" docs. */
   extract: { jobId: string | null; usage: unknown; response: unknown } | null;
+  /** The packet split response; only set on entry_packet parents. Optional so
+   *  payloads persisted before packets existed stay valid. */
+  split?: { jobId: string | null; usage: unknown; response: unknown } | null;
   retrievedAt: string;
 };
 

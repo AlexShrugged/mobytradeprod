@@ -8,6 +8,48 @@
       "when": 1785704296685,
       "tag": "0000_flowery_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785862219521,
+      "tag": "0001_salty_hellfire_club",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785891815947,
+      "tag": "0002_nappy_ultragirl",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786049308434,
+      "tag": "0003_flat_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786051257713,
+      "tag": "0004_majestic_mikhail_rasputin",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786064467136,
+      "tag": "0005_jittery_lyja",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786069339264,
+      "tag": "0006_chunky_celestials",
+      "breakpoints": true
     }
   ]
 }

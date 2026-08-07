@@ -117,6 +117,9 @@ export function resolveChargeBucket(
   chargeType: ChargeTypeValue,
   htsCodeDigits: string | null,
   ref: ReferenceData,
+  // Buckets by the measure window active on the entry date; null/omitted
+  // falls back to the latest-window row (pre-windowing behavior).
+  entryDate: string | null = null,
 ): DutyBucket {
   switch (chargeType) {
     case "base_duty":
@@ -137,11 +140,26 @@ export function resolveChargeBucket(
 
   if (!htsCodeDigits) return "other_ch99";
 
-  // 1. Reference data wins: code -> measure -> authority.
+  // 1. Reference data wins: code -> measure -> authority. Ch99 digits may
+  // back several measure windows; prefer the one active on the entry date
+  // so a code re-pointed by a later window doesn't rebucket historical
+  // charges, falling back to the latest-window row.
+  const windowMeasure = entryDate
+    ? ref.measures.find(
+        (m) =>
+          m.ch99Digits === htsCodeDigits &&
+          m.effectiveDate <= entryDate &&
+          (m.endDate === null || entryDate <= m.endDate),
+      )
+    : undefined;
   const refRow = ref.htsByDigits.get(htsCodeDigits);
-  if (refRow?.tradeMeasureId) {
-    const measure = ref.measures.find((m) => m.id === refRow.tradeMeasureId);
-    const bucket = measure ? AUTHORITY_TO_BUCKET[measure.authority] : undefined;
+  const measure =
+    windowMeasure ??
+    (refRow?.tradeMeasureId
+      ? ref.measures.find((m) => m.id === refRow.tradeMeasureId)
+      : undefined);
+  if (measure) {
+    const bucket = AUTHORITY_TO_BUCKET[measure.authority];
     if (bucket) return bucket;
   }
 
@@ -186,6 +204,7 @@ export type BucketTotal = {
 export function computeAuthorityBreakdown(
   charges: BucketableCharge[],
   ref: ReferenceData,
+  entryDate: string | null = null,
 ): BucketTotal[] {
   const acc = new Map<
     DutyBucket,
@@ -193,7 +212,7 @@ export function computeAuthorityBreakdown(
   >();
 
   for (const c of charges) {
-    const bucket = resolveChargeBucket(c.chargeType, c.htsCodeDigits, ref);
+    const bucket = resolveChargeBucket(c.chargeType, c.htsCodeDigits, ref, entryDate);
     const entry = acc.get(bucket) ?? {
       amountCents: 0,
       maxRate: null,

@@ -46,7 +46,8 @@ export function PartsView({
       (p) =>
         p.sku.toLowerCase().includes(q) ||
         p.name.toLowerCase().includes(q) ||
-        (p.htsCode ?? "").includes(q),
+        (p.htsCode ?? "").includes(q) ||
+        p.sources.some((s) => s.vendorName.toLowerCase().includes(q)),
     );
   }, [parts, query]);
 
@@ -58,7 +59,7 @@ export function PartsView({
         <div className="relative max-w-sm flex-1 basis-64">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Filter by SKU, name, or HTS code…"
+            placeholder="Filter by SKU, name, vendor, or HTS code…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-8"

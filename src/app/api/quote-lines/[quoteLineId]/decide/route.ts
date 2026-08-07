@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 import { decideQuoteLine, QuoteStateError } from "@/lib/quotes/service";
 
 const bodySchema = z.object({
   action: z.enum(["approve", "reject"]),
-  // Free text until auth lands.
-  decidedBy: z.string().trim().min(1).default("Alex"),
+  // Omitted → the org's default actor. Auth will supply the real user later.
+  decidedBy: z.string().trim().min(1).optional(),
   note: z.string().nullish(),
 });
 
@@ -35,7 +35,8 @@ export async function POST(
       { status: 400 },
     );
   }
-  const { action, decidedBy, note } = parsed.data;
+  const { action, note } = parsed.data;
+  const decidedBy = parsed.data.decidedBy ?? (await getCurrentActorName());
 
   try {
     const result = await db.transaction((tx) =>

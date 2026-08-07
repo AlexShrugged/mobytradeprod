@@ -10,21 +10,31 @@ customs entries (top-level) with their shipments and POs down to line items, see
 owed and refunds, manage SKUs and HTS classification, understand per-SKU landed cost, and
 follow a chronological event feed of their import business. Scenario modeling comes later.
 
-Five pages: **Entries · Parts · Events · Data · Settings**. No auth yet (single seeded
-org, seam in `src/lib/org.ts`). Documents parse via Reducto when `REDUCTO_API_KEY` is
-set, otherwise a deterministic stub processor.
+Six pages: **Entries · Variance · Parts · Events · Data · Settings**. No auth yet
+(single seeded org, seam in `src/lib/org.ts`). Documents parse via Reducto when
+`REDUCTO_API_KEY` is set, otherwise a deterministic stub processor. Broker **entry
+packets** (one PDF bundling a 7501 + commercial invoice + supporting docs) split into
+child documents (parent-child rows on `documents`; children share the parent's file,
+page-scoped) that each run the normal per-doc pipeline.
 
 ## Architecture doctrines (carried from mobynew — do not violate)
 
 - **Derived data is never stored.** Expected charges, duty totals, refund stage, landed
   cost, the events feed, future-entry projections, and parts "pending changes" badges are
   all computed on read. Only declared facts and human decisions persist.
-- **Single writer per projection.** `processing/linker.ts` owns the entry graph;
-  `quotes/service.ts` owns quote tables + quote-sourced part writes;
-  `classification/service.ts` owns the HTS projection; `audit/auditor.ts` owns
-  `audit_alerts` (reconciled by stable `alert_key`; resolved/dismissed rows never touched);
-  `tariff-sync/apply.ts` owns Ch99 reference rows; `tariff-sync/base-apply.ts` owns
-  base-schedule windows.
+- **Single writer per projection.** `processing/linker.ts` owns the entry graph
+  (including `entry_invoices`); `quotes/service.ts` owns quote tables + quote-sourced
+  part writes; `classification/service.ts` owns the HTS projection; `audit/auditor.ts`
+  owns `audit_alerts` (reconciled by stable `alert_key`; resolved/dismissed rows never
+  touched); `tariff-sync/apply.ts` owns Ch99 reference rows; `tariff-sync/base-apply.ts`
+  owns base-schedule windows.
+- **The commercial invoice is the only document class compared against entries for
+  variance** (settled 2026-08-06; rules in `audit/invoice-rules.ts`, direct links via
+  `entry_invoices`). PO/shipment document comparisons were deliberately retired — PO
+  scope never matched entry scope. Catalog comparisons (HTS/COO vs parts) remain: they
+  check against master data, a different axis. CI money checks gate on USD (no FX) and
+  on an invoice mapping to exactly one entry; comparisons are SKU-grouped
+  (pairing-invariant), never per-line-paired.
 - **Pure calculators**: integer cents, decimal-fraction rates, no IO; db handle passed as
   a parameter (`DbClient`). Tests colocated (`*.test.ts`).
 - **MPF/HMF are ingested facts** on entries — never computed (CBP per-entry mins/caps).

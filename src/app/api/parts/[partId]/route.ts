@@ -10,6 +10,12 @@ const bodySchema = z
   .object({
     htsCode: z.string().trim().min(1).optional(),
     note: z.string().optional(),
+    // Dates the code change ("reclassified from this day forward"); absent
+    // means the code was always correct and history is corrected in place.
+    effectiveDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "effectiveDate must be a YYYY-MM-DD date")
+      .nullish(),
     // active↔archived only. Draft is NOT settable here: parts become draft
     // only through quote ingestion, and leave draft only through quote
     // approval (draft → active) or archiving.
@@ -42,7 +48,7 @@ export async function PATCH(
       { status: 400 },
     );
   }
-  const { htsCode, note, status } = parsed.data;
+  const { htsCode, note, effectiveDate, status } = parsed.data;
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -50,7 +56,10 @@ export async function PATCH(
       let reaudit = null;
 
       if (htsCode !== undefined) {
-        const hts = await updatePartHts(tx, orgId, partId, htsCode, { note });
+        const hts = await updatePartHts(tx, orgId, partId, htsCode, {
+          note,
+          effectiveDate: effectiveDate ?? null,
+        });
         if (!hts) return null;
         part = hts.part;
         reaudit = hts.reaudit;

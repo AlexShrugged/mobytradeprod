@@ -20,7 +20,7 @@ function input(over: Partial<ClassifyInput>): ClassifyInput {
     sku: "SKU-X",
     name: "A part",
     description: null,
-    countryOfOrigin: "CN",
+    countriesOfOrigin: ["CN"],
     currentHtsCode: null,
     ...over,
   };
@@ -82,12 +82,12 @@ describe("StubClassifier", () => {
     expect(charger.outcome).toBe("certain");
     expect(charger.candidates[0].code).toBe("8504.40.9550");
 
-    const tire = await classifier.classify(
-      input({ sku: "EB-TIR-27", currentHtsCode: "4011.50.0000" }),
+    const display = await classifier.classify(
+      input({ sku: "EB-DSP-LCD", currentHtsCode: "8531.20.0040" }),
       ref,
     );
-    expect(tire.outcome).toBe("certain");
-    expect(tire.candidates[0].code).toBe("4011.50.0000");
+    expect(display.outcome).toBe("certain");
+    expect(display.candidates[0].code).toBe("8531.20.0040");
   });
 
   it("fallback proposes schedule siblings of the current code", async () => {

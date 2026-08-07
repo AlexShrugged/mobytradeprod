@@ -5,6 +5,7 @@ import type { Document } from "@/lib/db/schema";
 
 import { getProcessor } from "./index";
 import { linkExtraction } from "./linker";
+import { childFileName, orderPacketParts } from "./packet";
 import { ProcessingError } from "./types";
 
 export type ProcessRunOutcome =
@@ -43,15 +44,69 @@ export async function processDocumentRow(
   const attempt = doc.status === "failed" ? 2 : 1;
 
   try {
-    const { extraction, raw } = await getProcessor().process({
+    const processor = await getProcessor(db);
+    const { extraction, raw } = await processor.process({
       storageKey: doc.storageKey,
       fileName: doc.fileName,
       mimeType: doc.mimeType,
       docTypeHint: doc.docType,
       attempt,
+      pageRange: doc.pageRange,
+      packetRole: doc.packetRole,
     });
 
-    await linkExtraction(doc.orgId, doc.id, extraction);
+    // A packet splits into child documents BEFORE the parent persists, so a
+    // failure here (nested packet, children mid-flight) lands on the normal
+    // failure path. Children are delete+recreated on reprocess; their
+    // document_links cascade away, and the domain records they created
+    // persist and re-upsert by business number.
+    let children: Document[] = [];
+    if (extraction.docType === "entry_packet") {
+      if (doc.parentDocumentId) {
+        throw new ProcessingError(
+          "A packet part cannot itself be an entry packet — split refused.",
+        );
+      }
+      const inFlight = await db.query.documents.findMany({
+        where: and(
+          eq(schema.documents.parentDocumentId, doc.id),
+          eq(schema.documents.status, "processing"),
+        ),
+        columns: { id: true },
+      });
+      if (inFlight.length > 0) {
+        throw new ProcessingError(
+          "Packet parts are still processing — retry when they finish.",
+        );
+      }
+      await db
+        .delete(schema.documents)
+        .where(eq(schema.documents.parentDocumentId, doc.id));
+      children = await db
+        .insert(schema.documents)
+        .values(
+          orderPacketParts(extraction.fields.parts).map((part) => ({
+            orgId: doc.orgId,
+            fileName: childFileName(doc.fileName, part),
+            // Children share the parent's bytes: same storageKey, and the
+            // parent's byte count (cosmetic — there is no per-part file).
+            fileSize: doc.fileSize,
+            mimeType: doc.mimeType,
+            storageKey: doc.storageKey,
+            docType: part.doc_type,
+            status: "pending" as const,
+            sourceId: doc.sourceId,
+            parentDocumentId: doc.id,
+            packetRole: part.role,
+            pageRange: part.pages,
+          })),
+        )
+        .returning();
+    }
+
+    await linkExtraction(doc.orgId, doc.id, extraction, {
+      parentDocumentId: doc.parentDocumentId,
+    });
 
     const [updated] = await db
       .update(schema.documents)
@@ -67,6 +122,15 @@ export async function processDocumentRow(
       })
       .where(eq(schema.documents.id, doc.id))
       .returning();
+
+    // Children run AFTER the parent persists as processed, sequentially:
+    // 7501s first, then CIs (orderPacketParts), so a CI usually finds its
+    // sibling entry on the first pass, and two children never race the
+    // linker inside one packet run. Each child claims its own row — a child
+    // failure marks only that child, never the parent.
+    for (const child of children) {
+      await processDocumentRow(child);
+    }
     return { claimed: true, ok: true, document: updated };
   } catch (err) {
     // Keep the cause chain: a drizzle "Failed query" message without the

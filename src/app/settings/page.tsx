@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import {
   Card,
   CardContent,
@@ -9,28 +10,32 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { getTariffStatus } from "@/lib/db/queries/tariffs";
+import { getVendors } from "@/lib/db/queries/vendors";
 import { formatDateTime } from "@/lib/format";
 import { getCurrentOrg } from "@/lib/org";
 
 import { OrgCard } from "./org-card";
 import { SyncButton } from "./sync-button";
+import { VendorsCard } from "./vendors-card";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [org, tariff] = await Promise.all([getCurrentOrg(), getTariffStatus()]);
+  const [org, tariff, vendors] = await Promise.all([
+    getCurrentOrg(),
+    getTariffStatus(),
+    getVendors(),
+  ]);
   // Env presence decides the processor at request time — force-dynamic
   // keeps this honest after an env change.
   const reductoConfigured = Boolean(process.env.REDUCTO_API_KEY);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Organization, tariff reference data, and document processing.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        info="Organization, vendors, tariff reference data, and document processing."
+      />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <OrgCard
@@ -38,6 +43,8 @@ export default async function SettingsPage() {
           importerOfRecord={org.importerOfRecord}
           inboxAddress={org.inboxAddress}
         />
+
+        <VendorsCard vendors={vendors} />
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0">

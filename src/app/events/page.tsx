@@ -3,6 +3,7 @@ import { CalendarClock, Ship } from "lucide-react";
 
 import { EventRow } from "@/components/events/event-row";
 import { Money } from "@/components/money";
+import { PageHeader } from "@/components/page-header";
 import { SailBasisBadge } from "@/components/sail-basis";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ const CHIP_LABELS: Record<EventFilterGroup, string> = {
   entries: "Entries",
   shipments: "Shipments",
   pos: "POs",
+  invoices: "Invoices",
   quotes: "Quotes",
   classification: "Classification",
   refunds: "Refunds",
@@ -68,14 +70,10 @@ export default async function EventsPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Events</h1>
-        <p className="text-sm text-muted-foreground">
-          Everything changing in your import business, in the order it
-          actually happened. Expand an event for its source documents or who
-          made the change.
-        </p>
-      </div>
+      <PageHeader
+        title="Events"
+        info="Every change in your import business, in the order it happened. Expand an event for source documents and who made the change."
+      />
 
       <div className="flex flex-wrap items-center gap-1.5">
         <FilterChip href="/events" active={group === null && !partId}>

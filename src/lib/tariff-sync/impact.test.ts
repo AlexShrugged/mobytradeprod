@@ -27,7 +27,6 @@ function shipment(over: Partial<ImpactShipment> = {}): ImpactShipment {
     sailedOnBoardDate: "2026-07-16",
     etd: "2026-07-15",
     eta: "2026-08-03",
-    status: "in_transit",
     poTotalCents: 1_000_000,
     ...over,
   };

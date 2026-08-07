@@ -5,6 +5,8 @@ import {
   computeEntryAlerts,
   type AuditableCharge,
   type AuditableEntry,
+  type AuditableInvoice,
+  type AuditableInvoiceLine,
   type AuditableLine,
 } from "./rules";
 
@@ -38,15 +40,20 @@ function charge(
 // A clean CN motor line: $10,000 entered, base 4%, 301 List 1 25%,
 // reciprocal 10%, MPF, HMF. Declared duty-type total: $3,900.
 function cleanMotorLine(over: Partial<AuditableLine> = {}): AuditableLine {
-  return {
+  const merged: AuditableLine = {
     id: "l1",
     lineNumber: 1,
     sku: "EB-MTR-500W",
     htsCode: "8501.31.4000",
     htsCodeDigits: "8501314000",
     countryOfOrigin: "CN",
+    vendorId: null,
     enteredValue: "10000.00",
+    quantity: "100.0000",
     partHtsCode: "8501.31.4000",
+    partHtsCodeCurrent: "8501.31.4000",
+    partHtsCurrentSince: null,
+    partSources: [],
     charges: [
       charge("base_duty", "8501.31.4000", 0.04, "400.00"),
       charge("additional_duty", "9903.88.01", 0.25, "2500.00"),
@@ -56,6 +63,12 @@ function cleanMotorLine(over: Partial<AuditableLine> = {}): AuditableLine {
     ],
     ...over,
   };
+  // Unless a test says otherwise, today's classification matches the as-of
+  // one — the base fixture has no reclassification.
+  if (over.partHtsCode !== undefined && over.partHtsCodeCurrent === undefined) {
+    merged.partHtsCodeCurrent = over.partHtsCode;
+  }
+  return merged;
 }
 
 function entry(over: Partial<AuditableEntry> = {}): AuditableEntry {
@@ -65,8 +78,34 @@ function entry(over: Partial<AuditableEntry> = {}): AuditableEntry {
     totalDuty: "3900.00",
     sail: null,
     lines: [cleanMotorLine()],
-    linkedPos: [],
     linkedInvoices: [],
+    ...over,
+  };
+}
+
+// A CI line matching cleanMotorLine exactly — the clean baseline for the
+// CI-vs-entry rules.
+function invoiceLine(
+  over: Partial<AuditableInvoiceLine> = {},
+): AuditableInvoiceLine {
+  return {
+    sku: "EB-MTR-500W",
+    htsCode: "8501.31.4000",
+    htsCodeDigits: "8501314000",
+    countryOfOrigin: "CN",
+    quantity: "100.0000",
+    totalPrice: "10000.00",
+    ...over,
+  };
+}
+
+function invoice(over: Partial<AuditableInvoice> = {}): AuditableInvoice {
+  return {
+    invoiceNumber: "INV-1001",
+    currency: "USD",
+    totalAmount: "10000.00",
+    lines: [invoiceLine()],
+    linkedEntryCount: 1,
     ...over,
   };
 }
@@ -284,7 +323,105 @@ describe("rule 5: HTS vs catalog", () => {
   });
 });
 
-describe("rules 6 & 7: header value checks", () => {
+describe("rule 10: COO vs catalog", () => {
+  const shenzhen = {
+    vendorId: "vendor-shenzhen",
+    vendorName: "Shenzhen Volt Dynamics",
+    countryOfOrigin: "CN",
+  };
+  const hanoi = {
+    vendorId: "vendor-hanoi",
+    vendorName: "Hanoi Precision Components",
+    countryOfOrigin: "VN",
+  };
+
+  it("warns when the line's vendor sources this part from a different origin", () => {
+    const line = cleanMotorLine({
+      vendorId: "vendor-hanoi",
+      partSources: [shenzhen, hanoi],
+    });
+    const alerts = computeEntryAlerts(entry({ lines: [line] }), ref);
+    expect(keys(alerts)).toEqual(["coo_discrepancy:line1"]);
+    expect(alerts[0].severity).toBe("warning");
+    expect(alerts[0].message).toContain("Hanoi Precision Components");
+    expect(alerts[0].details?.expected_coo).toBe("VN");
+  });
+
+  it("stays silent when the line's vendor source agrees with the declared COO", () => {
+    const line = cleanMotorLine({
+      vendorId: "vendor-shenzhen",
+      partSources: [shenzhen, hanoi],
+    });
+    expect(computeEntryAlerts(entry({ lines: [line] }), ref)).toEqual([]);
+  });
+
+  it("with no line vendor, any source origin is acceptable", () => {
+    // Declared CN, and one of the part's vendors ships CN — fine.
+    const line = cleanMotorLine({ partSources: [shenzhen, hanoi] });
+    expect(computeEntryAlerts(entry({ lines: [line] }), ref)).toEqual([]);
+  });
+
+  it("with no line vendor and no source carrying the declared COO, flags info", () => {
+    const line = cleanMotorLine({
+      countryOfOrigin: "CN",
+      partSources: [hanoi],
+    });
+    const alerts = computeEntryAlerts(
+      // CN charges under a VN-only catalog: keep the money side quiet by
+      // matching the declared (CN) expectations — rule 10 is the only diff.
+      entry({ lines: [line] }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["coo_discrepancy:line1"]);
+    expect(alerts[0].severity).toBe("info");
+    expect(alerts[0].details?.expected_coos).toEqual(["VN"]);
+  });
+
+  it("an unknown line vendor (no source row) falls back to the any-source check", () => {
+    const line = cleanMotorLine({
+      vendorId: "vendor-mystery",
+      partSources: [shenzhen],
+    });
+    expect(computeEntryAlerts(entry({ lines: [line] }), ref)).toEqual([]);
+  });
+
+  it("never flags: null line COO, no sources, or all-null source COOs", () => {
+    const noCoo = cleanMotorLine({
+      countryOfOrigin: null,
+      charges: [],
+      partSources: [shenzhen],
+    });
+    expect(
+      computeEntryAlerts(entry({ lines: [noCoo], totalDuty: null }), ref),
+    ).toEqual([]);
+
+    const noSources = cleanMotorLine({ partSources: [] });
+    expect(computeEntryAlerts(entry({ lines: [noSources] }), ref)).toEqual([]);
+
+    const nullCoos = cleanMotorLine({
+      vendorId: "vendor-shenzhen",
+      partSources: [{ ...shenzhen, countryOfOrigin: null }],
+    });
+    expect(computeEntryAlerts(entry({ lines: [nullCoos] }), ref)).toEqual([]);
+  });
+
+  it("does not suppress money checks — declared COO still drives rules 1-4", () => {
+    const line = cleanMotorLine({
+      vendorId: "vendor-hanoi",
+      partSources: [hanoi],
+    });
+    const c = line.charges.find((ch) => ch.htsCode === "9903.88.01")!;
+    c.amount = "1000.00"; // big amount mismatch on the declared-CN 301 line
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "2400.00" }),
+      ref,
+    );
+    expect(keys(alerts)).toContain("coo_discrepancy:line1");
+    expect(keys(alerts)).toContain("amount_mismatch:line1:99038801");
+  });
+});
+
+describe("rule 6: header entered value vs line sum", () => {
   it("flags header entered value diverging from the line sum", () => {
     const alerts = computeEntryAlerts(
       entry({ totalEnteredValue: "12000.00" }),
@@ -293,22 +430,529 @@ describe("rules 6 & 7: header value checks", () => {
     expect(keys(alerts)).toEqual(["value_mismatch:entered_value"]);
     expect(alerts[0].severity).toBe("error"); // $2,000 / 16.7% off
   });
+});
 
-  it("notes PO totals diverging from entered value, info only", () => {
+describe("rule 8: invoice internal consistency", () => {
+  it("flags an invoice whose header disagrees with its own line sum, and gates the entry comparison", () => {
     const alerts = computeEntryAlerts(
-      entry({ linkedPos: [{ poNumber: "PO-1", totalAmount: "20000.00" }] }),
+      entry({
+        linkedInvoices: [invoice({ totalAmount: "10200.00" })], // lines: 10000
+      }),
       ref,
     );
-    expect(keys(alerts)).toEqual(["value_mismatch:po_total"]);
+    expect(keys(alerts)).toEqual(["value_mismatch:invoice:INV-1001"]);
+    expect(alerts[0].severity).toBe("error"); // $200 > $50
+  });
+
+  it("runs on non-USD invoices too — internal consistency is currency-agnostic", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({ currency: "EUR", totalAmount: "10200.00" }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "invoice_skipped:INV-1001",
+      "value_mismatch:invoice:INV-1001",
+    ]);
+  });
+
+  it("a clean CI matching the entry on every axis stays silent", () => {
+    expect(
+      computeEntryAlerts(entry({ linkedInvoices: [invoice()] }), ref),
+    ).toEqual([]);
+  });
+});
+
+describe("rule 9: CI header value vs entered value", () => {
+  it("fires with real money severity and carries the effective duty rate", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "20000.00",
+            lines: [invoiceLine({ totalPrice: "20000.00" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    // The header failure gates open the per-SKU check (rule 11) too.
+    expect(keys(alerts).sort()).toEqual([
+      "value_mismatch:invoice_sku:EB-MTR-500W",
+      "value_mismatch:invoice_total",
+    ]);
+    const total = alerts.find(
+      (a) => a.alertKey === "value_mismatch:invoice_total",
+    )!;
+    expect(total.severity).toBe("error"); // $10k / 50% off
+    expect(total.details).toMatchObject({
+      expected_amount: 20000, // the CI is the document truth
+      actual_amount: 10000, // the filed entry
+      invoice_numbers: ["INV-1001"],
+      // 4% base + 25% Section 301 + 10% reciprocal, value-weighted.
+      effective_duty_rate: 0.39,
+    });
+  });
+
+  it("boundary: tolerates max($1, 1% of CI total), fires beyond", () => {
+    // $100 diff against a $10,100 CI is inside the 1% ($101) tolerance.
+    const within = entry({
+      linkedInvoices: [
+        invoice({
+          totalAmount: "10100.00",
+          lines: [invoiceLine({ totalPrice: "10100.00" })],
+        }),
+      ],
+    });
+    expect(keys(computeEntryAlerts(within, ref))).toEqual([]);
+
+    // $200 diff against a $10,200 CI breaches the 1% ($102) tolerance.
+    const over = entry({
+      linkedInvoices: [
+        invoice({
+          totalAmount: "10200.00",
+          lines: [invoiceLine({ totalPrice: "10200.00" })],
+        }),
+      ],
+    });
+    expect(keys(computeEntryAlerts(over, ref))).toContain(
+      "value_mismatch:invoice_total",
+    );
+  });
+
+  it("skips silently when the invoice spans multiple entries", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "20000.00",
+            lines: [invoiceLine({ totalPrice: "20000.00" })],
+            linkedEntryCount: 2,
+          }),
+        ],
+      }),
+      ref,
+    );
+    // Normal consolidation — no finding of any kind.
+    expect(alerts).toEqual([]);
+  });
+
+  it("skips value checks on a non-USD invoice, with an info notice instead", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            currency: "EUR",
+            totalAmount: "20000.00",
+            lines: [invoiceLine({ totalPrice: "20000.00" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["invoice_skipped:INV-1001"]);
+    expect(alerts[0].alertType).toBe("invoice_comparison_skipped");
+    expect(alerts[0].details).toMatchObject({
+      currency: "EUR",
+      reason: "non_usd_currency",
+    });
+  });
+
+  it("incomplete SKU coverage yields sku_missing instead of a fake value variance", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "20000.00",
+            lines: [
+              invoiceLine({ sku: "EB-BAT-48V", totalPrice: "20000.00" }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual([
+      "invoice_sku_missing:invoice_sku:EB-MTR-500W",
+    ]);
+    expect(alerts[0].severity).toBe("info");
+    expect(alerts[0].details).toMatchObject({
+      sku: "EB-MTR-500W",
+      invoice_numbers: ["INV-1001"],
+      line_number: 1,
+    });
+  });
+
+  it("skips when an invoice has no header amount", () => {
+    const alerts = computeEntryAlerts(
+      entry({ linkedInvoices: [invoice({ totalAmount: null })] }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+});
+
+describe("rule 11: SKU-grouped value mismatch", () => {
+  // A second entry line (battery) whose declared charges mirror the motor
+  // line at half the value, so the duty rules stay quiet.
+  const batteryLine = () =>
+    cleanMotorLine({
+      id: "l2",
+      lineNumber: 2,
+      sku: "EB-BAT-48V",
+      enteredValue: "5000.00",
+      quantity: "50.0000",
+      charges: [
+        charge("base_duty", "8501.31.4000", 0.04, "200.00"),
+        charge("additional_duty", "9903.88.01", 0.25, "1250.00"),
+        charge("additional_duty", "9903.01.25", 0.1, "500.00"),
+        charge("mpf", "499", 0.003464, "17.32"),
+        charge("hmf", "501", 0.00125, "6.25"),
+      ],
+    });
+  const twoSkuEntry = (over: Partial<AuditableEntry> = {}) =>
+    entry({
+      lines: [cleanMotorLine(), batteryLine()],
+      totalEnteredValue: "15000.00",
+      totalDuty: "5850.00",
+      ...over,
+    });
+
+  it("is gated on rule 9 — per-SKU deltas with a clean header total are noise", () => {
+    // SKU sums shuffled ($2k moved between SKUs) but the invoice total
+    // still matches the entry — nothing fires.
+    const alerts = computeEntryAlerts(
+      twoSkuEntry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "15000.00",
+            lines: [
+              invoiceLine({ totalPrice: "12000.00" }),
+              invoiceLine({
+                sku: "EB-BAT-48V",
+                quantity: "50.0000",
+                totalPrice: "3000.00",
+              }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(
+      keys(alerts).filter((k) => k.startsWith("value_mismatch:invoice_sku")),
+    ).toEqual([]);
+  });
+
+  it("is pairing-invariant — lines split across invoices with matching per-SKU sums stay silent", () => {
+    // Two CIs slice the goods differently from the entry lines, but every
+    // per-SKU sum agrees; the header check fires (entry over-declares
+    // $1,000) yet no per-SKU alert may ride along.
+    const alerts = computeEntryAlerts(
+      twoSkuEntry({
+        totalEnteredValue: "16000.00",
+        linkedInvoices: [
+          invoice({
+            invoiceNumber: "INV-A",
+            totalAmount: "6000.00",
+            lines: [
+              invoiceLine({ quantity: "60.0000", totalPrice: "6000.00" }),
+            ],
+          }),
+          invoice({
+            invoiceNumber: "INV-B",
+            totalAmount: "9000.00",
+            lines: [
+              invoiceLine({ quantity: "40.0000", totalPrice: "4000.00" }),
+              invoiceLine({
+                sku: "EB-BAT-48V",
+                quantity: "50.0000",
+                totalPrice: "5000.00",
+              }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "value_mismatch:entered_value",
+      "value_mismatch:invoice_total",
+    ]);
+  });
+
+  it("flags the diverging SKU with the CI as expected and the entry as actual", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        totalEnteredValue: "10000.00",
+        linkedInvoices: [
+          invoice({
+            totalAmount: "9500.00",
+            lines: [invoiceLine({ totalPrice: "9500.00" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    const sku = alerts.find(
+      (a) => a.alertKey === "value_mismatch:invoice_sku:EB-MTR-500W",
+    )!;
+    expect(sku.details).toMatchObject({
+      sku: "EB-MTR-500W",
+      expected_amount: 9500,
+      actual_amount: 10000,
+      difference_amount: 500,
+      invoice_numbers: ["INV-1001"],
+      effective_duty_rate: 0.39,
+    });
+    expect(sku.lineItemId).toBe("l1");
+  });
+});
+
+describe("rule 12: SKU-grouped quantity mismatch", () => {
+  it("fires even when values match", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({ lines: [invoiceLine({ quantity: "90.0000" })] }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual([
+      "quantity_discrepancy:invoice_sku:EB-MTR-500W",
+    ]);
+    expect(alerts[0].severity).toBe("warning");
+    expect(alerts[0].alertType).toBe("quantity_discrepancy");
+    expect(alerts[0].details).toMatchObject({
+      expected_quantity: 90,
+      actual_quantity: 100,
+      difference_quantity: 10,
+    });
+  });
+
+  it("boundary: silent at 0.01 units, fires above", () => {
+    const at = entry({
+      linkedInvoices: [
+        invoice({ lines: [invoiceLine({ quantity: "100.0100" })] }),
+      ],
+    });
+    expect(computeEntryAlerts(at, ref)).toEqual([]);
+
+    const over = entry({
+      linkedInvoices: [
+        invoice({ lines: [invoiceLine({ quantity: "100.0200" })] }),
+      ],
+    });
+    expect(keys(computeEntryAlerts(over, ref))).toEqual([
+      "quantity_discrepancy:invoice_sku:EB-MTR-500W",
+    ]);
+  });
+
+  it("skips SKUs where either side omits a quantity", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({ lines: [invoiceLine({ quantity: null })] }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("skips on non-USD invoices (gated with the value checks)", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            currency: "EUR",
+            lines: [invoiceLine({ quantity: "90.0000" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["invoice_skipped:INV-1001"]);
+  });
+});
+
+describe("rule 13: per-SKU HTS vs invoice", () => {
+  it("warns when the shared prefix disagrees at the subheading", () => {
+    // The CI prints a 6-digit HS code from a different heading.
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            lines: [
+              invoiceLine({ htsCode: "8504.90", htsCodeDigits: "850490" }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual([
+      "invoice_hts_mismatch:invoice_sku:EB-MTR-500W",
+    ]);
+    expect(alerts[0].severity).toBe("warning");
+    expect(alerts[0].details).toMatchObject({
+      expected_hts: "8504.90",
+      actual_hts: "8501.31.4000",
+      compared_digits: 6,
+      invoice_numbers: ["INV-1001"],
+    });
+  });
+
+  it("downgrades to info when only trailing digits differ (first six agree)", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            lines: [
+              invoiceLine({
+                htsCode: "8501.31.6000",
+                htsCodeDigits: "8501316000",
+              }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual([
+      "invoice_hts_mismatch:invoice_sku:EB-MTR-500W",
+    ]);
     expect(alerts[0].severity).toBe("info");
   });
 
-  it("skips the PO check when any linked PO lacks a total", () => {
+  it("a CI code under 6 digits carries no comparable signal — silent", () => {
     const alerts = computeEntryAlerts(
       entry({
-        linkedPos: [
-          { poNumber: "PO-1", totalAmount: "20000.00" },
-          { poNumber: "PO-2", totalAmount: null },
+        linkedInvoices: [
+          invoice({
+            lines: [invoiceLine({ htsCode: "85", htsCodeDigits: "85" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("silent when the CI code agrees on every shared digit", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            lines: [
+              invoiceLine({ htsCode: "850131", htsCodeDigits: "850131" }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("never suppresses the money rules — CI evidence is weaker than the catalog", () => {
+    const line = cleanMotorLine();
+    const c = line.charges.find((ch) => ch.htsCode === "9903.88.01")!;
+    c.amount = "1000.00"; // big amount mismatch
+    const alerts = computeEntryAlerts(
+      entry({
+        lines: [line],
+        totalDuty: "2400.00",
+        linkedInvoices: [
+          invoice({
+            lines: [
+              invoiceLine({ htsCode: "8504.90", htsCodeDigits: "850490" }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toContain("amount_mismatch:line1:99038801");
+    expect(keys(alerts)).toContain(
+      "invoice_hts_mismatch:invoice_sku:EB-MTR-500W",
+    );
+  });
+
+  it("still runs on non-USD invoices — classification is currency-independent", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            currency: "EUR",
+            lines: [
+              invoiceLine({ htsCode: "8504.90", htsCodeDigits: "850490" }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "invoice_hts_mismatch:invoice_sku:EB-MTR-500W",
+      "invoice_skipped:INV-1001",
+    ]);
+  });
+});
+
+describe("rule 14: per-SKU COO vs invoice", () => {
+  it("warns when the origin sets share nothing", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({ lines: [invoiceLine({ countryOfOrigin: "VN" })] }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["coo_discrepancy:invoice_sku:EB-MTR-500W"]);
+    expect(alerts[0].severity).toBe("warning");
+    expect(alerts[0].details).toMatchObject({
+      declared_coo: "CN",
+      expected_coo: "VN",
+      invoice_number: "INV-1001",
+    });
+  });
+
+  it("silent when the origin sets intersect", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            lines: [
+              invoiceLine({
+                countryOfOrigin: "CN",
+                quantity: "50.0000",
+                totalPrice: "5000.00",
+              }),
+              invoiceLine({
+                countryOfOrigin: "VN",
+                quantity: "50.0000",
+                totalPrice: "5000.00",
+              }),
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("silent when either side has no origin", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({ lines: [invoiceLine({ countryOfOrigin: null })] }),
         ],
       }),
       ref,
@@ -317,70 +961,64 @@ describe("rules 6 & 7: header value checks", () => {
   });
 });
 
-describe("rules 8 & 9: invoice checks", () => {
-  it("flags an invoice whose header disagrees with its own line sum", () => {
+describe("rule 15: entry SKU missing from CI", () => {
+  it("silent when the CI carries no real SKUs at all", () => {
+    // A SKU-less CI says nothing about coverage — and it also blocks the
+    // header value check, even with a diverging total.
     const alerts = computeEntryAlerts(
       entry({
         linkedInvoices: [
-          {
-            invoiceNumber: "INV-1001",
-            totalAmount: "10200.00",
-            lineTotalSum: "10000.00",
-            lineCount: 3,
-          },
-        ],
-      }),
-      ref,
-    );
-    expect(keys(alerts)).toEqual(["value_mismatch:invoice:INV-1001"]);
-    expect(alerts[0].severity).toBe("error"); // $200 > $50
-  });
-
-  it("notes invoice totals diverging from entered value, info only", () => {
-    const alerts = computeEntryAlerts(
-      entry({
-        linkedInvoices: [
-          {
-            invoiceNumber: "INV-1001",
+          invoice({
             totalAmount: "20000.00",
-            lineTotalSum: "20000.00",
-            lineCount: 2,
-          },
+            lines: [invoiceLine({ sku: null, totalPrice: "20000.00" })],
+          }),
         ],
       }),
       ref,
     );
-    expect(keys(alerts)).toEqual(["value_mismatch:invoice_total"]);
-    expect(alerts[0].severity).toBe("info");
+    expect(alerts).toEqual([]);
   });
 
-  it("suppresses the aggregate check when any invoice is internally inconsistent", () => {
+  it("treats the extraction sentinel NOT_FOUND as no SKU", () => {
     const alerts = computeEntryAlerts(
       entry({
         linkedInvoices: [
-          {
-            invoiceNumber: "INV-1001",
+          invoice({
             totalAmount: "20000.00",
-            lineTotalSum: "18000.00",
-            lineCount: 2,
-          },
+            lines: [
+              invoiceLine({ sku: "NOT_FOUND", totalPrice: "20000.00" }),
+            ],
+          }),
         ],
       }),
       ref,
     );
-    expect(keys(alerts)).toEqual(["value_mismatch:invoice:INV-1001"]);
+    expect(alerts).toEqual([]);
   });
+});
 
-  it("an invoice matching both its lines and the entry stays silent", () => {
+describe("rule 9b: non-USD notices", () => {
+  it("one notice per non-USD invoice", () => {
     const alerts = computeEntryAlerts(
       entry({
         linkedInvoices: [
-          {
-            invoiceNumber: "INV-1001",
-            totalAmount: "10000.00",
-            lineTotalSum: "10000.00",
-            lineCount: 2,
-          },
+          invoice({ invoiceNumber: "INV-EUR-1", currency: "EUR" }),
+          invoice({ invoiceNumber: "INV-EUR-2", currency: "EUR" }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "invoice_skipped:INV-EUR-1",
+      "invoice_skipped:INV-EUR-2",
+    ]);
+  });
+
+  it("no notice for a multi-entry invoice — that skip is silent by design", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({ currency: "EUR", linkedEntryCount: 2 }),
         ],
       }),
       ref,
@@ -407,5 +1045,107 @@ describe("gates", () => {
       ref,
     );
     expect(alerts).toEqual([]);
+  });
+});
+
+describe("rule 5b: reclassified after filing", () => {
+  it("declared matching the as-of code with a changed current code raises only hts_reclassified", () => {
+    const line = cleanMotorLine({
+      partHtsCodeCurrent: "8501.31.6000",
+      partHtsCurrentSince: "2026-07-01",
+    });
+    const alerts = computeEntryAlerts(entry({ lines: [line] }), ref);
+    expect(keys(alerts)).toEqual(["hts_reclassified:line1"]);
+    const a = alerts[0];
+    expect(a.severity).toBe("info");
+    expect(a.details).toMatchObject({
+      declared_hts: "8501.31.4000",
+      expected_hts_as_of: "8501.31.4000",
+      expected_hts_current: "8501.31.6000",
+      current_effective_from: "2026-07-01",
+    });
+  });
+
+  it("money rules still run on a reclassified line", () => {
+    const line = cleanMotorLine({
+      partHtsCodeCurrent: "8501.31.6000",
+      partHtsCurrentSince: "2026-07-01",
+    });
+    // Tamper the 301 rate only (amount stays right) — the trust gate holds
+    // and the rate check must still fire alongside the reclassified signal.
+    const c301 = line.charges.find((c) => c.htsCode === "9903.88.01")!;
+    c301.rate = "0.2";
+    const alerts = computeEntryAlerts(entry({ lines: [line] }), ref);
+    expect(keys(alerts)).toEqual([
+      "hts_reclassified:line1",
+      "rate_mismatch:line1:99038801",
+    ]);
+  });
+
+  it("a declaration off the as-of code stays hts_discrepancy, carrying both catalog codes", () => {
+    const line = cleanMotorLine({
+      partHtsCode: "8501.31.5000",
+      partHtsCodeCurrent: "8501.31.6000",
+    });
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: null }),
+      ref,
+    );
+    expect(keys(alerts)).toContain("hts_discrepancy:line1");
+    expect(keys(alerts)).not.toContain("hts_reclassified:line1");
+    const a = alerts.find((x) => x.alertKey === "hts_discrepancy:line1")!;
+    expect(a.details).toMatchObject({
+      expected_hts: "8501.31.5000",
+      expected_hts_as_of: "8501.31.5000",
+      expected_hts_current: "8501.31.6000",
+      actual_hts: "8501.31.4000",
+    });
+  });
+
+  it("no signal when as-of, current, and declared all agree", () => {
+    const alerts = computeEntryAlerts(entry(), ref);
+    expect(alerts).toEqual([]);
+  });
+});
+
+describe("rule 2: entry-date-windowed exemptions", () => {
+  // Declared under the List 3 exclusion code 9903.88.67 at a nonzero
+  // amount, in place of the expected List 1 charge. Whether that exclusion
+  // claim is allowed depends on the window the ref carries for it.
+  const exclusionLine = () => {
+    const line = cleanMotorLine();
+    const c301 = line.charges.find((c) => c.htsCode === "9903.88.01")!;
+    c301.htsCode = "9903.88.67";
+    c301.htsCodeDigits = "99038867";
+    return line;
+  };
+
+  it("allows the exclusion when its window covers the entry date", () => {
+    const windowed = {
+      ...ref,
+      exemptionsByDigits: new Map([
+        ["99038867", [{ effectiveDate: "2026-01-01", endDate: null }]],
+      ]),
+    };
+    const alerts = computeEntryAlerts(entry({ lines: [exclusionLine()] }), windowed);
+    expect(keys(alerts)).not.toContain("unexpected_measure:line1:99038867");
+  });
+
+  it("flags the exclusion when the entry date falls outside its window", () => {
+    const windowed = {
+      ...ref,
+      exemptionsByDigits: new Map([
+        ["99038867", [{ effectiveDate: "2026-01-01", endDate: "2026-03-31" }]],
+      ]),
+    };
+    const alerts = computeEntryAlerts(entry({ lines: [exclusionLine()] }), windowed);
+    expect(keys(alerts)).toContain("unexpected_measure:line1:99038867");
+  });
+
+  it("falls back to the current-row exemption flag when the ref carries no windows", () => {
+    // buildSeedReferenceData sets no exemptionsByDigits — the seed row's
+    // exemption flag governs, the pre-windowing behavior.
+    const alerts = computeEntryAlerts(entry({ lines: [exclusionLine()] }), ref);
+    expect(keys(alerts)).not.toContain("unexpected_measure:line1:99038867");
   });
 });

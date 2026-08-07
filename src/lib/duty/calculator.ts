@@ -57,6 +57,27 @@ export function resolveBaseSchedule(
 }
 
 /**
+ * Whether a declared Ch99 digits string is an exemption ACTIVE on the entry
+ * date. Resolves against exemptionsByDigits (the exemption's measure
+ * windows); when that map is absent — in-memory builders, synthetic test
+ * refs — falls back to the current htsByDigits row's exemption flag, the
+ * pre-windowing behavior.
+ */
+export function isExemptionActive(
+  htsDigits: string,
+  entryDate: string,
+  ref: ReferenceData,
+): boolean {
+  const windows = ref.exemptionsByDigits?.get(htsDigits);
+  if (windows === undefined) {
+    return ref.exemptionsByDigits
+      ? false
+      : (ref.htsByDigits.get(htsDigits)?.exemption ?? false);
+  }
+  return windows.some((w) => activeOn(entryDate, w.effectiveDate, w.endDate));
+}
+
+/**
  * Authority-level stacking: rules fire in reference order against the
  * current survivor set, so a loser already suppressed cannot go on to win a
  * later rule (legacy-verified semantics).

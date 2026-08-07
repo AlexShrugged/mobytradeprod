@@ -1,5 +1,6 @@
 import { EntriesTable } from "@/components/entries/entries-table";
 import { Money } from "@/components/money";
+import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
 import {
   getEntries,
@@ -20,14 +21,10 @@ export default async function EntriesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Entries</h1>
-        <p className="text-sm text-muted-foreground">
-          Customs entries with their linked shipments and purchase orders —
-          plus projected future entries for goods still on the water. Expand
-          a row for its links; open an entry for the full money picture.
-        </p>
-      </div>
+      <PageHeader
+        title="Entries"
+        info="Customs entries with linked shipments and purchase orders, plus projected entries for goods still on the water. Expand a row for links, open an entry for full costs."
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile

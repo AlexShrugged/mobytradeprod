@@ -1,15 +1,18 @@
 // DB effects for the quote workflow — the ONLY writer of quote_sheets,
-// quote_lines, and quote-sourced part writes (draft-part creation on
-// unknown SKUs, application onto unit_cost / country_of_origin /
-// manufacturer) plus their field_changes rows, so the badges the UI derives
-// from quote state ("quote received", "pending changes") can never drift
-// from what was actually decided. HTS is NEVER written here — a
-// supplier-claimed code is display/estimate input only and routes through
-// classification/service.ts.
+// quote_lines, and quote-sourced catalog writes (draft-part creation on
+// unknown SKUs, application onto the (part, vendor) part_sources row's
+// unit_cost / country_of_origin) plus their field_changes rows, so the
+// badges the UI derives from quote state ("quote received", "pending
+// changes") can never drift from what was actually decided. HTS is NEVER
+// written here — a supplier-claimed code is display/estimate input only and
+// routes through classification/service.ts.
 //
 // The decision rules themselves (matching, winner selection, supersede
-// selection, part-field diffing) are pure functions in ./match.ts,
-// test-pinned without a database; this module only executes them.
+// selection, source-field diffing) are pure functions in ./match.ts,
+// test-pinned without a database; this module only executes them. Vendor
+// identity is resolved once per sheet via vendors/service.ts; a sheet that
+// names no supplier gets a null vendor, and its quotes can flip to applied
+// WITHOUT a catalog write — there is no (part, vendor) row to land on.
 //
 // Every entry point expects to run inside a transaction (routes pass a tx;
 // the ingestion linker delegates in-transaction; the seed passes its
@@ -17,16 +20,18 @@
 //
 // Relative imports on purpose — reachable from the tsx seed script.
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import type { DbClient } from "../db";
 import * as schema from "../db/schema";
+import { planCommitWindow } from "../effective-dating";
+import { findOrCreateVendor } from "../vendors/service";
 import {
-  diffQuoteAgainstPart,
+  diffQuoteAgainstSource,
   pickWinningQuote,
   poLineMatchesQuote,
   selectSupersededLineIds,
-  type PartFieldDiff,
+  type SourceFieldDiff,
 } from "./match";
 
 /** The route maps this to a 409 — the line moved under the caller. */
@@ -64,10 +69,12 @@ export type IngestQuoteSheetResult = {
 /**
  * Create a sheet + its lines. Every line resolves to a part by (org, sku);
  * an unknown SKU auto-creates a DRAFT part seeded with the quote's own
- * claims (draft = "not official": the auditor ignores it and nothing
- * drives money until a human approves). Newly received lines auto-supersede
- * older RECEIVED lines for the same (part, supplier); approved lines are
- * never auto-superseded — human decisions survive machine re-ingestion.
+ * claims — cost and COO land on the (part, vendor) part_sources row when
+ * the sheet names a supplier (draft = "not official": the auditor ignores
+ * it and nothing drives money until a human approves). Newly received lines
+ * auto-supersede older RECEIVED lines for the same (part, vendor); approved
+ * lines are never auto-superseded — human decisions survive machine
+ * re-ingestion.
  */
 export async function ingestQuoteSheet(
   db: DbClient,
@@ -76,6 +83,7 @@ export async function ingestQuoteSheet(
 ): Promise<IngestQuoteSheetResult> {
   const sheetCurrency = input.currency?.trim().toUpperCase() || "USD";
   const supplierName = input.supplierName?.trim() || null;
+  const vendor = await findOrCreateVendor(db, orgId, supplierName);
 
   const [sheet] = await db
     .insert(schema.quoteSheets)
@@ -83,6 +91,7 @@ export async function ingestQuoteSheet(
       orgId,
       documentId: input.documentId ?? null,
       supplierName,
+      vendorId: vendor?.id ?? null,
       quoteDate: input.quoteDate ?? null,
       currency: sheetCurrency,
       validUntil: input.validUntil ?? null,
@@ -111,9 +120,6 @@ export async function ingestQuoteSheet(
           sku,
           name: description ?? sku,
           description,
-          manufacturer: supplierName,
-          unitCost: line.unitCost.toFixed(4),
-          countryOfOrigin,
           status: "draft",
         })
         .returning();
@@ -121,12 +127,26 @@ export async function ingestQuoteSheet(
       partCreated = true;
       createdPartIds.push(created.id);
 
+      // The quote's cost/COO claims live on the (part, vendor) source row.
+      // A sheet with no supplier has no vendor to hang them on — the draft
+      // part stays sourceless until a named quote or manual edit arrives.
+      if (vendor) {
+        await db.insert(schema.partSources).values({
+          orgId,
+          partId: created.id,
+          vendorId: vendor.id,
+          countryOfOrigin,
+          unitCost: line.unitCost.toFixed(4),
+        });
+      }
+
       // One provenance row marking the creation; the seeded field values
       // are visible on the part itself and become official only on apply.
       await db.insert(schema.fieldChanges).values({
         orgId,
         entityType: "part",
         entityId: created.id,
+        vendorId: vendor?.id ?? null,
         field: "created",
         oldValue: null,
         newValue: sku,
@@ -164,7 +184,7 @@ export async function ingestQuoteSheet(
         id: schema.quoteLines.id,
         partId: schema.quoteLines.partId,
         status: schema.quoteLines.status,
-        supplierName: schema.quoteSheets.supplierName,
+        vendorId: schema.quoteSheets.vendorId,
       })
       .from(schema.quoteLines)
       .innerJoin(
@@ -179,7 +199,7 @@ export async function ingestQuoteSheet(
         ),
       );
     const supersededIds = selectSupersededLineIds(
-      { id: inserted.id, partId: part.id, supplierName },
+      { id: inserted.id, partId: part.id, vendorId: vendor?.id ?? null },
       openLines,
     );
     if (supersededIds.length > 0) {
@@ -202,11 +222,12 @@ export type QuoteDecisionResult = {
  * Approve or reject a RECEIVED quote line.
  *
  * Approve on an active part: the line waits as "approved" until a matching
- * PO confirms it (applyQuotesForPo) — the part is untouched; "pending
+ * PO confirms it (applyQuotesForPo) — the catalog is untouched; "pending
  * changes" is derived. Approve on a DRAFT part finalizes a brand-new SKU:
  * there is no prior official state a PO needs to confirm, so the part flips
- * active, the quote's values land where they differ, and the line goes
- * straight to applied (applied_po_line_id stays null — no PO made it so).
+ * active, the quote's values land on the sheet vendor's (part, vendor)
+ * source row where they differ, and the line goes straight to applied
+ * (applied_po_line_id stays null — no PO made it so).
  *
  * Reject leaves a draft part draft — surfaced on the Parts page for
  * archiving, deliberately not auto-archived (a better quote may be coming).
@@ -271,36 +292,44 @@ export async function decideQuoteLine(
     return { line: updated, part };
   }
 
-  // Draft-finalize path.
+  // Draft-finalize path. The quote's values land on the (part, vendor)
+  // source row; the part itself only flips active. A sheet with no vendor
+  // finalizes the part with no catalog write — there is no source to land
+  // on (documented module contract).
   const sheet = await db.query.quoteSheets.findFirst({
     where: eq(schema.quoteSheets.id, line.quoteSheetId),
   });
-  const diffs = diffQuoteAgainstPart(
-    {
-      unitCost: Number(line.unitCost),
-      countryOfOrigin: line.countryOfOrigin,
-      supplierName: sheet?.supplierName ?? null,
-    },
-    part,
-  );
+  const sourceVendorId = sheet?.vendorId ?? null;
 
-  const partPatch: Partial<typeof schema.parts.$inferInsert> = {
-    status: "active",
-    updatedAt: now,
-  };
-  for (const d of diffs) partPatch[d.column] = d.newValue;
+  if (sourceVendorId) {
+    const source = await db.query.partSources.findFirst({
+      where: and(
+        eq(schema.partSources.partId, part.id),
+        eq(schema.partSources.vendorId, sourceVendorId),
+        isNull(schema.partSources.validTo),
+      ),
+    });
+    const diffs = diffQuoteAgainstSource(
+      {
+        unitCost: Number(line.unitCost),
+        countryOfOrigin: line.countryOfOrigin,
+      },
+      source ?? null,
+    );
+    await patchPartSource(db, orgId, part.id, sourceVendorId, source, diffs, now);
+    await recordAppliedDiffs(db, orgId, part.id, sourceVendorId, diffs, {
+      actor: decidedBy,
+      note: `Quote${
+        sheet?.supplierName ? ` from ${sheet.supplierName}` : ""
+      } approved — draft SKU finalized`,
+    });
+  }
+
   const [updatedPart] = await db
     .update(schema.parts)
-    .set(partPatch)
+    .set({ status: "active", updatedAt: now })
     .where(eq(schema.parts.id, part.id))
     .returning();
-
-  await recordAppliedDiffs(db, orgId, part.id, diffs, {
-    actor: decidedBy,
-    note: `Quote${
-      sheet?.supplierName ? ` from ${sheet.supplierName}` : ""
-    } approved — draft SKU finalized`,
-  });
 
   const [updatedLine] = await db
     .update(schema.quoteLines)
@@ -360,9 +389,11 @@ export type QuoteApplication = {
  * The linker hook (also callable standalone): for each line of a PO, find
  * the approved quote lines its part could confirm, filter through
  * poLineMatchesQuote, pick the most recent winner, and make it official —
- * parts.unit_cost (+COO/manufacturer when the quote carries them and they
- * differ), one field_changes row PER changed field, and the quote line
- * moves to applied with the confirming PO line recorded. Re-running is
+ * the (part, vendor) source row's unit_cost (+COO when the quote carries
+ * one and it differs), one field_changes row PER changed field, and the
+ * quote line moves to applied with the confirming PO line recorded. The
+ * source vendor is the sheet's, falling back to the PO's; with neither, the
+ * line still applies but nothing lands in the catalog. Re-running is
  * idempotent: applied lines are no longer "approved" and never re-match.
  * "Last matching PO applied wins the official cost" falls out of that —
  * each later application simply overwrites. Never writes hts_code.
@@ -414,14 +445,14 @@ export async function applyQuotesForPo(
           unitPrice: poLine.unitPrice === null ? null : Number(poLine.unitPrice),
           orderDate: po.orderDate,
           currency: po.currency,
-          supplierName: po.supplierName,
+          vendorId: po.vendorId,
         },
         {
           partId: line.partId,
           unitCost: Number(line.unitCost),
           currency: line.currency,
           quoteDate: sheet.quoteDate,
-          supplierName: sheet.supplierName,
+          vendorId: sheet.vendorId,
         },
       ),
     );
@@ -444,31 +475,42 @@ export async function applyQuotesForPo(
     if (!part || part.status === "archived") continue;
 
     const now = new Date();
-    const diffs = diffQuoteAgainstPart(
-      {
-        unitCost: Number(winner.line.unitCost),
-        countryOfOrigin: winner.line.countryOfOrigin,
-        supplierName: winner.sheet.supplierName,
-      },
-      part,
-    );
+    const sourceVendorId = winner.sheet.vendorId ?? po.vendorId;
+    let changedFields: string[] = [];
 
-    if (diffs.length > 0) {
-      const partPatch: Partial<typeof schema.parts.$inferInsert> = {
-        updatedAt: now,
-      };
-      for (const d of diffs) partPatch[d.column] = d.newValue;
-      await db
-        .update(schema.parts)
-        .set(partPatch)
-        .where(eq(schema.parts.id, part.id));
-
-      await recordAppliedDiffs(db, orgId, part.id, diffs, {
-        actor: null,
-        note: `Quote${
-          winner.sheet.supplierName ? ` from ${winner.sheet.supplierName}` : ""
-        } applied via PO ${po.poNumber}`,
+    if (sourceVendorId) {
+      const source = await db.query.partSources.findFirst({
+        where: and(
+          eq(schema.partSources.partId, part.id),
+          eq(schema.partSources.vendorId, sourceVendorId),
+          isNull(schema.partSources.validTo),
+        ),
       });
+      const diffs = diffQuoteAgainstSource(
+        {
+          unitCost: Number(winner.line.unitCost),
+          countryOfOrigin: winner.line.countryOfOrigin,
+        },
+        source ?? null,
+      );
+      if (diffs.length > 0) {
+        await patchPartSource(
+          db,
+          orgId,
+          part.id,
+          sourceVendorId,
+          source,
+          diffs,
+          now,
+        );
+        await recordAppliedDiffs(db, orgId, part.id, sourceVendorId, diffs, {
+          actor: null,
+          note: `Quote${
+            winner.sheet.supplierName ? ` from ${winner.sheet.supplierName}` : ""
+          } applied via PO ${po.poNumber}`,
+        });
+        changedFields = diffs.map((d) => d.field);
+      }
     }
 
     await db
@@ -485,19 +527,92 @@ export async function applyQuotesForPo(
       poLineId: poLine.id,
       quoteLineId: winner.line.id,
       partId: part.id,
-      changedFields: diffs.map((d) => d.field),
+      changedFields,
     });
   }
 
   return applications;
 }
 
-/** One field_changes row per changed part field, source "quote:applied". */
+/** Apply source-field diffs onto the (part, vendor) sourcing facts. A quote
+ *  application is a dated fact — "the cost/origin changed from this day
+ *  forward" — so it TILES: the current window closes at day − 1 and a
+ *  successor opens carrying all current values with the diffs applied.
+ *  Historical entries keep auditing against the window of their day. A
+ *  same-day re-application corrects the fresh window in place instead of
+ *  minting a zero-length one. `existing` must be the CURRENT (valid_to
+ *  null) window. No-ops on an empty diff. */
+async function patchPartSource(
+  db: DbClient,
+  orgId: string,
+  partId: string,
+  vendorId: string,
+  existing: schema.PartSource | undefined,
+  diffs: SourceFieldDiff[],
+  now: Date,
+): Promise<void> {
+  if (diffs.length === 0) return;
+  const effectiveDate = now.toISOString().slice(0, 10);
+  if (existing) {
+    const plan = planCommitWindow(
+      { validFrom: existing.validFrom },
+      effectiveDate,
+    );
+    if (plan.action === "tile") {
+      await db
+        .update(schema.partSources)
+        .set({ validTo: plan.closePredecessorAt, updatedAt: now })
+        .where(eq(schema.partSources.id, existing.id));
+      const values: typeof schema.partSources.$inferInsert = {
+        orgId,
+        partId,
+        vendorId,
+        countryOfOrigin: existing.countryOfOrigin,
+        unitCost: existing.unitCost,
+        validFrom: effectiveDate,
+        validTo: null,
+      };
+      for (const d of diffs) values[d.column] = d.newValue;
+      await db.insert(schema.partSources).values(values);
+    } else {
+      const patch: Partial<typeof schema.partSources.$inferInsert> = {
+        updatedAt: now,
+      };
+      for (const d of diffs) patch[d.column] = d.newValue;
+      await db
+        .update(schema.partSources)
+        .set(patch)
+        .where(eq(schema.partSources.id, existing.id));
+    }
+  } else {
+    // New vendor for this part — but if closed windows exist (the source was
+    // "deleted"), the new window starts today rather than rewriting the gap.
+    const priorWindow = await db.query.partSources.findFirst({
+      where: and(
+        eq(schema.partSources.partId, partId),
+        eq(schema.partSources.vendorId, vendorId),
+      ),
+    });
+    const values: typeof schema.partSources.$inferInsert = {
+      orgId,
+      partId,
+      vendorId,
+      validFrom: priorWindow ? effectiveDate : null,
+      validTo: null,
+    };
+    for (const d of diffs) values[d.column] = d.newValue;
+    await db.insert(schema.partSources).values(values);
+  }
+}
+
+/** One field_changes row per changed source field, source "quote:applied";
+ *  vendor_id scopes the change to its (part, vendor) row. */
 async function recordAppliedDiffs(
   db: DbClient,
   orgId: string,
   partId: string,
-  diffs: PartFieldDiff[],
+  vendorId: string,
+  diffs: SourceFieldDiff[],
   opts: { actor: string | null; note: string },
 ): Promise<void> {
   for (const d of diffs) {
@@ -505,6 +620,7 @@ async function recordAppliedDiffs(
       orgId,
       entityType: "part",
       entityId: partId,
+      vendorId,
       field: d.field,
       oldValue: d.oldValue,
       newValue: d.newValue,

@@ -83,11 +83,24 @@ export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
   }
 
   const exclusionsByMeasure = new Map<string, string[]>();
+  // Entry-date windows in which each exemption Ch99 digits string is live —
+  // isExemptionActive resolves against these so a declared exclusion code
+  // is only "always allowed" on entries its measure window actually covers.
+  const exemptionsByDigits = new Map<
+    string,
+    { effectiveDate: string; endDate: string | null }[]
+  >();
   for (const h of htsRows) {
     if (!h.tradeMeasureId || !h.exemption) continue;
     const list = exclusionsByMeasure.get(h.tradeMeasureId) ?? [];
     list.push(h.codeDigits);
     exclusionsByMeasure.set(h.tradeMeasureId, list);
+    const m = measureById.get(h.tradeMeasureId);
+    if (m) {
+      const windows = exemptionsByDigits.get(h.codeDigits) ?? [];
+      windows.push({ effectiveDate: m.effectiveDate, endDate: m.endDate });
+      exemptionsByDigits.set(h.codeDigits, windows);
+    }
   }
 
   const measures: MeasureRef[] = [];
@@ -130,5 +143,11 @@ export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
       endDate: r.endDate,
     }));
 
-  return { htsByDigits, baseWindowsByDigits, measures, stackingRules };
+  return {
+    htsByDigits,
+    baseWindowsByDigits,
+    exemptionsByDigits,
+    measures,
+    stackingRules,
+  };
 }

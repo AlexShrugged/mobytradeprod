@@ -26,13 +26,20 @@ type Scope = {
   entryIds: string[] | null; // null = unscoped
   poIds: string[] | null;
   shipmentIds: string[] | null;
+  invoiceIds: string[] | null;
 };
 
 async function resolveScope(orgId: string, partId?: string): Promise<Scope> {
   if (!partId) {
-    return { partId: null, entryIds: null, poIds: null, shipmentIds: null };
+    return {
+      partId: null,
+      entryIds: null,
+      poIds: null,
+      shipmentIds: null,
+      invoiceIds: null,
+    };
   }
-  const [entryLines, poLines] = await Promise.all([
+  const [entryLines, poLines, invoiceLines] = await Promise.all([
     db
       .select({ entryId: schema.entryLineItems.entryId })
       .from(schema.entryLineItems)
@@ -51,6 +58,15 @@ async function resolveScope(orgId: string, partId?: string): Promise<Scope> {
           eq(schema.purchaseOrderLines.partId, partId),
         ),
       ),
+    db
+      .select({ invoiceId: schema.invoiceLineItems.invoiceId })
+      .from(schema.invoiceLineItems)
+      .where(
+        and(
+          eq(schema.invoiceLineItems.orgId, orgId),
+          eq(schema.invoiceLineItems.partId, partId),
+        ),
+      ),
   ]);
   const poIds = [...new Set(poLines.map((r) => r.poId))];
   const shipmentRows = poIds.length
@@ -64,6 +80,7 @@ async function resolveScope(orgId: string, partId?: string): Promise<Scope> {
     entryIds: [...new Set(entryLines.map((r) => r.entryId))],
     poIds,
     shipmentIds: [...new Set(shipmentRows.map((r) => r.shipmentId))],
+    invoiceIds: [...new Set(invoiceLines.map((r) => r.invoiceId))],
   };
 }
 
@@ -150,6 +167,7 @@ export async function getEvents(opts?: {
     entryRows,
     shipmentRows,
     poRows,
+    invoiceRows,
     refundRows,
     quoteSheetRows,
     quoteLineRows,
@@ -184,6 +202,21 @@ export async function getEvents(opts?: {
             ? [inArray(schema.purchaseOrders.id, scope.poIds)]
             : []),
         ),
+      }),
+    ),
+    scoped(scope.invoiceIds, () =>
+      db.query.invoices.findMany({
+        where: and(
+          eq(schema.invoices.orgId, orgId),
+          ...(scope.invoiceIds
+            ? [inArray(schema.invoices.id, scope.invoiceIds)]
+            : []),
+        ),
+        with: {
+          entryInvoices: {
+            with: { entry: { columns: { id: true, entryNumber: true } } },
+          },
+        },
       }),
     ),
     scoped(scope.entryIds, () =>
@@ -250,6 +283,7 @@ export async function getEvents(opts?: {
     ["entry", new Set(entryRows.map((e) => e.id))],
     ["shipment", new Set(shipmentRows.map((s) => s.id))],
     ["purchase_order", new Set(poRows.map((p) => p.id))],
+    ["invoice", new Set(invoiceRows.map((i) => i.id))],
     ["refund_claim", new Set(refundRows.map((r) => r.id))],
     ["quote_sheet", new Set(filteredSheets.map((q) => q.id))],
     ["part", new Set(partRows.map((p) => p.id))],
@@ -270,7 +304,8 @@ export async function getEvents(opts?: {
       occurredOn: e.entryDate!,
       dateBasis: "exact",
       recordedAt: iso(e.createdAt),
-      title: `Entry ${e.entryNumber} ${e.status === "draft" ? "created" : "filed"}`,
+      // An entry row only exists because a 7501 was processed — always filed.
+      title: `Entry ${e.entryNumber} filed`,
       detail:
         duties > 0
           ? `${formatCents(duties)} duties & fees at ${e.portOfEntry ?? "port"}`
@@ -307,12 +342,10 @@ export async function getEvents(opts?: {
         }),
       });
     }
-    const arrived =
-      s.status === "arrived" || s.status === "delivered"
-        ? (s.eta ?? null)
-        : s.eta && s.eta <= today
-          ? s.eta
-          : null;
+    // Arrival derives from the ETA having passed — the same evidence the
+    // derived shipment status uses (an entry link adds nothing here: the
+    // event needs a date, and ETA is the only arrival date we ingest).
+    const arrived = s.eta && s.eta <= today ? s.eta : null;
     if (arrived) {
       shipmentEvents.push({
         id: `shipment_arrived:${s.id}`,
@@ -345,6 +378,34 @@ export async function getEvents(opts?: {
       kind: "system",
     }),
   }));
+
+  // Stub invoice rows (minted from a 7501's referenced invoice numbers
+  // before the CI itself arrives) carry only a number — no "received" event
+  // until the document lands and fills the row in.
+  const invoiceEvents: BusinessEvent[] = invoiceRows
+    .filter((inv) => inv.invoiceDate !== null || inv.totalAmount !== null)
+    .map((inv) => ({
+      id: `invoice_received:${inv.id}`,
+      type: "invoice_received" as const,
+      occurredOn: inv.invoiceDate ?? inv.createdAt.toISOString().slice(0, 10),
+      dateBasis: inv.invoiceDate ? ("exact" as const) : ("recorded" as const),
+      recordedAt: iso(inv.createdAt),
+      title: `Invoice ${inv.invoiceNumber} received${inv.supplierName ? ` from ${inv.supplierName}` : ""}`,
+      amountCents: centsOf(inv.totalAmount),
+      amountTone: "neutral" as const,
+      entityRefs: [
+        { type: "invoice" as const, id: inv.id, label: inv.invoiceNumber },
+        ...inv.entryInvoices.map(({ entry }) => ({
+          type: "entry" as const,
+          id: entry.id,
+          label: entry.entryNumber,
+          href: `/entries/${entry.id}`,
+        })),
+      ],
+      provenance: docProvenance(docsByEntity, "invoice", inv.id, {
+        kind: "system",
+      }),
+    }));
 
   const refundEvents: BusinessEvent[] = refundRows.map((r) => {
     const stage = deriveRefundStage(r.claimStatus, r.refundStatus);
@@ -474,13 +535,34 @@ export async function getEvents(opts?: {
     provenance: docProvenance(docsByEntity, "part", p.id, { kind: "system" }),
   }));
 
-  const COST_FIELDS = new Set(["unit_cost", "unitCost", "country_of_origin", "countryOfOrigin", "manufacturer", "name", "description"]);
+  const COST_FIELDS = new Set(["unit_cost", "unitCost", "country_of_origin", "countryOfOrigin", "name", "description"]);
+  // Cost/COO changes are scoped to a (part, vendor) source row — pull the
+  // vendor names so titles can say whose price moved.
+  const changeVendorIds = [
+    ...new Set(
+      fieldChangeRows
+        .map((fc) => fc.vendorId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
+  const changeVendors = changeVendorIds.length
+    ? await db.query.vendors.findMany({
+        where: inArray(schema.vendors.id, changeVendorIds),
+        columns: { id: true, name: true },
+      })
+    : [];
+  const vendorNameById = new Map(changeVendors.map((v) => [v.id, v.name]));
+
   const fieldChangeEvents: BusinessEvent[] = [];
   for (const fc of fieldChangeRows) {
     const isHts = fc.field === "hts_code" || fc.field === "htsCode";
     if (!isHts && !COST_FIELDS.has(fc.field)) continue;
     const part = partById.get(fc.entityId);
     const sku = part?.sku ?? "unknown SKU";
+    const vendorSuffix =
+      fc.vendorId && vendorNameById.has(fc.vendorId)
+        ? ` — ${vendorNameById.get(fc.vendorId)}`
+        : "";
     fieldChangeEvents.push({
       id: `${isHts ? "hts_changed" : "cost_changed"}:${fc.id}`,
       type: isHts ? "hts_changed" : "cost_changed",
@@ -489,7 +571,7 @@ export async function getEvents(opts?: {
       recordedAt: iso(fc.createdAt),
       title: isHts
         ? `HTS code changed on ${sku}`
-        : `${fc.field.replace(/_/g, " ")} changed on ${sku}`,
+        : `${fc.field.replace(/_/g, " ")} changed on ${sku}${vendorSuffix}`,
       delta: { field: fc.field, from: fc.oldValue, to: fc.newValue },
       entityRefs: [
         {
@@ -533,6 +615,7 @@ export async function getEvents(opts?: {
       entryEvents,
       shipmentEvents,
       poEvents,
+      invoiceEvents,
       refundEvents,
       quoteSheetEvents,
       quoteLineEvents,

@@ -44,6 +44,11 @@ export const eventMeta: Record<
     label: "PO",
     ringClass: "bg-slate-500/10 text-slate-700 dark:text-slate-400",
   },
+  invoice_received: {
+    icon: ReceiptText,
+    label: "Invoice",
+    ringClass: "bg-teal-500/10 text-teal-700 dark:text-teal-400",
+  },
   refund_update: {
     icon: BadgeDollarSign,
     label: "Refund",

@@ -19,7 +19,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { auditEntry } from "../audit/auditor";
 import * as schema from "../db/schema";
 import { loadReferenceData, type DbClient } from "../duty/reference";
-import { dayBefore } from "./apply";
+import { planCloseDate, planWindow } from "../effective-dating";
 import type { BaseDiff, PreparedBaseRow } from "./types";
 
 export type BaseWindowPlan =
@@ -35,10 +35,7 @@ export function planBaseWindow(
   currentValidFrom: string | null,
   effectiveDate: string,
 ): BaseWindowPlan {
-  if (currentValidFrom === null || effectiveDate > currentValidFrom) {
-    return { action: "tile", closePredecessorAt: dayBefore(effectiveDate) };
-  }
-  return { action: "update_in_place" };
+  return planWindow(currentValidFrom, effectiveDate);
 }
 
 /** Pure close-date decision for a REMOVED code, test-pinned: the last valid
@@ -49,11 +46,7 @@ export function planBaseClose(
   currentValidFrom: string | null,
   effectiveDate: string,
 ): string {
-  const closeAt = dayBefore(effectiveDate);
-  if (currentValidFrom !== null && closeAt < currentValidFrom) {
-    return currentValidFrom;
-  }
-  return closeAt;
+  return planCloseDate(currentValidFrom, effectiveDate);
 }
 
 export type ReauditSummary = {

@@ -3,15 +3,24 @@
 // directly. Money is compared in integer cents; tolerances and the severity
 // ladder are legacy-verified values.
 //
+// Document-comparison doctrine (settled 2026-08-06): the COMMERCIAL INVOICE
+// is the only document class an entry is compared against for variance —
+// the CI rules live in ./invoice-rules.ts. PO and shipment document
+// comparisons were deliberately retired (the old rule 7 PO-total check is
+// gone; PO scope never matched entry scope). Catalog comparisons (rules 5
+// and 10) remain: they check the entry against master data, a different
+// axis than documents.
+//
 // Relative imports on purpose — this module runs under the tsx seed script.
 
-import { computeExpectedCharges } from "../duty/calculator";
+import { computeExpectedCharges, isExemptionActive } from "../duty/calculator";
 import type { ReferenceData, SailBasis, SailInfo } from "../duty/types";
 import type {
   AuditAlertTypeValue,
   AuditSeverityValue,
   ChargeTypeValue,
 } from "../db/schema";
+import { computeInvoiceAlerts } from "./invoice-rules";
 
 export type AuditableCharge = {
   id: string;
@@ -29,18 +38,53 @@ export type AuditableLine = {
   htsCode: string;
   htsCodeDigits: string;
   countryOfOrigin: string | null;
+  /** Resolved per-line vendor; null when the 7501 named no supplier. */
+  vendorId: string | null;
   enteredValue: string;
-  /** Catalog HTS when the line matched a part; null otherwise. */
+  quantity: string | null;
+  /** Catalog HTS AS OF THE ENTRY DATE when the line matched a part; null
+   *  otherwise. The governing expectation: what the catalog said the code
+   *  was on the day this entry was filed. */
   partHtsCode: string | null;
+  /** Catalog HTS under the CURRENT classification window (today's opinion).
+   *  Differs from partHtsCode when the part was reclassified after the
+   *  entry — the retroactive-correction signal. */
+  partHtsCodeCurrent: string | null;
+  /** valid_from of the current classification window; null = open start or
+   *  no current window. Display metadata for the reclassified signal. */
+  partHtsCurrentSince: string | null;
+  /** The matched part's (vendor, COO) sourcing facts AS OF THE ENTRY DATE —
+   *  empty when the line matched no part or the part is draft (nothing on a
+   *  draft is committed). */
+  partSources: {
+    vendorId: string;
+    vendorName: string;
+    countryOfOrigin: string | null;
+  }[];
   charges: AuditableCharge[];
+};
+
+export type AuditableInvoiceLine = {
+  sku: string | null;
+  /** HTS/HS code as printed on the invoice line — often 6/8 digits. */
+  htsCode: string | null;
+  htsCodeDigits: string | null;
+  countryOfOrigin: string | null;
+  quantity: string | null;
+  totalPrice: string;
 };
 
 export type AuditableInvoice = {
   invoiceNumber: string;
+  /** ISO 4217. Money comparisons gate on USD — there is no FX support, and
+   *  comparing a EUR invoice against USD entered value fabricates variance. */
+  currency: string;
   totalAmount: string | null;
-  /** Sum of invoice line totals, precomputed by the loader. */
-  lineTotalSum: string;
-  lineCount: number;
+  lines: AuditableInvoiceLine[];
+  /** How many entries this invoice links to via entry_invoices. SKU and
+   *  header checks require exactly 1 — an invoice spanning entries cannot
+   *  reconcile against any single one (normal consolidation, not a finding). */
+  linkedEntryCount: number;
 };
 
 export type AuditableEntry = {
@@ -51,8 +95,8 @@ export type AuditableEntry = {
    *  null = the loader had no shipment data. */
   sail: SailInfo | null;
   lines: AuditableLine[];
-  linkedPos: { poNumber: string; totalAmount: string | null }[];
-  /** Invoices reached through this entry's POs. */
+  /** Invoices DIRECTLY linked via entry_invoices — the primary document
+   *  truth the entry is checked against (see invoice-rules.ts). */
   linkedInvoices: AuditableInvoice[];
 };
 
@@ -76,10 +120,8 @@ export type AuditConfig = {
   /** Trust gate: max(absCents, pct of header total duty). */
   trustGateAbsCents: number;
   trustGatePct: number;
-  /** PO totals differ in scope from entry values — be generous. */
-  poVarianceTolerancePct: number;
-  /** Invoices share the PO scope problem — same generosity. */
-  invoiceVarianceTolerancePct: number;
+  /** CI-vs-entry quantity comparison tolerance, in units. */
+  quantityToleranceUnits: number;
 };
 
 export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
@@ -89,8 +131,7 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
   valueTolerancePct: 0.01,
   trustGateAbsCents: 200,
   trustGatePct: 0.01,
-  poVarianceTolerancePct: 0.1,
-  invoiceVarianceTolerancePct: 0.1,
+  quantityToleranceUnits: 0.01,
 };
 
 const DUTY_CHARGE_TYPES: ReadonlySet<ChargeTypeValue> = new Set([
@@ -105,10 +146,11 @@ const ADDITIONAL_CHARGE_TYPES: ReadonlySet<ChargeTypeValue> = new Set([
   "countervailing",
 ]);
 
-const toCents = (v: string | null): number | null =>
+// Money helpers, shared with invoice-rules.ts.
+export const toCents = (v: string | null): number | null =>
   v === null ? null : Math.round(Number(v) * 100);
-const dollars = (cents: number) => cents / 100;
-const fmt = (cents: number) =>
+export const dollars = (cents: number) => cents / 100;
+export const fmt = (cents: number) =>
   `$${Math.abs(dollars(cents)).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -116,7 +158,10 @@ const fmt = (cents: number) =>
 const pctLabel = (rate: number) => `${Math.round(rate * 10000) / 100}%`;
 
 /** error > $50 or > 10%; warning > $5 or > 2%; else info. */
-function moneySeverity(diffCents: number, baseCents: number): AuditSeverityValue {
+export function moneySeverity(
+  diffCents: number,
+  baseCents: number,
+): AuditSeverityValue {
   const abs = Math.abs(diffCents);
   const pct = baseCents > 0 ? abs / baseCents : 0;
   if (abs > 50_00 || pct > 0.1) return "error";
@@ -132,11 +177,39 @@ export function computeEntryAlerts(
   const alerts: DesiredAlert[] = [];
 
   // ---- Rule 5: HTS vs catalog (runs regardless of the trust gate) --------
+  // The comparison target is the catalog code AS OF THE ENTRY DATE — the
+  // expectation that governed the filing. Rule 5b catches the complement:
+  // the declaration matched its day's expectation, but the part has since
+  // been reclassified, so duty may be retroactively recoverable.
   const htsDiscrepancyLines = new Set<string>();
   for (const line of entry.lines) {
     if (!line.partHtsCode) continue;
     const catalogDigits = line.partHtsCode.replace(/\D/g, "");
-    if (catalogDigits === line.htsCodeDigits) continue;
+    const currentDigits = line.partHtsCodeCurrent?.replace(/\D/g, "") ?? null;
+    if (catalogDigits === line.htsCodeDigits) {
+      // ---- Rule 5b: reclassified after filing --------------------------
+      if (currentDigits !== null && currentDigits !== catalogDigits) {
+        alerts.push({
+          alertKey: `hts_reclassified:line${line.lineNumber}`,
+          alertType: "hts_reclassified",
+          severity: "info",
+          label: "Classification changed after filing",
+          message: `Line ${line.lineNumber} (${line.sku ?? "no SKU"}) was filed under ${line.htsCode}, which matched the catalog at entry time; the part is now classified ${line.partHtsCodeCurrent}${line.partHtsCurrentSince ? ` (effective ${line.partHtsCurrentSince})` : ""}. If the reclassification applies retroactively, duty may be recoverable.`,
+          details: {
+            declared_hts: line.htsCode,
+            expected_hts_as_of: line.partHtsCode,
+            expected_hts_current: line.partHtsCodeCurrent,
+            current_effective_from: line.partHtsCurrentSince,
+            line_number: line.lineNumber,
+            sku: line.sku,
+          },
+          lineItemId: line.id,
+        });
+      }
+      // The declared code matched the governing expectation of its day —
+      // money rules still run (no htsDiscrepancyLines suppression).
+      continue;
+    }
     htsDiscrepancyLines.add(line.id);
     const firstSixAgree =
       catalogDigits.slice(0, 6) === line.htsCodeDigits.slice(0, 6);
@@ -148,12 +221,78 @@ export function computeEntryAlerts(
       message: `Line ${line.lineNumber} (${line.sku ?? "no SKU"}) is declared as ${line.htsCode}, but the catalog classifies this part as ${line.partHtsCode}.`,
       details: {
         expected_hts: line.partHtsCode,
+        expected_hts_as_of: line.partHtsCode,
+        expected_hts_current: line.partHtsCodeCurrent,
         actual_hts: line.htsCode,
         line_number: line.lineNumber,
         sku: line.sku,
       },
       lineItemId: line.id,
     });
+  }
+
+  // ---- Rule 10: COO vs catalog (runs regardless of the trust gate) ------
+  // The catalog's sourcing truth is per (part, vendor). When the line names
+  // a vendor we know for this part, its source COO is THE expectation
+  // (warning on mismatch). When the vendor is unknown — or known but with no
+  // source row — any source origin is acceptable; only a COO no vendor of
+  // this part carries gets flagged, and softly (info): we can't pin which
+  // vendor should have shipped it. Never suppresses rules 1-4 — money
+  // expectations run on the DECLARED origin, which is the customs fact.
+  for (const line of entry.lines) {
+    if (!line.countryOfOrigin || line.partSources.length === 0) continue;
+
+    const vendorSource =
+      line.vendorId === null
+        ? undefined
+        : line.partSources.find((s) => s.vendorId === line.vendorId);
+
+    if (vendorSource) {
+      if (
+        vendorSource.countryOfOrigin !== null &&
+        vendorSource.countryOfOrigin !== line.countryOfOrigin
+      ) {
+        alerts.push({
+          alertKey: `coo_discrepancy:line${line.lineNumber}`,
+          alertType: "coo_discrepancy",
+          severity: "warning",
+          label: "Origin differs from catalog",
+          message: `Line ${line.lineNumber} (${line.sku ?? "no SKU"}) is declared with origin ${line.countryOfOrigin}, but the catalog sources this part from ${vendorSource.vendorName} with origin ${vendorSource.countryOfOrigin}.`,
+          details: {
+            declared_coo: line.countryOfOrigin,
+            expected_coo: vendorSource.countryOfOrigin,
+            vendor_name: vendorSource.vendorName,
+            line_number: line.lineNumber,
+            sku: line.sku,
+          },
+          lineItemId: line.id,
+        });
+      }
+    } else {
+      const knownCoos = [
+        ...new Set(
+          line.partSources
+            .map((s) => s.countryOfOrigin)
+            .filter((c): c is string => c !== null),
+        ),
+      ].sort();
+      if (knownCoos.length > 0 && !knownCoos.includes(line.countryOfOrigin)) {
+        alerts.push({
+          alertKey: `coo_discrepancy:line${line.lineNumber}`,
+          alertType: "coo_discrepancy",
+          severity: "info",
+          label: "Origin differs from catalog",
+          message: `Line ${line.lineNumber} (${line.sku ?? "no SKU"}) is declared with origin ${line.countryOfOrigin}, but no catalog vendor for this part has that origin (${knownCoos.join(", ")}).`,
+          details: {
+            declared_coo: line.countryOfOrigin,
+            expected_coos: knownCoos,
+            line_number: line.lineNumber,
+            sku: line.sku,
+          },
+          lineItemId: line.id,
+        });
+      }
+    }
   }
 
   // ---- Rule 0: trust gate ------------------------------------------------
@@ -293,8 +432,10 @@ export function computeEntryAlerts(
         if (!c.htsCodeDigits) continue;
         if (declaredMatchesExpected(c.htsCodeDigits, expected.measures)) continue;
 
-        const refRow = ref.htsByDigits.get(c.htsCodeDigits);
-        if (refRow?.exemption) continue; // exclusion codes are always allowed
+        // Exclusion codes are allowed — but only on entries their measure
+        // window covers (entry-date-aware; falls back to the current-row
+        // flag when the ref carries no exemption windows).
+        if (isExemptionActive(c.htsCodeDigits, entry.entryDate!, ref)) continue;
         // Chapter 99 digits may back several measure windows; prefer the
         // one active on the entry date, fall back to any (display only).
         const refMeasure =
@@ -480,98 +621,10 @@ export function computeEntryAlerts(
     }
   }
 
-  // ---- Rule 7: PO totals vs entered value (info only — PO scope is not
-  // entry scope, so this is a prompt to look, not a finding) ---------------
-  if (
-    headerValueCents !== null &&
-    entry.linkedPos.length > 0 &&
-    entry.linkedPos.every((po) => po.totalAmount !== null)
-  ) {
-    let poSumCents = 0;
-    for (const po of entry.linkedPos) poSumCents += toCents(po.totalAmount) ?? 0;
-    const diff = Math.abs(poSumCents - headerValueCents);
-    if (poSumCents > 0 && diff > Math.round(poSumCents * config.poVarianceTolerancePct)) {
-      alerts.push({
-        alertKey: "value_mismatch:po_total",
-        alertType: "value_mismatch",
-        severity: "info",
-        label: "PO total variance",
-        message: `The ${entry.linkedPos.length} linked purchase order(s) total ${fmt(poSumCents)}, vs ${fmt(headerValueCents)} entered on this entry. POs can span multiple entries, so this is informational.`,
-        details: {
-          expected_amount: dollars(poSumCents),
-          actual_amount: dollars(headerValueCents),
-          difference_amount: dollars(diff),
-        },
-        lineItemId: null,
-      });
-    }
-  }
-
-  // ---- Rule 8: invoice internal consistency (header vs line sum) ---------
-  // An invoice whose own lines don't add up poisons any entry-vs-invoice
-  // comparison, so it is flagged per invoice, before rule 9.
-  const consistentInvoices: AuditableInvoice[] = [];
-  for (const inv of entry.linkedInvoices) {
-    const headerCents = toCents(inv.totalAmount);
-    if (headerCents === null || inv.lineCount === 0) {
-      if (headerCents !== null) consistentInvoices.push(inv);
-      continue;
-    }
-    const lineSumCents = toCents(inv.lineTotalSum) ?? 0;
-    const diff = Math.abs(lineSumCents - headerCents);
-    const tolerance = Math.max(
-      config.valueToleranceAbsCents,
-      Math.round(headerCents * config.valueTolerancePct),
-    );
-    if (diff > tolerance) {
-      alerts.push({
-        alertKey: `value_mismatch:invoice:${inv.invoiceNumber}`,
-        alertType: "value_mismatch",
-        severity: moneySeverity(diff, headerCents),
-        label: "Invoice total mismatch",
-        message: `Invoice ${inv.invoiceNumber} reports ${fmt(headerCents)}, but its ${inv.lineCount} line(s) total ${fmt(lineSumCents)}.`,
-        details: {
-          invoice_number: inv.invoiceNumber,
-          expected_amount: dollars(headerCents),
-          actual_amount: dollars(lineSumCents),
-          difference_amount: dollars(diff),
-        },
-        lineItemId: null,
-      });
-    } else {
-      consistentInvoices.push(inv);
-    }
-  }
-
-  // ---- Rule 9: invoice totals vs entered value (info only — invoices
-  // share the PO scope problem, so this is a prompt to look) ---------------
-  if (
-    headerValueCents !== null &&
-    consistentInvoices.length > 0 &&
-    consistentInvoices.length === entry.linkedInvoices.length
-  ) {
-    let invSumCents = 0;
-    for (const inv of consistentInvoices) invSumCents += toCents(inv.totalAmount) ?? 0;
-    const diff = Math.abs(invSumCents - headerValueCents);
-    if (
-      invSumCents > 0 &&
-      diff > Math.round(invSumCents * config.invoiceVarianceTolerancePct)
-    ) {
-      alerts.push({
-        alertKey: "value_mismatch:invoice_total",
-        alertType: "value_mismatch",
-        severity: "info",
-        label: "Invoice total variance",
-        message: `The ${consistentInvoices.length} linked commercial invoice(s) total ${fmt(invSumCents)}, vs ${fmt(headerValueCents)} entered on this entry. Invoices attach via POs and can span multiple entries, so this is informational.`,
-        details: {
-          expected_amount: dollars(invSumCents),
-          actual_amount: dollars(headerValueCents),
-          difference_amount: dollars(diff),
-        },
-        lineItemId: null,
-      });
-    }
-  }
+  // ---- Rules 8-15: commercial-invoice document comparisons ---------------
+  // The CI is the primary document the entry is checked against; the whole
+  // family lives in invoice-rules.ts.
+  alerts.push(...computeInvoiceAlerts(entry, config));
 
   return alerts;
 }

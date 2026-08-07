@@ -18,7 +18,7 @@ export function deriveRefundStage(
   return "processing";
 }
 
-/** "231-4501287-4" -> "23145012874" — the cross-system matching key. */
+/** "300-1234567-8" -> "30012345678" — the cross-system matching key. */
 export function normalizeEntryNumber(entryNumber: string): string {
   return entryNumber.replace(/\D/g, "");
 }

@@ -165,3 +165,83 @@ describe("effectiveDutyRate", () => {
     expect(effectiveDutyRate(null, 1000000)).toBeNull();
   });
 });
+
+describe("resolveChargeBucket: entry-date measure windows", () => {
+  // One Ch99 digits string backed by two tiled measure windows under
+  // DIFFERENT authorities — the bucket must follow the window active on
+  // the entry date, not blindly take the latest row.
+  const mkMeasure = (
+    id: string,
+    authority: "section_301" | "ieepa",
+    effectiveDate: string,
+    endDate: string | null,
+  ) => ({
+    id,
+    name: `measure ${id}`,
+    authority,
+    scope: "hts_list" as const,
+    countries: null,
+    effectiveDate,
+    endDate,
+    sailedOnOrAfter: null,
+    sailedOnOrBefore: null,
+    inLieuOfBaseDuty: false,
+    ch99Code: "9903.99.99",
+    ch99Digits: "99039999",
+    rate: 0.1,
+    exclusionDigits: [],
+    prefixes: [],
+  });
+  const windowedRef = {
+    htsByDigits: new Map([
+      [
+        "99039999",
+        {
+          code: "9903.99.99",
+          codeDigits: "99039999",
+          description: "windowed measure line",
+          chapter: 99,
+          rateType: "ad_valorem" as const,
+          rate: 0.1,
+          exemption: false,
+          tradeMeasureId: "m2", // latest window backs the flat map
+        },
+      ],
+    ]),
+    measures: [
+      mkMeasure("m1", "section_301", "2026-01-01", "2026-05-31"),
+      mkMeasure("m2", "ieepa", "2026-06-01", null),
+    ],
+    stackingRules: [],
+  };
+
+  it("buckets by the measure window active on the entry date", () => {
+    expect(
+      resolveChargeBucket("additional_duty", "99039999", windowedRef, "2026-03-15"),
+    ).toBe("section_301");
+    expect(
+      resolveChargeBucket("additional_duty", "99039999", windowedRef, "2026-07-01"),
+    ).toBe("ieepa");
+  });
+
+  it("falls back to the latest-window row without an entry date", () => {
+    expect(resolveChargeBucket("additional_duty", "99039999", windowedRef)).toBe(
+      "ieepa",
+    );
+  });
+
+  it("threads the entry date through the breakdown rollup", () => {
+    const charges: BucketableCharge[] = [
+      {
+        chargeType: "additional_duty",
+        htsCodeDigits: "99039999",
+        rate: "0.10",
+        amount: "1000.00",
+      },
+    ];
+    const early = computeAuthorityBreakdown(charges, windowedRef, "2026-03-15");
+    expect(early.map((b) => b.bucket)).toEqual(["section_301"]);
+    const late = computeAuthorityBreakdown(charges, windowedRef, "2026-07-01");
+    expect(late.map((b) => b.bucket)).toEqual(["ieepa"]);
+  });
+});

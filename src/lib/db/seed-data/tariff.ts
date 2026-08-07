@@ -1,8 +1,9 @@
 // Tariff reference seed: the HTS schedule subset covering the demo parts
 // catalog, a small realistic set of Chapter 99 trade measures, and the
-// stacking rules between them. This module is the single source of truth —
-// scripts/seed.ts loads it into the DB, and the stub processor and the
-// calculator tests use it directly in memory. The USITC sync replaces
+// stacking rules between them. This module is the single source of truth
+// for SEEDING — scripts/seed.ts loads it into the DB, and the calculator
+// tests use it directly in memory. Runtime consumers (auditor, stub
+// processor) read the DB via loadReferenceData. The USITC sync replaces
 // exactly this file's data.
 //
 // Ported from mobynew with ONE deliberate change: the Section 122 sail-tiled
@@ -30,13 +31,6 @@ import type {
 /** ISO date `offset` days from seed day (negative = past). */
 export type DayFn = (offset: number) => string;
 
-// MPF/HMF are ingested facts on entries, never computed downstream. These
-// nominal rates exist for the seed's fabricated declared values, the stub
-// processor, and *estimated* landed cost, which applies them uncapped with
-// an explicit caveat (CBP per-entry minimums/caps are unknowable per part).
-export const MPF_RATE = 0.003464;
-export const HMF_RATE = 0.00125;
-
 // Base-schedule window metadata for seed rows: one open-ended window per
 // code (valid_to null = current), stamped with a synthetic release id so
 // the tariff sync's change-tiling has a baseline to succeed.
@@ -61,6 +55,10 @@ export const HTS_SEED: HtsSeed[] = [
   { code: "8507.60.0020", description: "Lithium-ion storage batteries, other", rateType: "ad_valorem", rate: 0.034, col1General: "3.4%" },
   { code: "8512.10.2000", description: "Lighting equipment of a kind used on bicycles", rateType: "free", rate: 0, col1General: "Free" },
   { code: "8531.20.0040", description: "Indicator panels incorporating LCD or LED displays", rateType: "free", rate: 0, col1General: "Free" },
+  // EB-DSP-LCD's ORIGINAL classification, superseded at day(-40) by the
+  // Free indicator-panel code above — the reclassification storyline's old
+  // code. Dutiable, so entries filed under it imply recoverable base duty.
+  { code: "8531.80.9051", description: "Other electric sound or visual signalling apparatus", rateType: "ad_valorem", rate: 0.013, col1General: "1.3%" },
   { code: "8714.91.3000", description: "Bicycle frames, of aluminum alloy", rateType: "ad_valorem", rate: 0.039, col1General: "3.9%" },
   { code: "8714.91.5000", description: "Bicycle forks", rateType: "ad_valorem", rate: 0.039, col1General: "3.9%" },
   { code: "8714.92.1000", description: "Wheel rims for bicycles", rateType: "ad_valorem", rate: 0.05, col1General: "5%" },

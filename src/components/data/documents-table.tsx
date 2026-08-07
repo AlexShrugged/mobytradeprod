@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
+  CornerDownRight,
   Download,
   FileJson,
   MoreHorizontal,
@@ -36,6 +37,7 @@ import {
 } from "@/components/ui/table";
 import type { DocumentListItem, IntegrationKind } from "@/lib/db/schema";
 import { docTypeLabel, formatBytes, formatDateTime } from "@/lib/format";
+import { packetRoleLabel, pageRangeLabel } from "@/lib/processing/packet";
 
 // Mirrors DocumentWithSource from queries/documents.ts (type-only — the
 // query module itself is server-only).
@@ -50,6 +52,34 @@ const sourceKindLabels: Record<IntegrationKind, string> = {
   email_inbox: "Email",
   erp: "ERP",
 };
+
+// Packet children render directly under their parent, indented; a child
+// whose parent fell out of the list (filtered away) renders as a root.
+function orderWithChildren(documents: DocumentRow[]): DocumentRow[] {
+  const ids = new Set(documents.map((d) => d.id));
+  const childrenByParent = new Map<string, DocumentRow[]>();
+  for (const doc of documents) {
+    if (doc.parentDocumentId && ids.has(doc.parentDocumentId)) {
+      const list = childrenByParent.get(doc.parentDocumentId) ?? [];
+      list.push(doc);
+      childrenByParent.set(doc.parentDocumentId, list);
+    }
+  }
+  const ordered: DocumentRow[] = [];
+  for (const doc of documents) {
+    if (doc.parentDocumentId && ids.has(doc.parentDocumentId)) continue;
+    ordered.push(doc);
+    const children = childrenByParent.get(doc.id);
+    if (children) {
+      ordered.push(
+        ...[...children].sort(
+          (a, b) => (a.pageRange?.[0] ?? 0) - (b.pageRange?.[0] ?? 0),
+        ),
+      );
+    }
+  }
+  return ordered;
+}
 
 export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
   const router = useRouter();
@@ -108,13 +138,37 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
                 </TableCell>
               </TableRow>
             ) : (
-              documents.map((doc) => {
+              orderWithChildren(documents).map((doc) => {
                 const isBusy = processingId === doc.id;
                 const status = isBusy ? "processing" : doc.status;
+                const isChild = doc.parentDocumentId !== null;
                 return (
                   <TableRow key={doc.id}>
                     <TableCell className="max-w-64">
-                      <div className="truncate font-medium">{doc.fileName}</div>
+                      <div
+                        className={
+                          isChild
+                            ? "flex items-center gap-1.5 pl-5"
+                            : undefined
+                        }
+                      >
+                        {isChild ? (
+                          <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" />
+                        ) : null}
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">
+                            {doc.fileName}
+                          </div>
+                          {isChild && doc.packetRole ? (
+                            <div className="text-xs text-muted-foreground">
+                              {packetRoleLabel(doc.packetRole)}
+                              {doc.pageRange?.length
+                                ? ` · ${pageRangeLabel(doc.pageRange)}`
+                                : ""}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                       {doc.status === "failed" && doc.errorMessage && (
                         <div className="truncate text-xs text-destructive">
                           {doc.errorMessage}

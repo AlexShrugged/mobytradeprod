@@ -52,6 +52,17 @@ export function formatRate(value: string | number | null | undefined): string {
   return `${rounded}%`;
 }
 
+/** Digits-normalized dotted HTS rendering: "8714949000" or "8714.94.90.00"
+ *  → "8714.94.9000"; 8-digit Chapter 99 codes → "9903.88.01". */
+export function formatHts(code: string | null | undefined): string {
+  if (!code) return "—";
+  const d = code.replace(/\D/g, "");
+  if (d.length < 6) return code;
+  const parts = [d.slice(0, 4), d.slice(4, 6)];
+  if (d.length > 6) parts.push(d.slice(6, 10));
+  return parts.join(".");
+}
+
 const docTypeLabels: Record<string, string> = {
   port_entry: "Port entry",
   shipment: "Shipment",
@@ -60,6 +71,7 @@ const docTypeLabels: Record<string, string> = {
   packing_list: "Packing list",
   quote_sheet: "Quote sheet",
   refund_report: "Refund report",
+  entry_packet: "Entry packet",
   other: "Other",
 };
 

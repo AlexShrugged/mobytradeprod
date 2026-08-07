@@ -1,14 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, FileText, Ship } from "lucide-react";
+import {
+  ArrowLeft,
+  FileText,
+  Paperclip,
+  ReceiptText,
+  Ship,
+  type LucideIcon,
+} from "lucide-react";
 
 import { AlertList } from "@/components/entries/alert-list";
 import { DutiesPopover } from "@/components/entries/duties-popover";
 import { LineItemsTable } from "@/components/entries/line-items-table";
-import { DocumentChip } from "@/components/document-chip";
+import { DocumentRail } from "@/components/document-rail";
 import { StatTile } from "@/components/stat-tile";
 import { StatusBadge } from "@/components/status-badge";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,7 +24,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { DutyBucket } from "@/lib/duty/authority";
-import { getEntryDetail } from "@/lib/db/queries/entries";
+import { getEntryDetail, type EntryDocument } from "@/lib/db/queries/entries";
+import { liquidationWindow } from "@/lib/variance/window";
 import { formatCents, formatDate, formatMoney } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +70,22 @@ export default async function EntryDetailPage({
     (sum, b) => sum + b.amountCents,
     0,
   );
+  const window = liquidationWindow(
+    entry.entryDate,
+    entry.status,
+    new Date().toISOString().slice(0, 10),
+  );
+
+  // First (worst-severity) open alert per line — the State pill's jump into
+  // the reconciliation page. entry.alerts is already open-first, severity
+  // ordered.
+  const varianceHrefByLineNumber: Record<number, string> = {};
+  for (const a of entry.alerts) {
+    if (a.status !== "open" || a.lineNumber === null) continue;
+    if (!(a.lineNumber in varianceHrefByLineNumber)) {
+      varianceHrefByLineNumber[a.lineNumber] = `/variance/${a.id}`;
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -82,6 +105,9 @@ export default async function EntryDetailPage({
           {formatDate(entry.entryDate)} · {entry.portOfEntry ?? "port unknown"}
           {entry.entryType ? ` · type ${entry.entryType}` : ""}
           {entry.importerOfRecord ? ` · ${entry.importerOfRecord}` : ""}
+          {!window.closed && window.estDate
+            ? ` · est. liquidation ${formatDate(window.estDate)} · ${window.daysLeft}d left`
+            : ""}
         </p>
       </div>
 
@@ -112,217 +138,289 @@ export default async function EntryDetailPage({
           tone={entry.totalRefund !== null ? "green" : "default"}
         />
         <StatTile
-          label="Effective rate"
-          value={
-            entry.effectiveDutyRate === null
-              ? "—"
-              : `${(entry.effectiveDutyRate * 100).toFixed(2)}%`
-          }
-          hint="total duty / entered value"
+          label="Open variances"
+          value={String(openAlertCount)}
+          tone={openAlertCount > 0 ? "amber" : "default"}
+          hint={openAlertCount > 0 ? "see line state pills" : "all clear"}
         />
       </div>
-
-      {entry.authorityBreakdown.length > 0 && breakdownTotal > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Duty by authority</CardTitle>
-            <CardDescription>
-              Declared charges bucketed by trade-measure authority.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {/* One proportional bar; 2px gaps keep segments legible and the
-                legend below carries identity + amounts (never color alone). */}
-            <div className="flex h-3 w-full gap-[2px] overflow-hidden rounded-full">
-              {entry.authorityBreakdown.map((bucket) => (
-                <div
-                  key={bucket.bucket}
-                  className="h-full rounded-[2px]"
-                  style={{
-                    flexGrow: bucket.amountCents,
-                    flexBasis: 0,
-                    minWidth: "6px",
-                    background: BUCKET_COLORS[bucket.bucket],
-                  }}
-                  title={`${bucket.label} — ${formatCents(bucket.amountCents)}${
-                    bucket.maxRate !== null
-                      ? ` (${(bucket.maxRate * 100).toFixed(2).replace(/\.?0+$/, "")}%)`
-                      : ""
-                  }`}
-                />
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
-              {entry.authorityBreakdown.map((bucket) => (
-                <span
-                  key={bucket.bucket}
-                  className="inline-flex items-center gap-1.5"
-                >
-                  <span
-                    className="size-2.5 shrink-0 rounded-[3px]"
-                    style={{ background: BUCKET_COLORS[bucket.bucket] }}
-                  />
-                  <span className="text-muted-foreground">{bucket.label}</span>
-                  <span className="font-medium tabular-nums">
-                    {formatCents(bucket.amountCents)}
-                  </span>
-                </span>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Audit findings</CardTitle>
-          <CardDescription>
-            {openAlertCount === 0
-              ? "Nothing open — declared charges match our reference data."
-              : `${openAlertCount} open finding${openAlertCount === 1 ? "" : "s"} — expected vs declared, from deterministic rules.`}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AlertList alerts={entry.alerts} />
-        </CardContent>
-      </Card>
-
-      {entry.refundClaims.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Refund status</CardTitle>
-            <CardDescription>
-              From ACE refund reports, matched by entry number.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {entry.refundClaims.map((claim) => (
-              <div
-                key={claim.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
-              >
-                <div className="flex flex-wrap items-center gap-3">
-                  <StatusBadge status={claim.stage} />
-                  <div>
-                    <div className="text-sm font-medium">{claim.claimType}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {claim.refundNumber
-                        ? `Refund #${claim.refundNumber} · `
-                        : ""}
-                      {claim.claimStatus ?? "—"}
-                      {claim.refundStatus ? ` · ${claim.refundStatus}` : ""}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
-                    {formatMoney(claim.totalAmount)}
-                  </div>
-                  <div className="text-xs text-muted-foreground tabular-nums">
-                    {formatMoney(claim.classAmount)} +{" "}
-                    {formatMoney(claim.interestAmount)} interest
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    liquidated {formatDate(claim.liquidationDate)}
-                    {claim.refundDate
-                      ? ` · refunded ${formatDate(claim.refundDate)}`
-                      : ""}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Line items</CardTitle>
           <CardDescription>
-            Declared 7501 lines. Expand a line for its charge-by-charge
-            breakdown against the expected duty stack.
+            Declared 7501 lines. Flagged lines link to their reconciliation;
+            expand a line for its charge-by-charge breakdown against the
+            expected duty stack.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <LineItemsTable lineItems={entry.lineItems} />
+          <LineItemsTable
+            lineItems={entry.lineItems}
+            varianceHrefByLineNumber={varianceHrefByLineNumber}
+          />
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            Linked records &amp; source documents
-          </CardTitle>
-          <CardDescription>
-            The shipments and purchase orders on this entry, and the
-            paperwork behind it via provenance links.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-2">
-          <div className="flex flex-col gap-3">
-            <div>
-              <h4 className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
-                <Ship className="size-4" /> Shipments
-              </h4>
-              <div className="flex flex-wrap gap-1.5">
-                {entry.shipments.length === 0 ? (
-                  <span className="text-sm text-muted-foreground">None</span>
-                ) : (
-                  entry.shipments.map((s) => (
-                    <Badge key={s.id} variant="outline" className="font-normal">
-                      {s.shipmentNumber}
-                    </Badge>
-                  ))
-                )}
-              </div>
-            </div>
-            <div>
-              <h4 className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
-                <FileText className="size-4" /> Purchase orders
-              </h4>
-              <div className="flex flex-wrap gap-1.5">
-                {entry.purchaseOrders.length === 0 ? (
-                  <span className="text-sm text-muted-foreground">None</span>
-                ) : (
-                  entry.purchaseOrders.map((po) => (
-                    <Badge
-                      key={po.id}
-                      variant="outline"
-                      className="font-normal"
-                    >
-                      {po.poNumber}
-                      {po.totalAmount
-                        ? ` · ${formatMoney(po.totalAmount, po.currency)}`
-                        : ""}
-                    </Badge>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-          <div>
-            <h4 className="mb-1.5 text-sm font-medium">Documents</h4>
-            {entry.documents.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No documents linked to this entry yet.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {entry.documents.map((doc) => (
-                  <li key={doc.id}>
-                    <DocumentChip
-                      fileName={doc.fileName}
-                      docType={doc.docType}
-                      fileSize={doc.fileSize}
-                      created={doc.created}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="flex flex-col gap-4 lg:col-span-2">
+          {entry.authorityBreakdown.length > 0 && breakdownTotal > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Duty by authority</CardTitle>
+                <CardDescription>
+                  Declared charges bucketed by trade-measure authority.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {/* One proportional bar; 2px gaps keep segments legible and
+                    the legend below carries identity + amounts (never color
+                    alone). */}
+                <div className="flex h-3 w-full gap-[2px] overflow-hidden rounded-full">
+                  {entry.authorityBreakdown.map((bucket) => (
+                    <div
+                      key={bucket.bucket}
+                      className="h-full rounded-[2px]"
+                      style={{
+                        flexGrow: bucket.amountCents,
+                        flexBasis: 0,
+                        minWidth: "6px",
+                        background: BUCKET_COLORS[bucket.bucket],
+                      }}
+                      title={`${bucket.label} — ${formatCents(bucket.amountCents)}${
+                        bucket.maxRate !== null
+                          ? ` (${(bucket.maxRate * 100).toFixed(2).replace(/\.?0+$/, "")}%)`
+                          : ""
+                      }`}
                     />
-                  </li>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
+                  {entry.authorityBreakdown.map((bucket) => (
+                    <span
+                      key={bucket.bucket}
+                      className="inline-flex items-center gap-1.5"
+                    >
+                      <span
+                        className="size-2.5 shrink-0 rounded-[3px]"
+                        style={{ background: BUCKET_COLORS[bucket.bucket] }}
+                      />
+                      <span className="text-muted-foreground">
+                        {bucket.label}
+                      </span>
+                      <span className="font-medium tabular-nums">
+                        {formatCents(bucket.amountCents)}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Audit findings</CardTitle>
+              <CardDescription>
+                {openAlertCount === 0
+                  ? "Nothing open — declared charges match our reference data."
+                  : `${openAlertCount} open finding${openAlertCount === 1 ? "" : "s"} — expected vs declared, from deterministic rules.`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AlertList alerts={entry.alerts} />
+            </CardContent>
+          </Card>
+
+          {entry.refundClaims.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Refund status</CardTitle>
+                <CardDescription>
+                  From ACE refund reports, matched by entry number.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {entry.refundClaims.map((claim) => (
+                  <div
+                    key={claim.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-3">
+                      <StatusBadge status={claim.stage} />
+                      <div>
+                        <div className="text-sm font-medium">
+                          {claim.claimType}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {claim.refundNumber
+                            ? `Refund #${claim.refundNumber} · `
+                            : ""}
+                          {claim.claimStatus ?? "—"}
+                          {claim.refundStatus ? ` · ${claim.refundStatus}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                        {formatMoney(claim.totalAmount)}
+                      </div>
+                      <div className="text-xs text-muted-foreground tabular-nums">
+                        {formatMoney(claim.classAmount)} +{" "}
+                        {formatMoney(claim.interestAmount)} interest
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        liquidated {formatDate(claim.liquidationDate)}
+                        {claim.refundDate
+                          ? ` · refunded ${formatDate(claim.refundDate)}`
+                          : ""}
+                      </div>
+                    </div>
+                  </div>
                 ))}
-              </ul>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Linked records</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <RecordGroup
+                icon={Ship}
+                label="Shipments"
+                empty={entry.shipments.length === 0}
+              >
+                {entry.shipments.map((s) => (
+                  <RecordRow
+                    key={s.id}
+                    title={s.shipmentNumber}
+                    meta={<StatusBadge status={s.status} />}
+                    documents={s.documents}
+                  />
+                ))}
+              </RecordGroup>
+              <RecordGroup
+                icon={FileText}
+                label="Purchase orders"
+                empty={entry.purchaseOrders.length === 0}
+              >
+                {entry.purchaseOrders.map((po) => (
+                  <RecordRow
+                    key={po.id}
+                    title={po.poNumber}
+                    meta={
+                      po.totalAmount ? (
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {formatMoney(po.totalAmount, po.currency)}
+                        </span>
+                      ) : undefined
+                    }
+                    documents={po.documents}
+                  />
+                ))}
+              </RecordGroup>
+              <RecordGroup
+                icon={ReceiptText}
+                label="Commercial invoices"
+                empty={entry.invoices.length === 0}
+              >
+                {entry.invoices.map((inv) => (
+                  <RecordRow
+                    key={inv.id}
+                    title={inv.invoiceNumber}
+                    meta={
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {inv.totalAmount
+                          ? formatMoney(inv.totalAmount, inv.currency)
+                          : null}
+                        {inv.entryCount > 1
+                          ? `${inv.totalAmount ? " · " : ""}spans ${inv.entryCount} entries`
+                          : null}
+                      </span>
+                    }
+                    documents={inv.documents}
+                    emptyNote={
+                      inv.totalAmount === null
+                        ? "Referenced on the entry — invoice not yet received."
+                        : undefined
+                    }
+                  />
+                ))}
+              </RecordGroup>
+              {entry.entryPaperwork.length > 0 ? (
+                <div>
+                  <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Paperclip className="size-3.5" /> Entry paperwork
+                  </h4>
+                  <DocumentRail documents={entry.entryPaperwork} />
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecordGroup({
+  icon: Icon,
+  label,
+  empty,
+  children,
+}: {
+  icon: LucideIcon;
+  label: string;
+  empty: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Icon className="size-3.5" /> {label}
+      </h4>
+      {empty ? (
+        <span className="text-sm text-muted-foreground">None</span>
+      ) : (
+        <div className="flex flex-col gap-2">{children}</div>
+      )}
+    </div>
+  );
+}
+
+// One business record with the paperwork homed under it. The document rows
+// are the click targets — with no shipment/PO/invoice pages, the source
+// paper IS the drill-down.
+function RecordRow({
+  title,
+  meta,
+  documents,
+  emptyNote,
+}: {
+  title: string;
+  meta?: React.ReactNode;
+  documents: EntryDocument[];
+  emptyNote?: string;
+}) {
+  return (
+    <div className="rounded-md border px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium tabular-nums">{title}</span>
+        {meta}
+      </div>
+      {documents.length > 0 ? (
+        <div className="mt-1.5">
+          <DocumentRail documents={documents} />
+        </div>
+      ) : (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {emptyNote ?? "No document on file yet."}
+        </p>
+      )}
     </div>
   );
 }

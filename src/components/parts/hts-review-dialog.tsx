@@ -83,6 +83,7 @@ function ReviewDialogBody({
   );
   const [manualCode, setManualCode] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  const [effectiveDate, setEffectiveDate] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
   async function act(body: Record<string, unknown>, successPrefix: string) {
@@ -91,7 +92,11 @@ function ReviewDialogBody({
       const res = await fetch(`/api/review-items/${queueItem.item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, notes: notes || undefined }),
+        body: JSON.stringify({
+          ...body,
+          notes: notes || undefined,
+          effectiveDate: effectiveDate || undefined,
+        }),
       });
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
@@ -254,22 +259,40 @@ function ReviewDialogBody({
           />
           {manualCode.trim() !== "" ? (
             <p className="text-xs text-muted-foreground">
-              Codes outside the seeded reference schedule are allowed — duty
+              Codes outside the reference schedule are allowed — duty
               expectations will be unavailable until the schedule covers them.
             </p>
           ) : null}
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="review-notes" className="text-xs">
-            Notes
-          </Label>
-          <Input
-            id="review-notes"
-            placeholder="Why this decision…"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="review-notes" className="text-xs">
+              Notes
+            </Label>
+            <Input
+              id="review-notes"
+              placeholder="Why this decision…"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="review-effective-date" className="text-xs">
+              Effective from (optional)
+            </Label>
+            <Input
+              id="review-effective-date"
+              type="date"
+              value={effectiveDate}
+              onChange={(e) => setEffectiveDate(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank if this code was always correct; set a date to
+              reclassify from that day forward — earlier entries keep the
+              prior code as their expectation.
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap justify-end gap-2">

@@ -2,12 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 import { approveAllForSheet, QuoteStateError } from "@/lib/quotes/service";
 
 const bodySchema = z.object({
-  // Free text until auth lands.
-  decidedBy: z.string().trim().min(1).default("Alex"),
+  // Omitted → the org's default actor. Auth will supply the real user later.
+  decidedBy: z.string().trim().min(1).optional(),
 });
 
 // Sheet-level convenience: approve every remaining received line.
@@ -34,8 +34,9 @@ export async function POST(
   }
 
   try {
+    const decidedBy = parsed.data.decidedBy ?? (await getCurrentActorName());
     const results = await db.transaction((tx) =>
-      approveAllForSheet(tx, orgId, sheetId, parsed.data.decidedBy),
+      approveAllForSheet(tx, orgId, sheetId, decidedBy),
     );
     if (!results) {
       return NextResponse.json(

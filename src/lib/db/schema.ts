@@ -1,7 +1,10 @@
 // MobyTrade schema. Carried from mobynew with these deltas:
 //   - kits/kit_parts dropped (unused by customers)
-//   - parts: + manufacturer, boolean `active` replaced by status draft|active|archived
-//   - net-new: quote_sheets/quote_lines (quotes absorbed into parts),
+//   - parts: boolean `active` replaced by status draft|active|archived
+//   - net-new: vendors + part_sources (a SKU can be sourced from multiple
+//     vendors; the (part, vendor) row owns country of origin and unit cost —
+//     the SKU alone does not define them),
+//     quote_sheets/quote_lines (quotes absorbed into parts),
 //     purchase_order_lines (quote→PO matching + SKU history),
 //     integration_sources (Data page intake channels)
 //   - hts_codes: base-schedule columns (hierarchy, raw rate texts, release) and
@@ -44,29 +47,11 @@ const timestamps = {
 
 // ---------------------------------------------------------------- enums
 
-export const entryStatus = pgEnum("entry_status", [
-  "draft",
-  "filed",
-  "released",
-  "liquidated",
-]);
-export const shipmentStatus = pgEnum("shipment_status", [
-  "booked",
-  "in_transit",
-  "arrived",
-  "delivered",
-]);
 export const shipmentMode = pgEnum("shipment_mode", [
   "ocean",
   "air",
   "truck",
   "rail",
-]);
-export const poStatus = pgEnum("po_status", [
-  "open",
-  "partially_received",
-  "received",
-  "closed",
 ]);
 export const documentType = pgEnum("document_type", [
   "port_entry",
@@ -76,6 +61,25 @@ export const documentType = pgEnum("document_type", [
   "packing_list",
   "quote_sheet",
   "refund_report",
+  // A bundled multi-document broker packet (7501 + commercial invoice +
+  // supporting docs in one PDF). Processing splits it into child documents;
+  // the parent's extracted_data is the split manifest.
+  "entry_packet",
+  "other",
+]);
+// Role of a child document inside an entry packet — the split classifier's
+// vocabulary (ported from the legacy broker_entry_packet domain rules).
+export const packetRole = pgEnum("packet_role", [
+  "entry_summary_7501",
+  "commercial_invoice",
+  // Assist sheets look columnar like commercial invoices; keeping them a
+  // distinct role (mapped to docType "other") is what stops them becoming
+  // bogus invoices with spurious value-mismatch alerts.
+  "assist_sheet",
+  "packing_list",
+  "transport_document",
+  "certificate_of_origin",
+  "hts_code_list",
   "other",
 ]);
 export const documentStatus = pgEnum("document_status", [
@@ -130,11 +134,29 @@ export const auditAlertType = pgEnum("audit_alert_type", [
   "rate_mismatch",
   "amount_mismatch",
   "hts_discrepancy",
+  // Declared country of origin disagrees with the catalog's (part, vendor)
+  // sourcing facts.
+  "coo_discrepancy",
+  // Declared code matched the catalog as of the entry date, but the part has
+  // since been reclassified — potential retroactive correction/refund.
+  "hts_reclassified",
   "value_mismatch",
   "data_unreconciled",
   // Sail-conditioned expectations were computed from an estimated (ETD
   // fallback) or assumed (no date at all) sail date.
   "sail_date_assumption",
+  // --- commercial-invoice document comparisons (CI vs entry) ---
+  // Quantities aren't money, so value_mismatch can't carry them.
+  "quantity_discrepancy",
+  // Distinct from hts_discrepancy: that type's impact/detail UI computes
+  // catalog counterfactuals, which are wrong for CI evidence (same reason
+  // hts_reclassified was split out).
+  "invoice_hts_mismatch",
+  // An entry SKU absent from the linked commercial invoice(s). Distinct from
+  // data_unreconciled, which suppresses ALL impact on the entry.
+  "invoice_sku_missing",
+  // CI comparison was skipped (e.g. non-USD invoice — no FX support).
+  "invoice_comparison_skipped",
 ]);
 export const auditSeverity = pgEnum("audit_severity", [
   "error",
@@ -190,7 +212,7 @@ export const partStatus = pgEnum("part_status", [
   "archived",
 ]);
 // received → approved → applied is the happy path; superseded happens when a
-// newer quote for the same (part, supplier) arrives while still un-approved.
+// newer quote for the same (part, vendor) arrives while still un-approved.
 // Approved lines are NEVER auto-superseded — human decisions survive
 // machine re-ingestion.
 export const quoteLineStatus = pgEnum("quote_line_status", [
@@ -241,6 +263,9 @@ export const orgs = pgTable("orgs", {
   importerOfRecord: text("importer_of_record"),
   // The purpose-built document intake address shown on the Data page.
   inboxAddress: text("inbox_address"),
+  // The org's one human operator — recorded as actor/decidedBy on manual
+  // edits until auth lands. Falls back to the org name when unset.
+  defaultActorName: text("default_actor_name"),
   ...timestamps,
 });
 
@@ -267,7 +292,10 @@ export const entries = pgTable(
     portOfEntry: varchar("port_of_entry", { length: 64 }),
     entryType: varchar("entry_type", { length: 16 }),
     importerOfRecord: text("importer_of_record"),
-    status: entryStatus("status").notNull().default("draft"),
+    // No status column: entries only exist because a 7501 was processed
+    // (filed by construction); liquidation derives on read from linked
+    // refund claims' printed liquidation dates (entries/status.ts).
+    // "released" was dropped outright — no ingested document evidences it.
     totalEnteredValue: numeric("total_entered_value", { precision: 14, scale: 2 }),
     // totalDuty = all duty-type charges (base + additional + AD/CVD),
     // excluding MPF/HMF/fees. totalBaseDuty is the base-only slice.
@@ -309,7 +337,9 @@ export const shipments = pgTable(
     // estimate; this is the fact. Sail resolution falls back to ETD (flagged
     // "estimated") when this is null.
     sailedOnBoardDate: date("sailed_on_board_date"),
-    status: shipmentStatus("status").notNull().default("booked"),
+    // No status column: lifecycle state is DERIVED on read from the date
+    // facts + entry links (shipments/status.ts) — no ingested document can
+    // assert "arrived", so a stored status could only go stale.
     ...timestamps,
   },
   (t) => [
@@ -324,12 +354,18 @@ export const purchaseOrders = pgTable(
     id: id(),
     orgId: orgId(),
     poNumber: varchar("po_number", { length: 32 }).notNull(),
+    // As printed on the document (declared fact) + the resolved vendor.
     supplierName: text("supplier_name"),
+    vendorId: uuid("vendor_id").references(() => vendors.id, {
+      onDelete: "set null",
+    }),
     orderDate: date("order_date"),
     expectedDate: date("expected_date"),
     currency: varchar("currency", { length: 3 }).notNull().default("USD"),
     totalAmount: numeric("total_amount", { precision: 12, scale: 2 }),
-    status: poStatus("status").notNull().default("open"),
+    // No status column: receipt is a warehouse event no ingested document
+    // evidences (we take no receiving docs/GRNs), so open/received states
+    // could only ever be fiction.
     ...timestamps,
   },
   (t) => [
@@ -355,6 +391,8 @@ export const purchaseOrderLines = pgTable(
     }),
     sku: varchar("sku", { length: 64 }),
     description: text("description"),
+    // Declared per-line origin when the PO logs one (vendor/SKU defines COO).
+    countryOfOrigin: varchar("country_of_origin", { length: 2 }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
     unitPrice: numeric("unit_price", { precision: 12, scale: 4 }),
     totalPrice: numeric("total_price", { precision: 12, scale: 2 }),
@@ -451,6 +489,17 @@ export const documents = pgTable(
     sourceId: uuid("source_id").references(() => integrationSources.id, {
       onDelete: "set null",
     }),
+    // Entry-packet parent-child: a packet child is an ordinary document row
+    // (own status/extraction/links lifecycle) pointing at its packet parent.
+    // Children share the parent's storage_key — page_range (1-indexed pages
+    // of the parent PDF) scopes what "this document" means; there is no
+    // physical PDF slicing.
+    parentDocumentId: uuid("parent_document_id").references(
+      (): AnyPgColumn => documents.id,
+      { onDelete: "cascade" },
+    ),
+    packetRole: packetRole("packet_role"),
+    pageRange: integer("page_range").array(),
     extractedData: jsonb("extracted_data"),
     // Full provider payloads (parse chunks, classification, cited extract) —
     // everything the provider returned, not just what maps into extracted_data.
@@ -473,6 +522,7 @@ export const documents = pgTable(
     index("documents_org_idx").on(t.orgId),
     index("documents_status_idx").on(t.orgId, t.status),
     index("documents_source_idx").on(t.sourceId),
+    index("documents_parent_idx").on(t.parentDocumentId),
   ],
 );
 
@@ -498,6 +548,27 @@ export const documentLinks = pgTable(
 
 // ---------------------------------------------------------------- catalog
 
+// A vendor as the org knows them. Documents keep the supplier name exactly as
+// printed (declared fact) plus a resolved vendor_id — the same pattern line
+// items use for sku + part_id. Rows are find-or-created by normalized name;
+// sole writer: vendors/service.ts. Rename is the only edit (no delete/merge).
+export const vendors = pgTable(
+  "vendors",
+  {
+    id: id(),
+    orgId: orgId(),
+    name: text("name").notNull(),
+    // trim + casefold — the find-or-create identity key. Deliberately
+    // conservative: no suffix stripping ("Co." vs "Ltd." may be two firms).
+    nameNormalized: text("name_normalized").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("vendors_org_name_uq").on(t.orgId, t.nameNormalized),
+    index("vendors_org_idx").on(t.orgId),
+  ],
+);
+
 export const parts = pgTable(
   "parts",
   {
@@ -506,15 +577,16 @@ export const parts = pgTable(
     sku: varchar("sku", { length: 64 }).notNull(),
     name: text("name").notNull(),
     description: text("description"),
-    manufacturer: text("manufacturer"),
     unitOfMeasure: varchar("unit_of_measure", { length: 16 })
       .notNull()
       .default("EA"),
-    // The OFFICIAL cost — written by manual edit or by quotes/service.ts when
-    // an approved quote's PO confirms it. Draft parts carry the quote's cost
-    // (draft means "not official" — that is the guard).
-    unitCost: numeric("unit_cost", { precision: 10, scale: 4 }),
-    countryOfOrigin: varchar("country_of_origin", { length: 2 }),
+    // Cost and country of origin are NOT here: the SKU alone does not define
+    // them — the (part, vendor) combination does. See part_sources.
+    //
+    // hts_code is the CURRENT-WINDOW PROJECTION of part_classifications: a
+    // part has an open classification window iff hts_code is set and not
+    // provisional. Historical windows live in part_classifications so audits
+    // resolve the code as of the entry date.
     htsCode: varchar("hts_code", { length: 12 }),
     // HTS review projection. The review queue + classifications are the
     // source of truth; these columns exist so parts surfaces can filter and
@@ -535,6 +607,88 @@ export const parts = pgTable(
   ],
 );
 
+// One row per (part, vendor): the catalog's sourcing facts. The OFFICIAL cost
+// and origin for that vendor — written by manual edit (sources routes) or by
+// quotes/service.ts when an approved quote's PO confirms it, the same split
+// these fields had as parts columns. Draft parts carry the quote's values
+// (draft means "not official" — that is the guard). Landed-cost estimates,
+// future-entry projections, and the COO audit rule all read from here.
+export const partSources = pgTable(
+  "part_sources",
+  {
+    id: id(),
+    orgId: orgId(),
+    partId: uuid("part_id")
+      .notNull()
+      .references(() => parts.id, { onDelete: "cascade" }),
+    // No cascade: vendors have no delete path (rename only).
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id),
+    countryOfOrigin: varchar("country_of_origin", { length: 2 }),
+    unitCost: numeric("unit_cost", { precision: 10, scale: 4 }),
+    // Change-tiling window, same idiom as hts_codes base windows: null
+    // valid_from = open start, null valid_to = current. A cost/COO change
+    // closes the current window at effective − 1 and opens a successor, so
+    // historical entries audit against the sourcing facts of their day.
+    // "Deleting" a source closes its window rather than erasing history.
+    validFrom: date("valid_from"),
+    validTo: date("valid_to"),
+    ...timestamps,
+  },
+  (t) => [
+    // One CURRENT window per (part, vendor); closed windows are history.
+    uniqueIndex("part_sources_part_vendor_current_uq")
+      .on(t.partId, t.vendorId)
+      .where(sql`${t.validTo} is null`),
+    index("part_sources_org_idx").on(t.orgId),
+    index("part_sources_vendor_idx").on(t.vendorId),
+  ],
+);
+
+// Committed HTS classification windows per part — the effective-dated truth
+// behind the parts.hts_code projection. Written ONLY by
+// classification/service.ts (same single-writer doctrine as the projection).
+// Provisional codes and draft-part quote claims never create windows; a
+// window records a committed human decision. Windows for one part never
+// overlap: a dated reclassification closes the current window at
+// effective − 1 (tiling), an undated commit corrects the current window in
+// place ("wrong all along"). Audits resolve the code as of the entry date,
+// falling back to the current window when the entry has no date or predates
+// every window — byte-identical to pre-windowing behavior.
+export const partClassifications = pgTable(
+  "part_classifications",
+  {
+    id: id(),
+    orgId: orgId(),
+    partId: uuid("part_id")
+      .notNull()
+      .references(() => parts.id, { onDelete: "cascade" }),
+    htsCode: varchar("hts_code", { length: 12 }).notNull(),
+    // null valid_from = open start ("as long as we've known the part");
+    // null valid_to = current.
+    validFrom: date("valid_from"),
+    validTo: date("valid_to"),
+    // Same vocabulary as field_changes.source, plus "backfill" (migration)
+    // and "seed".
+    source: varchar("source", { length: 40 }).notNull(),
+    actor: text("actor"),
+    note: text("note"),
+    reviewItemId: uuid("review_item_id").references(() => reviewItems.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (t) => [
+    // One CURRENT window per part; closed windows are history.
+    uniqueIndex("part_classifications_current_uq")
+      .on(t.partId)
+      .where(sql`${t.validTo} is null`),
+    index("part_classifications_part_idx").on(t.partId),
+    index("part_classifications_org_idx").on(t.orgId),
+  ],
+);
+
 // ---------------------------------------------------------------- quotes
 //
 // A quote sheet is a supplier document quoting one or more SKUs; each quoted
@@ -552,7 +706,11 @@ export const quoteSheets = pgTable(
     documentId: uuid("document_id").references(() => documents.id, {
       onDelete: "set null",
     }),
+    // As printed on the sheet (declared fact) + the resolved vendor.
     supplierName: text("supplier_name"),
+    vendorId: uuid("vendor_id").references(() => vendors.id, {
+      onDelete: "set null",
+    }),
     // The document's own date — the occurrence date for the events feed.
     // Null falls back to uploadedAt/createdAt, flagged "recorded".
     quoteDate: date("quote_date"),
@@ -872,6 +1030,12 @@ export const entryLineItems = pgTable(
     htsCode: varchar("hts_code", { length: 12 }).notNull(), // as declared
     htsCodeDigits: varchar("hts_code_digits", { length: 10 }).notNull(),
     countryOfOrigin: varchar("country_of_origin", { length: 2 }),
+    // Per-line supplier as declared on the 7501 (entries can span vendors) +
+    // the resolved vendor — feeds the COO-vs-catalog audit rule.
+    supplierName: text("supplier_name"),
+    vendorId: uuid("vendor_id").references(() => vendors.id, {
+      onDelete: "set null",
+    }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
     unitValue: numeric("unit_value", { precision: 12, scale: 4 }),
     enteredValue: numeric("entered_value", { precision: 12, scale: 2 }).notNull(),
@@ -912,8 +1076,9 @@ export const entryLineCharges = pgTable(
 );
 
 // Commercial invoices as first-class records. Linked to a PO when the
-// document references one; entries reach invoices through their POs. No
-// dedicated UI — invoices surface as source documents and feed audit rules.
+// document references one, and DIRECTLY to entries via entry_invoices —
+// the CI is the primary document an entry is checked against for variance.
+// Invoices surface on entry detail and in audit alerts, not as their own page.
 export const invoices = pgTable(
   "invoices",
   {
@@ -924,7 +1089,11 @@ export const invoices = pgTable(
       () => purchaseOrders.id,
       { onDelete: "set null" },
     ),
+    // As printed on the invoice (declared fact) + the resolved vendor.
     supplierName: text("supplier_name"),
+    vendorId: uuid("vendor_id").references(() => vendors.id, {
+      onDelete: "set null",
+    }),
     invoiceDate: date("invoice_date"),
     currency: varchar("currency", { length: 3 }).notNull().default("USD"),
     totalAmount: numeric("total_amount", { precision: 12, scale: 2 }),
@@ -952,6 +1121,13 @@ export const invoiceLineItems = pgTable(
     }),
     sku: varchar("sku", { length: 64 }),
     description: text("description"),
+    // Declared per-line origin when the invoice logs one.
+    countryOfOrigin: varchar("country_of_origin", { length: 2 }),
+    // HTS/HS code as printed on the invoice line — often a 6/8-digit HS
+    // code, not a full 10-digit HTS, and many CIs omit it entirely. Digits
+    // precomputed for prefix comparison against entry_line_items.
+    htsCode: varchar("hts_code", { length: 12 }),
+    htsCodeDigits: varchar("hts_code_digits", { length: 10 }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
     unitPrice: numeric("unit_price", { precision: 12, scale: 4 }),
     totalPrice: numeric("total_price", { precision: 12, scale: 2 }).notNull(),
@@ -961,6 +1137,30 @@ export const invoiceLineItems = pgTable(
     uniqueIndex("ili_invoice_line_uq").on(t.invoiceId, t.lineNumber),
     index("ili_org_idx").on(t.orgId),
     index("ili_part_idx").on(t.partId),
+  ],
+);
+
+// Direct entry↔invoice links — which commercial invoices document which
+// entry. Written only by processing/linker.ts (packet siblings, invoice
+// numbers referenced on the 7501, shared-PO fallback). The CI variance rules
+// read invoices exclusively through this table, never via POs.
+export const entryInvoices = pgTable(
+  "entry_invoices",
+  {
+    orgId: orgId(),
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => entries.id, { onDelete: "cascade" }),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.entryId, t.invoiceId] }),
+    index("ei_invoice_idx").on(t.invoiceId),
   ],
 );
 
@@ -1149,6 +1349,13 @@ export const fieldChanges = pgTable(
     orgId: orgId(),
     entityType: varchar("entity_type", { length: 32 }).notNull(), // "part"
     entityId: uuid("entity_id").notNull(),
+    // Set when the change is scoped to one (part, vendor) source row —
+    // unit_cost/country_of_origin edits. The grain stays entity_type="part"
+    // so events scoping and history filters keep working; the vendor id only
+    // qualifies the title ("unit cost changed on EB-X — Vendor Co").
+    vendorId: uuid("vendor_id").references(() => vendors.id, {
+      onDelete: "set null",
+    }),
     field: varchar("field", { length: 64 }).notNull(), // "hts_code"
     oldValue: text("old_value"),
     newValue: text("new_value"),
@@ -1221,6 +1428,7 @@ export const scenarios = pgTable(
 export const entriesRelations = relations(entries, ({ many }) => ({
   entryShipments: many(entryShipments),
   entryPurchaseOrders: many(entryPurchaseOrders),
+  entryInvoices: many(entryInvoices),
   lineItems: many(entryLineItems),
   auditAlerts: many(auditAlerts),
   refundClaims: many(refundClaims),
@@ -1231,12 +1439,19 @@ export const shipmentsRelations = relations(shipments, ({ many }) => ({
   shipmentPurchaseOrders: many(shipmentPurchaseOrders),
 }));
 
-export const purchaseOrdersRelations = relations(purchaseOrders, ({ many }) => ({
-  entryPurchaseOrders: many(entryPurchaseOrders),
-  shipmentPurchaseOrders: many(shipmentPurchaseOrders),
-  invoices: many(invoices),
-  lines: many(purchaseOrderLines),
-}));
+export const purchaseOrdersRelations = relations(
+  purchaseOrders,
+  ({ one, many }) => ({
+    entryPurchaseOrders: many(entryPurchaseOrders),
+    shipmentPurchaseOrders: many(shipmentPurchaseOrders),
+    invoices: many(invoices),
+    lines: many(purchaseOrderLines),
+    vendor: one(vendors, {
+      fields: [purchaseOrders.vendorId],
+      references: [vendors.id],
+    }),
+  }),
+);
 
 export const purchaseOrderLinesRelations = relations(
   purchaseOrderLines,
@@ -1257,7 +1472,23 @@ export const invoicesRelations = relations(invoices, ({ one, many }) => ({
     fields: [invoices.purchaseOrderId],
     references: [purchaseOrders.id],
   }),
+  vendor: one(vendors, {
+    fields: [invoices.vendorId],
+    references: [vendors.id],
+  }),
   lineItems: many(invoiceLineItems),
+  entryInvoices: many(entryInvoices),
+}));
+
+export const entryInvoicesRelations = relations(entryInvoices, ({ one }) => ({
+  entry: one(entries, {
+    fields: [entryInvoices.entryId],
+    references: [entries.id],
+  }),
+  invoice: one(invoices, {
+    fields: [entryInvoices.invoiceId],
+    references: [invoices.id],
+  }),
 }));
 
 export const invoiceLineItemsRelations = relations(
@@ -1319,6 +1550,12 @@ export const documentsRelations = relations(documents, ({ one, many }) => ({
     fields: [documents.sourceId],
     references: [integrationSources.id],
   }),
+  parent: one(documents, {
+    fields: [documents.parentDocumentId],
+    references: [documents.id],
+    relationName: "packetChildren",
+  }),
+  children: many(documents, { relationName: "packetChildren" }),
 }));
 
 export const documentLinksRelations = relations(documentLinks, ({ one }) => ({
@@ -1333,12 +1570,46 @@ export const partsRelations = relations(parts, ({ many }) => ({
   purchaseOrderLines: many(purchaseOrderLines),
   quoteLines: many(quoteLines),
   htsClassifications: many(htsClassifications),
+  sources: many(partSources),
+  classifications: many(partClassifications),
+}));
+
+export const partClassificationsRelations = relations(
+  partClassifications,
+  ({ one }) => ({
+    part: one(parts, {
+      fields: [partClassifications.partId],
+      references: [parts.id],
+    }),
+  }),
+);
+
+export const vendorsRelations = relations(vendors, ({ many }) => ({
+  partSources: many(partSources),
+  purchaseOrders: many(purchaseOrders),
+  quoteSheets: many(quoteSheets),
+  invoices: many(invoices),
+}));
+
+export const partSourcesRelations = relations(partSources, ({ one }) => ({
+  part: one(parts, {
+    fields: [partSources.partId],
+    references: [parts.id],
+  }),
+  vendor: one(vendors, {
+    fields: [partSources.vendorId],
+    references: [vendors.id],
+  }),
 }));
 
 export const quoteSheetsRelations = relations(quoteSheets, ({ one, many }) => ({
   document: one(documents, {
     fields: [quoteSheets.documentId],
     references: [documents.id],
+  }),
+  vendor: one(vendors, {
+    fields: [quoteSheets.vendorId],
+    references: [vendors.id],
   }),
   lines: many(quoteLines),
 }));
@@ -1448,6 +1719,10 @@ export const entryLineItemsRelations = relations(
       fields: [entryLineItems.partId],
       references: [parts.id],
     }),
+    vendor: one(vendors, {
+      fields: [entryLineItems.vendorId],
+      references: [vendors.id],
+    }),
     charges: many(entryLineCharges),
     auditAlerts: many(auditAlerts),
   }),
@@ -1501,12 +1776,16 @@ export type Document = typeof documents.$inferSelect;
 export type DocumentListItem = Omit<Document, "rawExtraction">;
 export type DocumentLink = typeof documentLinks.$inferSelect;
 export type Part = typeof parts.$inferSelect;
+export type Vendor = typeof vendors.$inferSelect;
+export type PartSource = typeof partSources.$inferSelect;
+export type PartClassification = typeof partClassifications.$inferSelect;
 export type QuoteSheet = typeof quoteSheets.$inferSelect;
 export type QuoteLine = typeof quoteLines.$inferSelect;
 export type IntegrationSource = typeof integrationSources.$inferSelect;
 
 export type Invoice = typeof invoices.$inferSelect;
 export type InvoiceLineItem = typeof invoiceLineItems.$inferSelect;
+export type EntryInvoice = typeof entryInvoices.$inferSelect;
 export type HtsCode = typeof htsCodes.$inferSelect;
 export type TradeMeasure = typeof tradeMeasures.$inferSelect;
 export type TradeMeasureHtsRow = typeof tradeMeasureHts.$inferSelect;
@@ -1525,15 +1804,13 @@ export type Scenario = typeof scenarios.$inferSelect;
 export type TariffAnnouncement = typeof tariffAnnouncements.$inferSelect;
 export type MeasureRevision = typeof measureRevisions.$inferSelect;
 
-export type EntryStatus = Entry["status"];
-export type ShipmentStatus = Shipment["status"];
-export type PoStatus = PurchaseOrder["status"];
 export type PartStatus = Part["status"];
 export type QuoteLineStatus = QuoteLine["status"];
 export type IntegrationKind = IntegrationSource["kind"];
 export type IntegrationStatusValue = IntegrationSource["status"];
 export type DocumentTypeValue = Document["docType"];
 export type DocumentStatusValue = Document["status"];
+export type PacketRoleValue = NonNullable<Document["packetRole"]>;
 export type ChargeTypeValue = EntryLineCharge["chargeType"];
 export type MeasureAuthorityValue = TradeMeasure["authority"];
 export type MeasureScopeValue = TradeMeasure["scope"];

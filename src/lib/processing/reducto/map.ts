@@ -80,6 +80,12 @@ function toInt(v: unknown): number | null {
   return n === null ? null : Math.trunc(n);
 }
 
+/** ISO country codes compare exact-match downstream (measure gating,
+ *  COO-vs-catalog audit) — normalize case here so "cn" never slips through. */
+function toCountry(v: unknown): string | null {
+  return toStr(v)?.toUpperCase() ?? null;
+}
+
 /** Normalize to YYYY-MM-DD; accepts ISO datetimes and MM/DD/YYYY. */
 const MONTHS: Record<string, string> = {
   jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
@@ -143,6 +149,10 @@ export function classifyFromResponse(
     unknown
   >;
   const value = toStr(data.doc_type);
+  // assist_sheet is a classification-only label (it protects standalone
+  // assist-sheet uploads from the commercial_invoice pipeline); it has no
+  // docType of its own.
+  if (value === "assist_sheet") return "other";
   if (value && DOC_TYPES.has(value)) return value as DocumentTypeValue;
   return hint;
 }
@@ -176,7 +186,8 @@ function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
       sku: toStr(line.sku),
       description: toStr(line.description),
       hts_code: toStr(line.hts_code) as string,
-      country_of_origin: toStr(line.country_of_origin),
+      country_of_origin: toCountry(line.country_of_origin),
+      supplier_name: toStr(line.supplier_name),
       quantity: toNum(line.quantity),
       unit_value: toNum(line.unit_value),
       entered_value: toNum(line.entered_value) ?? 0,
@@ -235,12 +246,22 @@ function mapPortEntry(data: Record<string, unknown>): PortEntryExtraction {
     importer_of_record: toStr(data.importer_of_record),
     referenced_bols: toStrArray(data.referenced_bols),
     referenced_pos: toStrArray(data.referenced_pos),
+    referenced_invoices: toStrArray(data.referenced_invoices),
     total_entered_value: toNum(data.total_entered_value),
     total_duty: toNum(data.total_duty),
     mpf_amount: toNum(data.mpf_amount),
     hmf_amount: toNum(data.hmf_amount),
     line_items: mapLineItems(data.line_items),
   };
+}
+
+const SHIPMENT_MODES = new Set(["ocean", "air", "truck", "rail"]);
+
+function toMode(v: unknown): ShipmentExtraction["mode"] {
+  const s = toStr(v);
+  return s !== null && SHIPMENT_MODES.has(s)
+    ? (s as Exclude<ShipmentExtraction["mode"], null>)
+    : null;
 }
 
 function mapShipment(data: Record<string, unknown>): ShipmentExtraction {
@@ -252,6 +273,7 @@ function mapShipment(data: Record<string, unknown>): ShipmentExtraction {
     container_number: toStr(data.container_number),
     carrier: toStr(data.carrier),
     vessel: toStr(data.vessel),
+    mode: toMode(data.mode),
     origin_port: toStr(data.origin_port),
     destination_port: toStr(data.destination_port),
     etd: toDate(data.etd),
@@ -277,6 +299,7 @@ function mapPurchaseOrder(
         line_number: toInt(line.line_number) ?? i + 1,
         sku: toStr(line.sku),
         description: toStr(line.description),
+        country_of_origin: toCountry(line.country_of_origin),
         quantity: toNum(line.quantity) ?? 0,
         unit_price: toNum(line.unit_price) ?? 0,
       }))
@@ -304,6 +327,8 @@ function mapCommercialInvoice(
         line_number: toInt(line.line_number) ?? i + 1,
         sku: toStr(line.sku),
         description: toStr(line.description),
+        country_of_origin: toCountry(line.country_of_origin),
+        hts_code: toStr(line.hts_code),
         quantity: toNum(line.quantity),
         unit_price: toNum(line.unit_price),
         total_price: toNum(line.total_price),
@@ -335,7 +360,7 @@ function mapQuoteSheet(data: Record<string, unknown>): QuoteSheetExtraction {
       description: toStr(line.description),
       unit_cost: toNum(line.unit_cost),
       currency: toStr(line.currency),
-      country_of_origin: toStr(line.country_of_origin),
+      country_of_origin: toCountry(line.country_of_origin),
       hts_code: toStr(line.hts_code),
       moq: toNum(line.moq),
       lead_time_days: toInt(line.lead_time_days),

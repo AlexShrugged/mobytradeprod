@@ -37,9 +37,9 @@ import { cn } from "@/lib/utils";
 
 const statusDotClasses: Record<IntegrationSource["status"], string> = {
   active: "bg-emerald-500",
-  paused: "bg-zinc-400",
+  paused: "bg-slate-400",
   error: "bg-red-500",
-  not_configured: "bg-zinc-300 dark:bg-zinc-600",
+  not_configured: "bg-slate-300 dark:bg-slate-600",
 };
 
 const statusLabels: Record<IntegrationSource["status"], string> = {
@@ -232,8 +232,8 @@ export function SourceCards({ sources }: { sources: IntegrationSource[] }) {
     return (
       <Card className="py-4">
         <CardContent className="px-4 text-sm text-muted-foreground">
-          No intake sources configured. Seed the database to see the SFTP,
-          email, and ERP seams.
+          No intake sources configured yet. Connected sources — document
+          inbox, broker SFTP, ERP — will appear here.
         </CardContent>
       </Card>
     );

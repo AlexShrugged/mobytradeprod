@@ -9,26 +9,42 @@
 // changes" flags (derived from quote_lines on read).
 //
 // Planted audit findings (surfaced by the auditor, seeded as declared
-// facts here) all live on entry 231-4501311-9:
+// facts here). Entry 231-4501311-9 carries the money findings:
 //   line 1 — Section 301 List 1 declared at 20% instead of the official 25%
 //   line 2 — Section 301 List 3 charge missing entirely
 //   line 3 — a $0 exclusion claim (9903.88.67) in place of List 3 — a
 //            statement, not an underpayment; must never be flagged
+// Entry 231-4501341-1 carries the sourcing finding:
+//   line 2 — EB-CTRL-V2 declared with origin CN under supplier Hanoi
+//            Precision Components, whose catalog source is VN — the
+//            coo_discrepancy rule (charges match the declared CN, so the
+//            money rules stay quiet; the 301 duty may be refundable).
+// Entry 231-4501320-0 carries the classification finding:
+//   line 1 — EB-BRK-HYD declared under 8714.94.9000 (10%) while the
+//            catalog classifies it 8714.94.3080 (free) — hts_discrepancy;
+//            charges are consistent under the declared code, so the ~$1,620
+//            base duty may be recoverable.
+// Entry 231-4501293-1 carries the RECLASSIFICATION finding:
+//   line 1 — EB-DSP-LCD declared under 8531.80.9051 (1.3%), which WAS the
+//            catalog code on its day(-140) entry date; the part was
+//            reclassified to the Free 8531.20.0040 at day(-40) (see
+//            CLASSIFICATION_WINDOWS) — hts_reclassified, not a misfiling:
+//            the filing matched its day's expectation, and the base duty
+//            may be retroactively recoverable.
 
 import type {
   ChargeTypeValue,
   DocumentTypeValue,
-  EntryStatus,
   IntegrationKind,
   IntegrationStatusValue,
+  PacketRoleValue,
   PartHtsReviewStatusValue,
   PartStatus,
-  PoStatus,
   QuoteLineStatus,
-  ShipmentStatus,
 } from "../schema";
 import { normalizeHts } from "../../duty/calculator";
-import { HMF_RATE, HTS_SEED, MPF_RATE } from "./tariff";
+import { HMF_RATE, MPF_RATE } from "../../duty/fees";
+import { HTS_SEED } from "./tariff";
 import type { DayFn } from "./tariff";
 
 /** Date `offset` days from seed day at a fixed UTC time. */
@@ -42,9 +58,17 @@ export const ORG_SEED = {
   name: "Waystar Royco",
   importerOfRecord: "Waystar Royco, Inc.",
   inboxAddress: "docs@waystar.mobytrade.app",
+  // The demo's one human operator — surfaces as actor/decidedBy on manual
+  // edits until auth lands.
+  defaultActorName: "Alex",
 };
 
-// ---------------------------------------------------------------- parts
+// ------------------------------------------------------- vendors & parts
+//
+// Vendor names are CANONICAL everywhere (no "Co."/"Ltd."/"JSC" drift):
+// resolution is trim+casefold only, so a suffix would mint a second vendor.
+// Ningbo E-Drive Systems exists only through quote sheet QS1 — a vendor
+// with quotes but no catalog source yet.
 //
 // 12 parts: 9 plain active, plus EB-SDL-CMF (active; its approved quote
 // awaiting a PO makes it "pending changes" — derived, never stored),
@@ -52,36 +76,68 @@ export const ORG_SEED = {
 // the classification service), and EB-CHG-52V (draft; created by quote
 // sheet QS4 for an unknown SKU — carries the quote's cost, not an official
 // one).
+//
+// COO and cost live on the (part, vendor) SOURCES — the SKU alone does not
+// define them. EB-CTRL-V2 is the dual-sourcing flagship: the same
+// controller from Shenzhen Volt Dynamics (CN, $42.30) and Hanoi Precision
+// Components (VN, $44.10). Section 301 applies to the CN source only, so
+// the VN source lands cheaper despite the higher unit cost.
+
+export const VENDOR_SEED = [
+  "Shenzhen Volt Dynamics",
+  "Taichung Cycle Works",
+  "Hanoi Precision Components",
+  "Hangzhou Comfort Components",
+  "Ningbo E-Drive Systems",
+] as const;
+
+export type PartSourceSeed = {
+  vendor: string;
+  countryOfOrigin: string;
+  unitCost: string;
+};
 
 export type PartSeed = {
   sku: string;
   name: string;
-  manufacturer: string;
   htsCode: string | null;
-  countryOfOrigin: string;
-  unitCost: string;
+  /** First source = the primary (drives entry-line defaults and the stub). */
+  sources: PartSourceSeed[];
   status: PartStatus;
   htsReviewStatus: PartHtsReviewStatusValue | null;
 };
 
+const SHENZHEN = "Shenzhen Volt Dynamics";
+const TAICHUNG = "Taichung Cycle Works";
+const HANOI = "Hanoi Precision Components";
+const HANGZHOU = "Hangzhou Comfort Components";
+
+const src = (
+  vendor: string,
+  countryOfOrigin: string,
+  unitCost: string,
+): PartSourceSeed => ({ vendor, countryOfOrigin, unitCost });
+
 export const PART_SEED: PartSeed[] = [
-  { sku: "EB-MTR-750W", name: "750W Mid-Drive Motor", manufacturer: "Shenzhen Volt Dynamics", htsCode: "8501.31.4000", countryOfOrigin: "CN", unitCost: "289.5000", status: "active", htsReviewStatus: null },
-  { sku: "EB-MTR-500W", name: "500W Geared Hub Motor", manufacturer: "Shenzhen Volt Dynamics", htsCode: "8501.31.4000", countryOfOrigin: "CN", unitCost: "148.0000", status: "active", htsReviewStatus: null },
-  { sku: "EB-BAT-48V", name: "48V 14Ah Lithium Battery Pack", manufacturer: "Shenzhen Volt Dynamics", htsCode: "8507.60.0020", countryOfOrigin: "CN", unitCost: "312.0000", status: "active", htsReviewStatus: null },
-  { sku: "EB-BAT-52V", name: "52V 20Ah Lithium Battery Pack", manufacturer: "Shenzhen Volt Dynamics", htsCode: "8507.60.0020", countryOfOrigin: "CN", unitCost: "428.7500", status: "active", htsReviewStatus: null },
-  { sku: "EB-CTRL-V2", name: "Sine-Wave Motor Controller V2", manufacturer: "Shenzhen Volt Dynamics", htsCode: "8504.40.9550", countryOfOrigin: "CN", unitCost: "42.3000", status: "active", htsReviewStatus: null },
-  { sku: "EB-DSP-LCD", name: "Backlit LCD Display Unit", manufacturer: "Taichung Cycle Works", htsCode: "8531.20.0040", countryOfOrigin: "TW", unitCost: "28.9000", status: "active", htsReviewStatus: null },
-  { sku: "EB-FRM-MTB", name: "Hardtail MTB Alloy Frame", manufacturer: "Taichung Cycle Works", htsCode: "8714.91.3000", countryOfOrigin: "TW", unitCost: "104.5000", status: "active", htsReviewStatus: null },
-  { sku: "EB-BRK-HYD", name: "Hydraulic Disc Brake Set", manufacturer: "Taichung Cycle Works", htsCode: "8714.94.3080", countryOfOrigin: "TW", unitCost: "64.8000", status: "active", htsReviewStatus: null },
-  { sku: "EB-WHL-27F", name: '27.5" Front Wheel, Thru-Axle', manufacturer: "Hanoi Precision Components", htsCode: "8714.92.1000", countryOfOrigin: "VN", unitCost: "38.6000", status: "active", htsReviewStatus: null },
+  { sku: "EB-MTR-750W", name: "750W Mid-Drive Motor", htsCode: "8501.31.4000", sources: [src(SHENZHEN, "CN", "289.5000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-MTR-500W", name: "500W Geared Hub Motor", htsCode: "8501.31.4000", sources: [src(SHENZHEN, "CN", "148.0000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-BAT-48V", name: "48V 14Ah Lithium Battery Pack", htsCode: "8507.60.0020", sources: [src(SHENZHEN, "CN", "312.0000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-BAT-52V", name: "52V 20Ah Lithium Battery Pack", htsCode: "8507.60.0020", sources: [src(SHENZHEN, "CN", "428.7500")], status: "active", htsReviewStatus: null },
+  // Dual-sourced: same controller, two vendors, two origins — the landed
+  // estimates diverge because Section 301 gates on CN only.
+  { sku: "EB-CTRL-V2", name: "Sine-Wave Motor Controller V2", htsCode: "8504.40.9550", sources: [src(SHENZHEN, "CN", "42.3000"), src(HANOI, "VN", "44.1000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-DSP-LCD", name: "Backlit LCD Display Unit", htsCode: "8531.20.0040", sources: [src(TAICHUNG, "TW", "28.9000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-FRM-MTB", name: "Hardtail MTB Alloy Frame", htsCode: "8714.91.3000", sources: [src(TAICHUNG, "TW", "104.5000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-BRK-HYD", name: "Hydraulic Disc Brake Set", htsCode: "8714.94.3080", sources: [src(TAICHUNG, "TW", "64.8000")], status: "active", htsReviewStatus: null },
+  { sku: "EB-WHL-27F", name: '27.5" Front Wheel, Thru-Axle', htsCode: "8714.92.1000", sources: [src(HANOI, "VN", "38.6000")], status: "active", htsReviewStatus: null },
   // Active, with an approved quote awaiting its PO (see QS2 / PO-2026-010).
-  { sku: "EB-SDL-CMF", name: "Comfort Gel Saddle", manufacturer: "Hangzhou Comfort Components", htsCode: "8714.95.0000", countryOfOrigin: "CN", unitCost: "9.8000", status: "active", htsReviewStatus: null },
+  { sku: "EB-SDL-CMF", name: "Comfort Gel Saddle", htsCode: "8714.95.0000", sources: [src(HANGZHOU, "CN", "9.8000")], status: "active", htsReviewStatus: null },
   // Codeless — HTS review projection only; classification rows land in a
   // later phase.
-  { sku: "EB-CHG-48V", name: "48V 3A Battery Charger", manufacturer: "Shenzhen Volt Dynamics", htsCode: null, countryOfOrigin: "CN", unitCost: "18.5000", status: "active", htsReviewStatus: "pending" },
-  // Draft — created by quote sheet QS4 for an unknown SKU; cost is the
-  // quote's, not official.
-  { sku: "EB-CHG-52V", name: "52V 4A Fast Charger", manufacturer: "Shenzhen Volt Dynamics", htsCode: null, countryOfOrigin: "CN", unitCost: "21.7500", status: "draft", htsReviewStatus: null },
+  { sku: "EB-CHG-48V", name: "48V 3A Battery Charger", htsCode: null, sources: [src(SHENZHEN, "CN", "18.5000")], status: "active", htsReviewStatus: "pending" },
+  // Draft — created by quote sheet QS4 for an unknown SKU; its source
+  // carries the quote's cost, not an official one.
+  { sku: "EB-CHG-52V", name: "52V 4A Fast Charger", htsCode: null, sources: [src(SHENZHEN, "CN", "21.7500")], status: "draft", htsReviewStatus: null },
 ];
 
 const partBySku = new Map(PART_SEED.map((p) => [p.sku, p]));
@@ -90,6 +146,12 @@ function part(sku: string): PartSeed {
   const p = partBySku.get(sku);
   if (!p) throw new Error(`story references unknown SKU ${sku}`);
   return p;
+}
+
+/** The part's primary source — first in the list. */
+function primary(p: PartSeed): PartSourceSeed {
+  if (p.sources.length === 0) throw new Error(`part ${p.sku} has no sources`);
+  return p.sources[0];
 }
 
 // ------------------------------------------------- declared-charge builder
@@ -197,6 +259,8 @@ export type EntryLineSeed = {
   description: string;
   htsCode: string;
   countryOfOrigin: string;
+  /** Per-line supplier as printed on the 7501 (entries can span vendors). */
+  supplierName: string;
   quantity: number;
   unitValue: number;
   enteredValue: number;
@@ -208,7 +272,6 @@ export type EntrySeed = {
   entryDate: string;
   portOfEntry: string;
   entryType: string;
-  status: EntryStatus;
   totalRefund: number | null;
   lines: EntryLineSeed[];
   totals: {
@@ -232,12 +295,15 @@ export type ShipmentSeed = {
   etd: string;
   eta: string;
   sailedOnBoardDate: string | null;
-  status: ShipmentStatus;
+  // No status: lifecycle state derives on read from the dates + entry
+  // links (shipments/status.ts).
 };
 
 export type PoLineSeed = {
   lineNumber: number;
   sku: string;
+  /** Origin as logged on the PO line, when the document carries one. */
+  countryOfOrigin?: string;
   quantity: number;
   unitPrice: number;
 };
@@ -247,7 +313,6 @@ export type PoSeed = {
   supplierName: string;
   orderDate: string;
   expectedDate: string;
-  status: PoStatus;
   lines: PoLineSeed[];
   totalAmount: number;
 };
@@ -308,10 +373,11 @@ export type DocLinkSeed = {
     | "entry"
     | "shipment"
     | "purchase_order"
+    | "invoice"
     | "quote_sheet"
     | "refund_claim"
     | "part";
-  key: string; // entryNumber | shipmentNumber | poNumber | QS key | RC key | sku
+  key: string; // entryNumber | shipmentNumber | poNumber | invoiceNumber | QS key | RC key | sku
   created: boolean;
 };
 
@@ -322,17 +388,71 @@ export type DocumentSeed = {
   uploadedAt: Date;
   extractedData: unknown;
   links: DocLinkSeed[];
+  /** Page count of the placeholder PDF (packet parents are multi-page). */
+  pages?: number;
+  /** Set on packet children: they share the parent's file (storageKey) and
+   *  carry a role + the 1-indexed pages of the parent PDF they cover. The
+   *  parent must appear BEFORE its children in the documents list. */
+  packet?: {
+    parentFileName: string;
+    role: PacketRoleValue;
+    pageRange: number[];
+  };
+};
+
+export type InvoiceLineSeed = {
+  lineNumber: number;
+  sku: string;
+  description: string;
+  /** HTS/HS code as printed on the invoice line; null = the CI omits one. */
+  htsCode: string | null;
+  countryOfOrigin: string | null;
+  quantity: number;
+  unitPrice: number;
+  /** Extended total; defaults to qty × unit — an override IS a plant. */
+  totalPrice?: number;
+};
+
+export type InvoiceSeed = {
+  invoiceNumber: string;
+  poNumber: string;
+  supplierName: string;
+  invoiceDate: string;
+  currency: string;
+  totalAmount: number;
+  incoterms: string | null;
+  lines: InvoiceLineSeed[];
+};
+
+/** An effective-dated classification window for one part. Parts absent
+ *  from the windows list get a single open-start current window derived
+ *  from their htsCode; parts listed here get exactly these windows (the
+ *  seed's reclassification history). */
+export type ClassificationWindowSeed = {
+  sku: string;
+  htsCode: string;
+  validFrom: string | null; // null = open start
+  validTo: string | null; // null = current
+  source: string;
+  actor: string | null;
+  note: string | null;
+  /** When the decision was recorded (created_at); also stamps the matching
+   *  field_changes row so the events feed dates the reclassification. */
+  recordedAt: Date;
 };
 
 export type Story = {
   org: typeof ORG_SEED;
   parts: PartSeed[];
+  classificationWindows: ClassificationWindowSeed[];
   purchaseOrders: PoSeed[];
   shipments: ShipmentSeed[];
   entries: EntrySeed[];
   entryShipmentLinks: [entryNumber: string, shipmentNumber: string][];
   entryPoLinks: [entryNumber: string, poNumber: string][];
   shipmentPoLinks: [shipmentNumber: string, poNumber: string][];
+  invoices: InvoiceSeed[];
+  entryInvoiceLinks: [entryNumber: string, invoiceNumber: string][];
   refundClaims: RefundClaimSeed[];
   quoteSheets: QuoteSheetSeed[];
   integrationSources: SourceSeed[];
@@ -348,46 +468,53 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
   // unit price 9.18 within 0.5% of the quoted 9.15, ordered day(-3) after
   // the day(-9) quote — the awaiting-arrival scenario.
   const purchaseOrders: PoSeed[] = [
-    { poNumber: "PO-2026-001", supplierName: "Shenzhen Volt Dynamics Co.", orderDate: day(-205), expectedDate: day(-172), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-MTR-750W", quantity: 100, unitPrice: 289.5 },
-      { lineNumber: 2, sku: "EB-BAT-48V", quantity: 80, unitPrice: 312.0 },
+    { poNumber: "PO-2026-001", supplierName: SHENZHEN, orderDate: day(-205), expectedDate: day(-172), lines: [
+      { lineNumber: 1, sku: "EB-MTR-750W", countryOfOrigin: "CN", quantity: 100, unitPrice: 289.5 },
+      { lineNumber: 2, sku: "EB-BAT-48V", countryOfOrigin: "CN", quantity: 80, unitPrice: 312.0 },
     ], totalAmount: 53910.0 },
-    { poNumber: "PO-2026-002", supplierName: "Taichung Cycle Works Ltd.", orderDate: day(-175), expectedDate: day(-142), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-DSP-LCD", quantity: 200, unitPrice: 28.9 },
+    { poNumber: "PO-2026-002", supplierName: TAICHUNG, orderDate: day(-175), expectedDate: day(-142), lines: [
+      { lineNumber: 1, sku: "EB-DSP-LCD", countryOfOrigin: "TW", quantity: 200, unitPrice: 28.9 },
       // Pre-quote price for EB-BRK-HYD (66.20); QS3's application later
       // set the official cost to 64.80 — per-SKU price history.
-      { lineNumber: 2, sku: "EB-BRK-HYD", quantity: 150, unitPrice: 66.2 },
+      { lineNumber: 2, sku: "EB-BRK-HYD", countryOfOrigin: "TW", quantity: 150, unitPrice: 66.2 },
     ], totalAmount: 15710.0 },
-    { poNumber: "PO-2026-003", supplierName: "Shenzhen Volt Dynamics Co.", orderDate: day(-172), expectedDate: day(-140), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-MTR-500W", quantity: 120, unitPrice: 148.0 },
-      { lineNumber: 2, sku: "EB-CTRL-V2", quantity: 300, unitPrice: 42.3 },
-      { lineNumber: 3, sku: "EB-BAT-52V", quantity: 60, unitPrice: 428.75 },
+    { poNumber: "PO-2026-003", supplierName: SHENZHEN, orderDate: day(-172), expectedDate: day(-140), lines: [
+      { lineNumber: 1, sku: "EB-MTR-500W", countryOfOrigin: "CN", quantity: 120, unitPrice: 148.0 },
+      { lineNumber: 2, sku: "EB-CTRL-V2", countryOfOrigin: "CN", quantity: 300, unitPrice: 42.3 },
+      { lineNumber: 3, sku: "EB-BAT-52V", countryOfOrigin: "CN", quantity: 60, unitPrice: 428.75 },
     ], totalAmount: 56175.0 },
-    { poNumber: "PO-2026-004", supplierName: "Shenzhen Volt Dynamics Co.", orderDate: day(-115), expectedDate: day(-82), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-MTR-750W", quantity: 120, unitPrice: 289.5 },
-      { lineNumber: 2, sku: "EB-BAT-48V", quantity: 100, unitPrice: 312.0 },
-      { lineNumber: 3, sku: "EB-BAT-52V", quantity: 40, unitPrice: 428.75 },
+    { poNumber: "PO-2026-004", supplierName: SHENZHEN, orderDate: day(-115), expectedDate: day(-82), lines: [
+      { lineNumber: 1, sku: "EB-MTR-750W", countryOfOrigin: "CN", quantity: 120, unitPrice: 289.5 },
+      { lineNumber: 2, sku: "EB-BAT-48V", countryOfOrigin: "CN", quantity: 100, unitPrice: 312.0 },
+      { lineNumber: 3, sku: "EB-BAT-52V", countryOfOrigin: "CN", quantity: 40, unitPrice: 428.75 },
     ], totalAmount: 83090.0 },
-    { poNumber: "PO-2026-005", supplierName: "Taichung Cycle Works Ltd.", orderDate: day(-98), expectedDate: day(-58), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-BRK-HYD", quantity: 250, unitPrice: 64.8 },
+    { poNumber: "PO-2026-005", supplierName: TAICHUNG, orderDate: day(-98), expectedDate: day(-58), lines: [
+      { lineNumber: 1, sku: "EB-BRK-HYD", countryOfOrigin: "TW", quantity: 250, unitPrice: 64.8 },
     ], totalAmount: 16200.0 },
-    { poNumber: "PO-2026-006", supplierName: "Taichung Cycle Works Ltd.", orderDate: day(-96), expectedDate: day(-58), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-FRM-MTB", quantity: 130, unitPrice: 104.5 },
+    { poNumber: "PO-2026-006", supplierName: TAICHUNG, orderDate: day(-96), expectedDate: day(-58), lines: [
+      { lineNumber: 1, sku: "EB-FRM-MTB", countryOfOrigin: "TW", quantity: 130, unitPrice: 104.5 },
     ], totalAmount: 13585.0 },
-    { poNumber: "PO-2026-007", supplierName: "Hanoi Precision Components JSC", orderDate: day(-70), expectedDate: day(-28), status: "partially_received", lines: [
-      { lineNumber: 1, sku: "EB-WHL-27F", quantity: 180, unitPrice: 39.2 },
-      { lineNumber: 2, sku: "EB-SDL-CMF", quantity: 400, unitPrice: 9.8 },
-    ], totalAmount: 10976.0 },
-    { poNumber: "PO-2026-008", supplierName: "Taichung Cycle Works Ltd.", orderDate: day(-40), expectedDate: day(-13), status: "received", lines: [
-      { lineNumber: 1, sku: "EB-DSP-LCD", quantity: 250, unitPrice: 29.4 },
+    // The Hanoi PO carries the VN-sourced controller — the paper trail
+    // behind EB-CTRL-V2's second source.
+    { poNumber: "PO-2026-007", supplierName: HANOI, orderDate: day(-70), expectedDate: day(-28), lines: [
+      { lineNumber: 1, sku: "EB-WHL-27F", countryOfOrigin: "VN", quantity: 180, unitPrice: 39.2 },
+      { lineNumber: 2, sku: "EB-SDL-CMF", countryOfOrigin: "CN", quantity: 400, unitPrice: 9.8 },
+      { lineNumber: 3, sku: "EB-CTRL-V2", countryOfOrigin: "VN", quantity: 150, unitPrice: 44.1 },
+    ], totalAmount: 17591.0 },
+    { poNumber: "PO-2026-008", supplierName: TAICHUNG, orderDate: day(-40), expectedDate: day(-13), lines: [
+      { lineNumber: 1, sku: "EB-DSP-LCD", countryOfOrigin: "TW", quantity: 250, unitPrice: 29.4 },
       { lineNumber: 2, sku: "EB-CTRL-V2", quantity: 150, unitPrice: 43.1 },
     ], totalAmount: 13815.0 },
-    { poNumber: "PO-2026-009", supplierName: "Shenzhen Volt Dynamics Co.", orderDate: day(-30), expectedDate: day(6), status: "open", lines: [
+    // Rides the in-transit SHP-1008: the dual-sourced controller on the
+    // Shenzhen PO exercises the vendor-matched COO in the future-entry
+    // projection (line COO deliberately unlogged — the source resolves it).
+    { poNumber: "PO-2026-009", supplierName: SHENZHEN, orderDate: day(-30), expectedDate: day(6), lines: [
       { lineNumber: 1, sku: "EB-MTR-750W", quantity: 150, unitPrice: 289.5 },
       { lineNumber: 2, sku: "EB-BAT-48V", quantity: 120, unitPrice: 315.0 },
-    ], totalAmount: 81225.0 },
-    { poNumber: "PO-2026-010", supplierName: "Hangzhou Comfort Components", orderDate: day(-3), expectedDate: day(30), status: "open", lines: [
-      { lineNumber: 1, sku: "EB-SDL-CMF", quantity: 500, unitPrice: 9.18 },
+      { lineNumber: 3, sku: "EB-CTRL-V2", quantity: 200, unitPrice: 42.3 },
+    ], totalAmount: 89685.0 },
+    { poNumber: "PO-2026-010", supplierName: HANGZHOU, orderDate: day(-3), expectedDate: day(30), lines: [
+      { lineNumber: 1, sku: "EB-SDL-CMF", countryOfOrigin: "CN", quantity: 500, unitPrice: 9.18 },
     ], totalAmount: 4590.0 },
   ];
 
@@ -400,14 +527,14 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
   // 122 cutoff of day(-10), ETA day(+4), no entry — the future-entry
   // projection with the savings-clause deadline chip.
   const shipments: ShipmentSeed[] = [
-    { shipmentNumber: "SHP-1001", billOfLading: "MAEU2264101", containerNumber: "MSKU4471820", carrier: "Maersk", vessel: "MAERSK ESSEX", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Los Angeles, CA", etd: day(-191), eta: day(-172), sailedOnBoardDate: day(-190), status: "delivered" },
-    { shipmentNumber: "SHP-1002", billOfLading: "ONEY8811327", containerNumber: "ONEU2203945", carrier: "Ocean Network Express", vessel: "ONE HARBOUR", mode: "ocean", originPort: "Kaohsiung, TW", destinationPort: "Long Beach, CA", etd: day(-161), eta: day(-142), sailedOnBoardDate: day(-160), status: "delivered" },
-    { shipmentNumber: "SHP-1003", billOfLading: "EGLV1420067", containerNumber: "EGHU9034112", carrier: "Evergreen", vessel: "EVER LOTUS", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Long Beach, CA", etd: day(-131), eta: day(-112), sailedOnBoardDate: day(-130), status: "delivered" },
-    { shipmentNumber: "SHP-1004", billOfLading: "COSU6633540", containerNumber: "CSNU5321776", carrier: "COSCO", vessel: "COSCO PACIFIC", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Los Angeles, CA", etd: day(-101), eta: day(-82), sailedOnBoardDate: day(-100), status: "delivered" },
-    { shipmentNumber: "SHP-1005", billOfLading: "YMLU4471933", containerNumber: "YMLU8812004", carrier: "Yang Ming", vessel: "YM WELLNESS", mode: "ocean", originPort: "Kaohsiung, TW", destinationPort: "Oakland, CA", etd: day(-76), eta: day(-57), sailedOnBoardDate: day(-75), status: "delivered" },
-    { shipmentNumber: "SHP-1006", billOfLading: "HLCU2288411", containerNumber: "HLXU6120458", carrier: "Hapag-Lloyd", vessel: "DALIAN EXPRESS", mode: "ocean", originPort: "Haiphong, VN", destinationPort: "Seattle, WA", etd: day(-46), eta: day(-27), sailedOnBoardDate: null, status: "arrived" },
-    { shipmentNumber: "SHP-1007", billOfLading: "297-44815630", containerNumber: null, carrier: "China Airlines Cargo", vessel: null, mode: "air", originPort: "Taipei (TPE)", destinationPort: "Los Angeles (LAX)", etd: day(-15), eta: day(-14), sailedOnBoardDate: day(-15), status: "arrived" },
-    { shipmentNumber: "SHP-1008", billOfLading: "ONEY9902218", containerNumber: "ONEU7745102", carrier: "Ocean Network Express", vessel: "ONE HAMBURG", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Long Beach, CA", etd: day(-14), eta: day(4), sailedOnBoardDate: day(-13), status: "in_transit" },
+    { shipmentNumber: "SHP-1001", billOfLading: "MAEU2264101", containerNumber: "MSKU4471820", carrier: "Maersk", vessel: "MAERSK ESSEX", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Los Angeles, CA", etd: day(-191), eta: day(-172), sailedOnBoardDate: day(-190) },
+    { shipmentNumber: "SHP-1002", billOfLading: "ONEY8811327", containerNumber: "ONEU2203945", carrier: "Ocean Network Express", vessel: "ONE HARBOUR", mode: "ocean", originPort: "Kaohsiung, TW", destinationPort: "Long Beach, CA", etd: day(-161), eta: day(-142), sailedOnBoardDate: day(-160) },
+    { shipmentNumber: "SHP-1003", billOfLading: "EGLV1420067", containerNumber: "EGHU9034112", carrier: "Evergreen", vessel: "EVER LOTUS", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Long Beach, CA", etd: day(-131), eta: day(-112), sailedOnBoardDate: day(-130) },
+    { shipmentNumber: "SHP-1004", billOfLading: "COSU6633540", containerNumber: "CSNU5321776", carrier: "COSCO", vessel: "COSCO PACIFIC", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Los Angeles, CA", etd: day(-101), eta: day(-82), sailedOnBoardDate: day(-100) },
+    { shipmentNumber: "SHP-1005", billOfLading: "YMLU4471933", containerNumber: "YMLU8812004", carrier: "Yang Ming", vessel: "YM WELLNESS", mode: "ocean", originPort: "Kaohsiung, TW", destinationPort: "Oakland, CA", etd: day(-76), eta: day(-57), sailedOnBoardDate: day(-75) },
+    { shipmentNumber: "SHP-1006", billOfLading: "HLCU2288411", containerNumber: "HLXU6120458", carrier: "Hapag-Lloyd", vessel: "DALIAN EXPRESS", mode: "ocean", originPort: "Haiphong, VN", destinationPort: "Seattle, WA", etd: day(-46), eta: day(-27), sailedOnBoardDate: null },
+    { shipmentNumber: "SHP-1007", billOfLading: "297-44815630", containerNumber: null, carrier: "China Airlines Cargo", vessel: null, mode: "air", originPort: "Taipei (TPE)", destinationPort: "Los Angeles (LAX)", etd: day(-15), eta: day(-14), sailedOnBoardDate: day(-15) },
+    { shipmentNumber: "SHP-1008", billOfLading: "ONEY9902218", containerNumber: "ONEU7745102", carrier: "Ocean Network Express", vessel: "ONE HAMBURG", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Long Beach, CA", etd: day(-14), eta: day(4), sailedOnBoardDate: day(-13) },
   ];
 
   // -------------------------------------------------------------- entries
@@ -422,7 +549,17 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     lineNumber: number;
     sku: string;
     quantity: number;
-    unitValue?: number; // defaults to catalog cost; overrides model drift
+    unitValue?: number; // defaults to primary-source cost; overrides drift
+    /** Declared line supplier; defaults to the primary source's vendor. */
+    supplier?: string;
+    /** Declared COO; defaults to the primary source's origin. Charges are
+     *  always built from THIS declared value — a supplier/COO mismatch is
+     *  the coo_discrepancy rule's job, not the money rules'. */
+    coo?: string;
+    /** Declared HTS; defaults to the part's catalog code. Charges are built
+     *  from THIS declared value — a mismatch is the hts_discrepancy rule's
+     *  job, and the money rules skip a line with classification doubt. */
+    declaredHts?: string;
     mutate?: (charges: ChargeSeed[], enteredValue: number) => void;
   };
 
@@ -430,28 +567,32 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     entryNumber: string;
     entryDate: string;
     portOfEntry: string;
-    status: EntryStatus;
     totalRefund: number | null;
     hmf: boolean; // false = air entry, no harbor maintenance fee
     lines: LineSpec[];
   }[] = [
     {
-      entryNumber: "231-4501287-4", entryDate: day(-170), portOfEntry: "Los Angeles, CA (2704)", status: "liquidated", totalRefund: 1120.0, hmf: true,
+      entryNumber: "231-4501287-4", entryDate: day(-170), portOfEntry: "Los Angeles, CA (2704)", totalRefund: 1120.0, hmf: true,
       lines: [
         { lineNumber: 1, sku: "EB-MTR-750W", quantity: 100 },
         { lineNumber: 2, sku: "EB-BAT-48V", quantity: 80 },
       ],
     },
     {
-      entryNumber: "231-4501293-1", entryDate: day(-140), portOfEntry: "Long Beach, CA (2709)", status: "liquidated", totalRefund: 661.5, hmf: true,
+      entryNumber: "231-4501293-1", entryDate: day(-140), portOfEntry: "Long Beach, CA (2709)", totalRefund: 661.5, hmf: true,
       lines: [
-        { lineNumber: 1, sku: "EB-DSP-LCD", quantity: 200 },
+        // THE planted reclassification finding: filed under 8531.80.9051
+        // (1.3%), the catalog code of its day — see CLASSIFICATION_WINDOWS.
+        // Charges are consistent under the declared code, so only
+        // hts_reclassified fires (recoverable base duty under today's Free
+        // code).
+        { lineNumber: 1, sku: "EB-DSP-LCD", quantity: 200, declaredHts: "8531.80.9051" },
         { lineNumber: 2, sku: "EB-BRK-HYD", quantity: 150, unitValue: 66.2 },
         { lineNumber: 3, sku: "EB-MTR-500W", quantity: 120 },
       ],
     },
     {
-      entryNumber: "231-4501305-2", entryDate: day(-110), portOfEntry: "Long Beach, CA (2709)", status: "released", totalRefund: null, hmf: true,
+      entryNumber: "231-4501305-2", entryDate: day(-110), portOfEntry: "Long Beach, CA (2709)", totalRefund: null, hmf: true,
       lines: [
         { lineNumber: 1, sku: "EB-CTRL-V2", quantity: 300 },
         { lineNumber: 2, sku: "EB-BAT-52V", quantity: 60 },
@@ -459,7 +600,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     },
     // THE planted entry — three findings for the auditor:
     {
-      entryNumber: "231-4501311-9", entryDate: day(-80), portOfEntry: "Los Angeles, CA (2704)", status: "released", totalRefund: null, hmf: true,
+      entryNumber: "231-4501311-9", entryDate: day(-80), portOfEntry: "Los Angeles, CA (2704)", totalRefund: null, hmf: true,
       lines: [
         {
           // rate_mismatch: Section 301 List 1 declared at 20%, official 25%.
@@ -494,15 +635,19 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         },
       ],
     },
+    // The planted classification finding: EB-BRK-HYD filed under the
+    // dutiable "parts of brakes" code while the catalog says the free
+    // brakes code. Charges match the declared code (10% base paid), so
+    // only hts_discrepancy fires — and the base duty may be recoverable.
     {
-      entryNumber: "231-4501320-0", entryDate: day(-55), portOfEntry: "Oakland, CA (2811)", status: "released", totalRefund: null, hmf: true,
+      entryNumber: "231-4501320-0", entryDate: day(-55), portOfEntry: "Oakland, CA (2811)", totalRefund: null, hmf: true,
       lines: [
-        { lineNumber: 1, sku: "EB-BRK-HYD", quantity: 250 },
+        { lineNumber: 1, sku: "EB-BRK-HYD", quantity: 250, declaredHts: "8714.94.9000" },
         { lineNumber: 2, sku: "EB-FRM-MTB", quantity: 130 },
       ],
     },
     {
-      entryNumber: "231-4501334-6", entryDate: day(-25), portOfEntry: "Seattle, WA (3001)", status: "filed", totalRefund: null, hmf: true,
+      entryNumber: "231-4501334-6", entryDate: day(-25), portOfEntry: "Seattle, WA (3001)", totalRefund: null, hmf: true,
       lines: [
         { lineNumber: 1, sku: "EB-WHL-27F", quantity: 180, unitValue: 39.2 },
         { lineNumber: 2, sku: "EB-SDL-CMF", quantity: 400 },
@@ -510,10 +655,14 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     },
     // Air entry: MPF declared, no HMF — MPF/HMF are ingested facts.
     {
-      entryNumber: "231-4501341-1", entryDate: day(-12), portOfEntry: "Los Angeles, CA (2704)", status: "filed", totalRefund: null, hmf: false,
+      entryNumber: "231-4501341-1", entryDate: day(-12), portOfEntry: "Los Angeles, CA (2704)", totalRefund: null, hmf: false,
       lines: [
         { lineNumber: 1, sku: "EB-DSP-LCD", quantity: 250, unitValue: 29.4 },
-        { lineNumber: 2, sku: "EB-CTRL-V2", quantity: 150, unitValue: 43.1 },
+        // THE planted sourcing finding: declared origin CN under the Hanoi
+        // vendor, whose catalog source for this controller is VN. Charges
+        // match the declared CN (301 paid), so only coo_discrepancy fires —
+        // and the 301 duty may be refundable if VN is the true origin.
+        { lineNumber: 2, sku: "EB-CTRL-V2", quantity: 150, unitValue: 43.1, supplier: HANOI, coo: "CN" },
       ],
     },
   ];
@@ -530,9 +679,12 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     const lines: EntryLineSeed[] = es.lines.map((ls) => {
       const p = part(ls.sku);
       if (!p.htsCode) throw new Error(`entry line SKU ${ls.sku} has no HTS code`);
-      const unitValue = ls.unitValue ?? Number(p.unitCost);
+      const source = primary(p);
+      const unitValue = ls.unitValue ?? Number(source.unitCost);
+      const declaredCoo = ls.coo ?? source.countryOfOrigin;
+      const declaredHts = ls.declaredHts ?? p.htsCode;
       const enteredValue = round2(ls.quantity * unitValue);
-      const charges = declaredCharges(p.htsCode, p.countryOfOrigin, enteredValue, { hmf: es.hmf });
+      const charges = declaredCharges(declaredHts, declaredCoo, enteredValue, { hmf: es.hmf });
       ls.mutate?.(charges, enteredValue);
 
       sums.entered += Math.round(enteredValue * 100);
@@ -548,8 +700,9 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         lineNumber: ls.lineNumber,
         sku: ls.sku,
         description: p.name,
-        htsCode: p.htsCode,
-        countryOfOrigin: p.countryOfOrigin,
+        htsCode: declaredHts,
+        countryOfOrigin: declaredCoo,
+        supplierName: ls.supplier ?? source.vendor,
         quantity: ls.quantity,
         unitValue,
         enteredValue,
@@ -562,7 +715,6 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       entryDate: es.entryDate,
       portOfEntry: es.portOfEntry,
       entryType: "01",
-      status: es.status,
       totalRefund: es.totalRefund,
       lines,
       totals: {
@@ -596,6 +748,90 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
   const shipmentPoLinks: [string, string][] = [
     [S(1), P(1)], [S(2), P(2)], [S(2), P(3)], [S(3), P(3)], [S(4), P(4)],
     [S(5), P(5)], [S(5), P(6)], [S(6), P(7)], [S(7), P(8)], [S(8), P(9)],
+  ];
+
+  // ---------------------------------------------------- commercial invoices
+  //
+  // The CI is the primary document an entry is checked against for variance
+  // (see audit/invoice-rules.ts). Five invoices, each directly linked to
+  // exactly one entry, with four planted CI-vs-entry findings:
+  //   INV-2026-081 → entry 1: CLEAN — the "audits clean" assertion holds.
+  //   INV-2026-143 → entry 2: EB-DSP-LCD printed with origin CN (entry
+  //     declares TW) → coo_discrepancy per SKU; EB-MTR-500W absent from the
+  //     CI → invoice_sku_missing, and the coverage gate keeps the header
+  //     value check silent.
+  //   INV-2026-114 → entry 3: EB-CTRL-V2 printed under 6-digit HS 8504.90
+  //     (entry declares 8504.40.9550 — subheading differs) →
+  //     invoice_hts_mismatch (warning). Values match, so nothing else.
+  //   INV-2026-198 → entry 6: EB-WHL-27F billed at 6,556.00 vs 7,056.00
+  //     entered → header 10,476 vs 10,976 (error) → value_mismatch:
+  //     invoice_total, gating value_mismatch:invoice_sku:EB-WHL-27F —
+  //     over-declared value, duty recoverable.
+  //   INV-8613 → entry 7: the packet CI (see the entry-packet documents
+  //     below) — clean; it mirrors the declared facts, including the CN
+  //     origin the catalog rule already flags.
+  const invoices: InvoiceSeed[] = [
+    {
+      invoiceNumber: "INV-2026-081", poNumber: P(1), supplierName: SHENZHEN,
+      invoiceDate: day(-175), currency: "USD", totalAmount: 53910.0,
+      incoterms: "FOB Yantian",
+      lines: [
+        { lineNumber: 1, sku: "EB-MTR-750W", description: "750W Mid-Drive Motor", htsCode: "8501.31.4000", countryOfOrigin: "CN", quantity: 100, unitPrice: 289.5 },
+        { lineNumber: 2, sku: "EB-BAT-48V", description: "48V 14Ah Lithium Battery Pack", htsCode: "8507.60.0020", countryOfOrigin: "CN", quantity: 80, unitPrice: 312.0 },
+      ],
+    },
+    {
+      invoiceNumber: "INV-2026-143", poNumber: P(2), supplierName: TAICHUNG,
+      invoiceDate: day(-143), currency: "USD", totalAmount: 15710.0,
+      incoterms: "FOB Kaohsiung",
+      lines: [
+        // The CI prints the code of its day (pre-reclassification) — same
+        // as the entry declares, so no HTS finding. Origin CN is the plant.
+        { lineNumber: 1, sku: "EB-DSP-LCD", description: "Backlit LCD Display Unit", htsCode: "8531.80.9051", countryOfOrigin: "CN", quantity: 200, unitPrice: 28.9 },
+        { lineNumber: 2, sku: "EB-BRK-HYD", description: "Hydraulic Disc Brake Set", htsCode: "8714.94.3080", countryOfOrigin: "TW", quantity: 150, unitPrice: 66.2 },
+        // EB-MTR-500W (entry line 3) deliberately absent — the coverage gap.
+      ],
+    },
+    {
+      invoiceNumber: "INV-2026-114", poNumber: P(3), supplierName: SHENZHEN,
+      invoiceDate: day(-114), currency: "USD", totalAmount: 38415.0,
+      incoterms: "FOB Yantian",
+      lines: [
+        // 6-digit HS from a different subheading — the HTS plant.
+        { lineNumber: 1, sku: "EB-CTRL-V2", description: "Sine-Wave Motor Controller V2", htsCode: "8504.90", countryOfOrigin: "CN", quantity: 300, unitPrice: 42.3 },
+        { lineNumber: 2, sku: "EB-BAT-52V", description: "52V 20Ah Lithium Battery Pack", htsCode: "8507.60.0020", countryOfOrigin: "CN", quantity: 60, unitPrice: 428.75 },
+      ],
+    },
+    {
+      invoiceNumber: "INV-2026-198", poNumber: P(7), supplierName: HANOI,
+      invoiceDate: day(-27), currency: "USD", totalAmount: 10476.0,
+      incoterms: "FOB Haiphong",
+      lines: [
+        // Billed $500 under the entered value — the value plant. The header
+        // total matches the line sum, so the CI is internally consistent.
+        { lineNumber: 1, sku: "EB-WHL-27F", description: '27.5" Front Wheel, Thru-Axle', htsCode: "8714.92.1000", countryOfOrigin: "VN", quantity: 180, unitPrice: 36.42, totalPrice: 6556.0 },
+        { lineNumber: 2, sku: "EB-SDL-CMF", description: "Comfort Gel Saddle", htsCode: "8714.95.0000", countryOfOrigin: "CN", quantity: 400, unitPrice: 9.8 },
+      ],
+    },
+    {
+      invoiceNumber: "INV-8613", poNumber: P(8), supplierName: TAICHUNG,
+      invoiceDate: day(-13), currency: "USD", totalAmount: 13815.0,
+      incoterms: "FOB Taipei",
+      lines: [
+        { lineNumber: 1, sku: "EB-DSP-LCD", description: "Backlit LCD Display Unit", htsCode: "8531.20.0040", countryOfOrigin: "TW", quantity: 250, unitPrice: 29.4 },
+        // Mirrors the DECLARED origin (CN) — the declared-vs-catalog origin
+        // finding belongs to the catalog rule, not the CI comparison.
+        { lineNumber: 2, sku: "EB-CTRL-V2", description: "Sine-Wave Motor Controller V2", htsCode: "8504.40.9550", countryOfOrigin: "CN", quantity: 150, unitPrice: 43.1 },
+      ],
+    },
+  ];
+
+  const entryInvoiceLinks: [string, string][] = [
+    [E(1), "INV-2026-081"],
+    [E(2), "INV-2026-143"],
+    [E(3), "INV-2026-114"],
+    [E(6), "INV-2026-198"],
+    [E(7), "INV-8613"],
   ];
 
   // -------------------------------------------------------------- refunds
@@ -651,7 +887,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     // (derived). PO-2026-010 (open, day(-3)) is the matching order.
     {
       key: "QS2",
-      supplierName: "Hangzhou Comfort Components",
+      supplierName: HANGZHOU,
       quoteDate: day(-9),
       validUntil: day(51),
       notes: "Manual entry from supplier email.",
@@ -664,7 +900,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     // SHP-1005 and made 64.80 the official cost.
     {
       key: "QS3",
-      supplierName: "Taichung Cycle Works Ltd.",
+      supplierName: TAICHUNG,
       quoteDate: day(-92),
       validUntil: null,
       notes: null,
@@ -677,7 +913,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     // (partCreated=true is the provenance).
     {
       key: "QS4",
-      supplierName: "Shenzhen Volt Dynamics Co.",
+      supplierName: SHENZHEN,
       quoteDate: day(-2),
       validUntil: day(28),
       notes: null,
@@ -773,6 +1009,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         total_amount: po.totalAmount,
         line_items: po.lines.map((l) => ({
           sku: l.sku,
+          country_of_origin: l.countryOfOrigin ?? null,
           quantity: l.quantity,
           unit_price: l.unitPrice,
         })),
@@ -781,15 +1018,157 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     };
   };
 
+  // The CI document behind an InvoiceSeed — extractedData mirrors
+  // CommercialInvoiceExtraction (including per-line hts_code).
+  const invByNumber = new Map(invoices.map((i) => [i.invoiceNumber, i]));
+  const ciExtraction = (invoiceNumber: string) => {
+    const inv = invByNumber.get(invoiceNumber);
+    if (!inv) throw new Error(`story references unknown invoice ${invoiceNumber}`);
+    return {
+      invoice_number: inv.invoiceNumber,
+      po_number: inv.poNumber,
+      supplier_name: inv.supplierName,
+      invoice_date: inv.invoiceDate,
+      currency: inv.currency,
+      amount: inv.totalAmount,
+      incoterms: inv.incoterms,
+      line_items: inv.lines.map((l) => ({
+        line_number: l.lineNumber,
+        sku: l.sku,
+        description: l.description,
+        country_of_origin: l.countryOfOrigin,
+        hts_code: l.htsCode,
+        quantity: l.quantity,
+        unit_price: l.unitPrice,
+        total_price: l.totalPrice ?? round2(l.quantity * l.unitPrice),
+      })),
+    };
+  };
+
+  const ciDoc = (
+    invoiceNumber: string,
+    entryNumber: string,
+    poNumber: string,
+    upload: Date,
+  ): DocumentSeed => ({
+    fileName: `invoice-${invoiceNumber.toLowerCase()}.pdf`,
+    docType: "commercial_invoice",
+    sourceKind: "email_inbox",
+    uploadedAt: upload,
+    extractedData: ciExtraction(invoiceNumber),
+    links: [
+      { entityType: "invoice", key: invoiceNumber, created: true },
+      { entityType: "entry", key: entryNumber, created: false },
+      { entityType: "purchase_order", key: poNumber, created: false },
+    ],
+  });
+
+  // ------------------------------------------------- the entry packet
+  //
+  // Entry 7's 7501 arrives the real-world way: inside ONE broker packet PDF
+  // bundling the 7501 (pp. 1–2), the commercial invoice (pp. 3–4), the
+  // packing list (p. 5), and an assist sheet (p. 6). The parent's
+  // extracted_data is the split manifest; the children are ordinary
+  // documents sharing the parent's file, page-scoped. The assist sheet
+  // lands as "other" — columnar like an invoice, but never one.
+  const packetFile = `entry-packet-${en(7).entryNumber}.pdf`;
+  const packetChild = (
+    role: PacketRoleValue,
+    label: string,
+    pageRange: number[],
+    docType: DocumentTypeValue,
+    extractedData: unknown,
+    links: DocLinkSeed[],
+  ): DocumentSeed => ({
+    fileName: `entry-packet-${en(7).entryNumber} — ${label} (${pageRange.length > 1 ? `pp. ${pageRange[0]}–${pageRange[pageRange.length - 1]}` : `p. ${pageRange[0]}`}).pdf`,
+    docType,
+    sourceKind: "sftp",
+    uploadedAt: at(-11, 9, 5),
+    extractedData,
+    links,
+    packet: { parentFileName: packetFile, role, pageRange },
+  });
+
+  const packetDocuments: DocumentSeed[] = [
+    {
+      fileName: packetFile,
+      docType: "entry_packet",
+      sourceKind: "sftp",
+      uploadedAt: at(-11, 9, 0),
+      pages: 6,
+      extractedData: {
+        parts: [
+          { part_index: 1, role: "entry_summary_7501", doc_type: "port_entry", title: "Entry Summary 7501", pages: [1, 2], confidence: "high" },
+          { part_index: 2, role: "commercial_invoice", doc_type: "commercial_invoice", title: "Commercial Invoice", pages: [3, 4], confidence: "high" },
+          { part_index: 3, role: "packing_list", doc_type: "packing_list", title: "Packing List", pages: [5], confidence: "high" },
+          { part_index: 4, role: "assist_sheet", doc_type: "other", title: "Assist Sheet", pages: [6], confidence: "low" },
+        ],
+      },
+      links: [],
+    },
+    packetChild(
+      "entry_summary_7501", "Entry summary (7501)", [1, 2], "port_entry",
+      {
+        entry_number: en(7).entryNumber,
+        entry_date: en(7).entryDate,
+        port_of_entry: en(7).portOfEntry,
+        entry_type: "01",
+        importer_of_record: ORG_SEED.importerOfRecord,
+        referenced_bols: ["297-44815630"],
+        referenced_pos: [P(8)],
+        referenced_invoices: ["INV-8613"],
+      },
+      [
+        { entityType: "entry", key: en(7).entryNumber, created: true },
+        { entityType: "shipment", key: S(7), created: false },
+        { entityType: "purchase_order", key: P(8), created: false },
+        { entityType: "invoice", key: "INV-8613", created: false },
+      ],
+    ),
+    packetChild(
+      "commercial_invoice", "Commercial invoice", [3, 4], "commercial_invoice",
+      ciExtraction("INV-8613"),
+      [
+        { entityType: "invoice", key: "INV-8613", created: true },
+        { entityType: "entry", key: en(7).entryNumber, created: false },
+        { entityType: "purchase_order", key: P(8), created: false },
+      ],
+    ),
+    packetChild(
+      "packing_list", "Packing list", [5], "packing_list",
+      {
+        bill_of_lading: "297-44815630",
+        cartons: 42,
+        gross_weight_kg: 1265,
+        referenced_pos: [P(8)],
+      },
+      [{ entityType: "shipment", key: S(7), created: false }],
+    ),
+    packetChild(
+      "assist_sheet", "Assist sheet", [6], "other",
+      {
+        note: "Assist sheet — statutory additions to customs value. Not a commercial invoice; no fields extracted.",
+      },
+      [],
+    ),
+  ];
+
   const documents: DocumentSeed[] = [
-    // 7501s — one per entry, uploaded 1–2 days after the entry date.
+    // 7501s — one per entry, uploaded 1–2 days after the entry date. Entry
+    // 7's arrives inside the entry packet below instead.
     entryDoc(1, at(-169, 10, 0), ["MAEU2264101"], [P(1)], [1]),
     entryDoc(2, at(-139, 10, 0), ["ONEY8811327"], [P(2), P(3)], [2]),
     entryDoc(3, at(-108, 9, 30), ["EGLV1420067"], [P(3)], [3]),
     entryDoc(4, at(-78, 10, 0), ["COSU6633540"], [P(4)], [4]),
     entryDoc(5, at(-54, 11, 0), ["YMLU4471933"], [P(5), P(6)], [5]),
     entryDoc(6, at(-23, 10, 15), ["HLCU2288411"], [P(7)], [6]),
-    entryDoc(7, at(-11, 9, 0), ["297-44815630"], [P(8)], [7]),
+    ...packetDocuments,
+    // Standalone commercial invoices — via the document inbox, a day or two
+    // after their invoice dates.
+    ciDoc("INV-2026-081", E(1), P(1), at(-173, 16, 0)),
+    ciDoc("INV-2026-143", E(2), P(2), at(-141, 16, 0)),
+    ciDoc("INV-2026-114", E(3), P(3), at(-112, 16, 0)),
+    ciDoc("INV-2026-198", E(6), P(7), at(-26, 16, 0)),
     // BOLs — via the broker SFTP feed, shortly after sailing.
     bolDoc(1, at(-189, 8, 0), [P(1)]),
     bolDoc(2, at(-159, 8, 0), [P(2), P(3)]),
@@ -829,7 +1208,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       sourceKind: "email_inbox",
       uploadedAt: at(-1, 16, 0),
       extractedData: {
-        supplier_name: "Shenzhen Volt Dynamics Co.",
+        supplier_name: SHENZHEN,
         quote_date: day(-2),
         currency: "USD",
         valid_until: day(28),
@@ -883,15 +1262,49 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     },
   ];
 
+  // ---------------------------------------- classification history
+  //
+  // EB-DSP-LCD was classified as "other visual signalling apparatus"
+  // (8531.80.9051, 1.3%) until a day(-40) review moved it to the Free
+  // indicator-panel code. Entry 231-4501293-1 (day(-140)) filed under the
+  // OLD code — correct for its day, so the auditor raises
+  // hts_reclassified (recoverable base duty), not a misfiling. Entry
+  // 231-4501341-1 (day(-12)) files under the new code and stays clean.
+  const classificationWindows: ClassificationWindowSeed[] = [
+    {
+      sku: "EB-DSP-LCD",
+      htsCode: "8531.80.9051",
+      validFrom: null,
+      validTo: day(-41),
+      source: "seed",
+      actor: null,
+      note: null,
+      recordedAt: at(-195, 9),
+    },
+    {
+      sku: "EB-DSP-LCD",
+      htsCode: "8531.20.0040",
+      validFrom: day(-40),
+      validTo: null,
+      source: "manual_edit",
+      actor: ORG_SEED.defaultActorName,
+      note: "CBP ruling review: backlit LCD display units classify as indicator panels (8531.20), not other signalling apparatus.",
+      recordedAt: at(-40, 10),
+    },
+  ];
+
   return {
     org: ORG_SEED,
     parts: PART_SEED,
+    classificationWindows,
     purchaseOrders,
     shipments,
     entries,
     entryShipmentLinks,
     entryPoLinks,
     shipmentPoLinks,
+    invoices,
+    entryInvoiceLinks,
     refundClaims,
     quoteSheets,
     integrationSources,

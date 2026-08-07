@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const workspaceLinks = [
+  { href: "/variance", label: "Variance" },
   { href: "/entries", label: "Entries" },
   { href: "/parts", label: "Parts" },
   { href: "/events", label: "Events" },
@@ -39,7 +40,7 @@ export function TopNav() {
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center gap-6 px-4 sm:px-6">
-        <Link href="/entries" className="flex items-center gap-2">
+        <Link href="/variance" className="flex items-center gap-2">
           <Anchor className="size-5" />
           <span className="text-sm font-semibold tracking-tight">MobyTrade</span>
         </Link>

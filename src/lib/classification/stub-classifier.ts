@@ -18,13 +18,14 @@ type StoryEntry = {
   candidates: { code: string; confidence: number; reason: string }[];
 };
 
-// Demo storylines (SKU-keyed, like SIBLING_HTS in the stub processor):
-// - EB-BRK-HYD: certain suggestion that MATCHES what entry 231-4501311-9
-//   line 3 declared — accepting it corrects the catalog and auto-clears the
-//   hts_discrepancy alert on re-audit.
+// Demo storylines, keyed by seeded catalog SKUs (see PART_SEED):
+// - EB-BRK-HYD: certain suggestion for the brake's schedule sibling — the
+//   same code stub-processed 7501s declare on their class-3 discrepancy
+//   lines, so accepting it corrects the catalog and auto-clears those
+//   hts_discrepancy alerts on re-audit.
 // - EB-CHG-48V: certain suggestion for a codeless part — exercises the
 //   provisional auto-select path.
-// - EB-TIR-27: certain confirmation of the committed code — exercises
+// - EB-DSP-LCD: certain confirmation of the committed code — exercises
 //   acknowledge.
 // - EB-CTRL-V2: ambiguous, three candidates — exercises choosing.
 export const STUB_SUGGESTIONS: Record<string, StoryEntry> = {
@@ -59,15 +60,16 @@ export const STUB_SUGGESTIONS: Record<string, StoryEntry> = {
       },
     ],
   },
-  "EB-TIR-27": {
+  "EB-DSP-LCD": {
     outcome: "certain",
     reasoning:
-      "A 27.5-inch pneumatic bicycle tire is squarely 4011.50.0000 — the heading covers new pneumatic rubber tires of a kind used on bicycles. The committed catalog code is correct.",
+      "A backlit LCD display head unit is an indicator panel incorporating liquid crystal devices — squarely 8531.20.0040. The committed catalog code is correct.",
     candidates: [
       {
-        code: "4011.50.0000",
+        code: "8531.20.0040",
         confidence: 0.97,
-        reason: "Heading 4011.50 covers new pneumatic bicycle tires by name.",
+        reason:
+          "Heading 8531.20 covers indicator panels incorporating LCDs by name.",
       },
     ],
   },
