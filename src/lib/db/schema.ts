@@ -19,6 +19,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -106,10 +107,20 @@ export const chargeType = pgEnum("charge_type", [
   "countervailing",
   "other_fee",
 ]);
+// Statute first; product qualifier only where one statute carries multiple
+// product actions (Section 232's per-proclamation regimes). The legacy
+// platform's flat "timber_furniture"/"pharmaceutical" names were display
+// drift — its own seeders call them Section 232 regimes (Proclamation 10976;
+// U.S. note 51(c) groups pharma with the 232 family).
 export const measureAuthority = pgEnum("measure_authority", [
   "section_301",
   "section_232_steel",
   "section_232_aluminum",
+  "section_232_copper",
+  "section_232_autos",
+  "section_232_timber_furniture",
+  "section_232_pharma",
+  "section_338",
   "ieepa",
   "reciprocal",
   "section_122",
@@ -184,6 +195,13 @@ export const htsClassificationOutcome = pgEnum("hts_classification_outcome", [
 export const reviewItemType = pgEnum("review_item_type", [
   "hts_classification",
   "tariff_measure_revision",
+  // One card spanning every create_measure revision in a (authority, Ch99
+  // 6-digit prefix) family — wholesale adoption without hundreds of
+  // atomized cards. subject_id = measure_revision_groups.id.
+  "tariff_measure_group",
+  // Release-level approval of a base-schedule (ch. 1–97) refresh.
+  // subject_id = the "<release>-base" tariff_announcements.id.
+  "tariff_base_release",
 ]);
 export const reviewItemStatus = pgEnum("review_item_status", [
   "pending",
@@ -816,6 +834,11 @@ export const tradeMeasures = pgTable(
     scope: measureScope("scope").notNull().default("hts_list"),
     // Countries of origin the measure applies to; null = every country.
     countries: varchar("countries", { length: 2 }).array(),
+    // Annex-style carve-outs: countries the measure does NOT apply to
+    // ("all countries except…"). Null/empty = no exclusions. Checked after
+    // the inclusion list; an unknown COO is NOT excluded (expectations bias
+    // toward duty owed, same as sail assumptions).
+    countriesExcluded: varchar("countries_excluded", { length: 2 }).array(),
     effectiveDate: date("effective_date").notNull(),
     endDate: date("end_date"),
     // Sail-date conditions, tested against a shipment's laden date
@@ -965,6 +988,33 @@ export const tariffAnnouncements = pgTable(
   (t) => [uniqueIndex("tariff_announcements_source_ref_uq").on(t.source, t.sourceRef)],
 );
 
+// One reviewable "adopt this measure family" unit: the payload behind a
+// review_items row (item_type "tariff_measure_group", subject_id = this
+// row's id), grouping the create_measure revisions that share an authority
+// and Chapter 99 6-digit prefix within one announcement. Member counts are
+// derived at read time from measure_revisions (applied/superseded members
+// drop out) — never stored.
+export const measureRevisionGroups = pgTable(
+  "measure_revision_groups",
+  {
+    id: id(),
+    announcementId: uuid("announcement_id")
+      .notNull()
+      .references(() => tariffAnnouncements.id, { onDelete: "cascade" }),
+    authority: measureAuthority("authority").notNull(),
+    ch99Prefix: varchar("ch99_prefix", { length: 6 }).notNull(),
+    title: text("title").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("mrg_announcement_key_uq").on(
+      t.announcementId,
+      t.authority,
+      t.ch99Prefix,
+    ),
+  ],
+);
+
 // Staged measure changes an announcement implies — the payload behind a
 // review_items row (item_type "tariff_measure_revision", subject_id = this
 // row's id), mirroring how hts_classifications backs classification review.
@@ -997,6 +1047,15 @@ export const measureRevisions = pgTable(
     liveSnapshot: jsonb("live_snapshot"),
     // sha256 of the source fields — dedupes re-fetches of unchanged rows.
     contentHash: varchar("content_hash", { length: 64 }).notNull(),
+    // Membership in a tariff_measure_group card. Grouped members carry no
+    // per-revision review item — the group's item gates them all.
+    groupId: uuid("group_id").references(() => measureRevisionGroups.id, {
+      onDelete: "set null",
+    }),
+    // A newer sync re-staged this code (content changed): terminal, like a
+    // superseded review item. Individual revisions get BOTH this stamp and
+    // the item-status flip so open-revision loading has one predicate.
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     appliedMeasureId: uuid("applied_measure_id").references(
       () => tradeMeasures.id,
@@ -1315,7 +1374,11 @@ export const reviewItems = pgTable(
   "review_items",
   {
     id: id(),
-    orgId: orgId(),
+    // Null = platform-global item (tariff reference changes, reviewed by the
+    // super admin — the data they gate has no org). Non-null = tenant-scoped
+    // (hts_classification). The CHECK below makes scope a function of
+    // item_type rather than caller discipline.
+    orgId: uuid("org_id").references(() => orgs.id),
     itemType: reviewItemType("item_type").notNull(),
     subjectId: uuid("subject_id").notNull(),
     // The row backing this item (an hts_classifications id today).
@@ -1334,6 +1397,12 @@ export const reviewItems = pgTable(
       .on(t.itemType, t.subjectId)
       .where(sql`${t.status} = 'pending'`),
     index("review_items_org_status_idx").on(t.orgId, t.status),
+    // ::text on purpose: lets the migration that ADDs the enum values
+    // reference them in a CHECK without "unsafe use of new value".
+    check(
+      "review_items_scope_check",
+      sql`(${t.orgId} is null) = (${t.itemType}::text in ('tariff_measure_revision', 'tariff_measure_group', 'tariff_base_release'))`,
+    ),
   ],
 );
 
@@ -1668,6 +1737,18 @@ export const tariffAnnouncementsRelations = relations(
   tariffAnnouncements,
   ({ many }) => ({
     revisions: many(measureRevisions),
+    revisionGroups: many(measureRevisionGroups),
+  }),
+);
+
+export const measureRevisionGroupsRelations = relations(
+  measureRevisionGroups,
+  ({ one, many }) => ({
+    announcement: one(tariffAnnouncements, {
+      fields: [measureRevisionGroups.announcementId],
+      references: [tariffAnnouncements.id],
+    }),
+    members: many(measureRevisions),
   }),
 );
 
@@ -1677,6 +1758,10 @@ export const measureRevisionsRelations = relations(
     announcement: one(tariffAnnouncements, {
       fields: [measureRevisions.announcementId],
       references: [tariffAnnouncements.id],
+    }),
+    group: one(measureRevisionGroups, {
+      fields: [measureRevisions.groupId],
+      references: [measureRevisionGroups.id],
     }),
     targetMeasure: one(tradeMeasures, {
       fields: [measureRevisions.targetMeasureId],

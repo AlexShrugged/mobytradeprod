@@ -155,6 +155,16 @@ export function resolveExpectedMeasures(
       if (input.countryOfOrigin === null) return false;
       if (!m.countries.includes(input.countryOfOrigin)) return false;
     }
+    // Annex-style carve-outs ("all countries except…"). An unknown COO is
+    // NOT excluded — expectations bias toward duty owed, same as the sail
+    // assumptions below.
+    if (
+      m.countriesExcluded &&
+      input.countryOfOrigin !== null &&
+      m.countriesExcluded.includes(input.countryOfOrigin)
+    ) {
+      return false;
+    }
     if (m.sailedOnOrAfter !== null || m.sailedOnOrBefore !== null) {
       sailEvaluated = true;
       if (m.sailedOnOrAfter !== null) {
@@ -184,7 +194,9 @@ export function resolveExpectedMeasures(
       deduped.push(m);
     } else {
       sailAssumed = true;
-      if (m.rate > deduped[at].rate) deduped[at] = m;
+      // Null rates (presence-only measures) compare as cheapest, so the
+      // computable sibling wins the "costlier" tie-break.
+      if ((m.rate ?? -1) > (deduped[at].rate ?? -1)) deduped[at] = m;
     }
   }
 
@@ -242,9 +254,13 @@ export function computeExpectedCharges(
 
   return {
     baseDuty,
+    // A null rate = non-ad-valorem measure: still expected on the line
+    // (presence-checked), amount not computable — same contract as
+    // specific/compound base duty above.
     measures: applicable.map((m) => ({
       ...m,
-      amountCents: Math.round(m.rate * line.enteredValueCents),
+      amountCents:
+        m.rate === null ? null : Math.round(m.rate * line.enteredValueCents),
     })),
     suppressed,
     baseDutyZeroedBy: inLieu ? inLieu.authority : null,

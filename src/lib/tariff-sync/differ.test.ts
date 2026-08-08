@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { contentHashOf, detectCountries, diffRelease } from "./differ";
+import { classifyAuthority, contentHashOf, detectCountries, diffRelease } from "./differ";
 import { parseCh99Rows } from "./usitc";
 import type {
   Ch99Row,
@@ -184,5 +184,122 @@ describe("detectCountries", () => {
       detectCountries("articles the product of China and Hong Kong that were"),
     ).toEqual(["CN", "HK"]);
     expect(detectCountries("articles of aluminum")).toBeNull();
+  });
+});
+
+describe("classifyAuthority — Section 232 product actions and Section 338", () => {
+  const cases: [string, string, string][] = [
+    // [description, htsno, expected]
+    ["Section 232 tariff on semi-finished copper products", "9903.78.01", "section_232_copper"],
+    ["Section 232 tariffs on auto parts (25%)", "9903.94.05", "section_232_autos"],
+    ["Section 232 tariff on passenger vehicles and light trucks", "9903.91.01", "section_232_autos"],
+    ["Section 232 timber: softwood timber and lumber", "9903.76.01", "section_232_timber_furniture"],
+    ["10% tariff on softwood timber and lumber imports", "9903.96.01", "section_232_timber_furniture"],
+    ["25% tariff on certain upholstered furniture", "9903.96.02", "section_232_timber_furniture"],
+    ["100% tariff on branded or patented pharmaceutical products", "9903.95.01", "section_232_pharma"],
+    ["Tariff Act of 1930 Section 338 duties on certain products", "9903.03.14", "section_338"],
+    // Combined metals actions keep their historical aluminum bucketing.
+    ["Section 232 tariff on articles of aluminum, steel, or copper", "9903.82.02", "section_232_aluminum"],
+    // Prefix-only fallback (USITC prose without keyword cues).
+    ["Articles subject to additional duties", "9903.78.05", "section_232_copper"],
+    ["Articles subject to additional duties", "9903.94.10", "section_232_autos"],
+    ["Articles subject to additional duties", "9903.95.02", "section_232_pharma"],
+  ];
+
+  for (const [description, htsno, expected] of cases) {
+    it(`"${description.slice(0, 48)}…" (${htsno}) → ${expected}`, () => {
+      expect(classifyAuthority(description, htsno)).toBe(expected);
+    });
+  }
+});
+
+describe("non-ad-valorem rate classification in the differ", () => {
+  it("carries the raw text and classified type for unparsed rates", () => {
+    const { revisions } = diffRelease(
+      [
+        row({
+          htsno: "9903.99.05",
+          description: "Port maintenance fee on certain vessels",
+          general: "$80/net ton",
+        }),
+      ],
+      { byDigits: new Map() },
+      [],
+      { stageNewCodes: true },
+    );
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0].proposed.rate).toBeNull();
+    expect(revisions[0].proposed.rateType).toBe("specific");
+    expect(revisions[0].proposed.rateText).toBe("$80/net ton");
+  });
+
+  it("plain ad-valorem rates stay numeric with no raw text", () => {
+    const { revisions } = diffRelease(
+      [row({ htsno: "9903.99.06" })],
+      { byDigits: new Map() },
+      [],
+      { stageNewCodes: true },
+    );
+    expect(revisions[0].proposed.rate).toBe(0.25);
+    expect(revisions[0].proposed.rateType).toBe("ad_valorem");
+    expect(revisions[0].proposed.rateText).toBeNull();
+  });
+});
+
+describe("detectCountries — reciprocal annex coverage", () => {
+  it("resolves the smaller annex countries", () => {
+    expect(
+      detectCountries("articles the product of Thailand, as provided for…"),
+    ).toEqual(["TH"]);
+    expect(
+      detectCountries("articles the product of Papua New Guinea, as provided…"),
+    ).toEqual(["PG"]);
+  });
+
+  it("handles the USITC curly apostrophe in Côte d'Ivoire", () => {
+    expect(
+      detectCountries("articles the product of Côte d’Ivoire, as provided…"),
+    ).toEqual(["CI"]);
+  });
+
+  it("expands the European Union to member-state codes", () => {
+    const codes = detectCountries("articles the product of the European Union");
+    expect(codes).toContain("DE");
+    expect(codes).toContain("FR");
+    expect(codes).toHaveLength(27);
+  });
+
+  it("still collects multiple named countries", () => {
+    expect(
+      detectCountries("articles the product of China and Hong Kong"),
+    ).toEqual(expect.arrayContaining(["CN", "HK"]));
+  });
+});
+
+describe("classifyAuthority — reciprocal country headings by prefix", () => {
+  it("9903.02.xx prose names only the country; the prefix says reciprocal", () => {
+    expect(
+      classifyAuthority(
+        "Except for goods loaded onto a vessel …, articles the product of India, as provided for in subdivision (v)",
+        "9903.02.26",
+      ),
+    ).toBe("reciprocal");
+  });
+});
+
+describe("classifyAuthority — prefix beats weak product cues", () => {
+  it("a reciprocal country heading mentioning pharmaceutical products stays reciprocal", () => {
+    expect(
+      classifyAuthority(
+        "Articles the product of Switzerland that are non-patented articles for use in pharmaceutical applications",
+        "9903.02.86",
+      ),
+    ).toBe("reciprocal");
+  });
+
+  it("statute keywords still beat prefixes (chapters get re-purposed)", () => {
+    expect(
+      classifyAuthority("Section 301 duties on certain articles", "9903.02.99"),
+    ).toBe("section_301");
   });
 });

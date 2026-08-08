@@ -8,7 +8,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 
 import * as schema from "../db/schema";
-import { loadReferenceData, type DbClient } from "../duty/reference";
+import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
 import { resolveSailInfo } from "../duty/sail";
 import type { ReferenceData } from "../duty/types";
 import { resolveWindow } from "../effective-dating";
@@ -96,7 +96,7 @@ export async function auditEntry(
   });
   if (!entry) return;
 
-  const ref = preloadedRef ?? (await loadReferenceData(db));
+  const ref = preloadedRef ?? (await loadReferenceDataForOrg(db, orgId));
   const auditable: AuditableEntry = {
     entryDate: entry.entryDate,
     totalEnteredValue: entry.totalEnteredValue,
@@ -299,7 +299,7 @@ export async function sweepAudits(
   db: DbClient,
   orgId: string,
 ): Promise<ReauditSummary> {
-  const ref = await loadReferenceData(db);
+  const ref = await loadReferenceDataForOrg(db, orgId);
   const rows = await db.query.entries.findMany({
     where: eq(schema.entries.orgId, orgId),
     columns: { id: true },
@@ -315,6 +315,23 @@ export async function sweepAudits(
     for (const key of after) if (!before.has(key)) created += 1;
   }
   return { entries: rows.length, cleared, created };
+}
+
+/**
+ * Re-audit every entry in every org — the follow-up to applying a GLOBAL
+ * reference change (a tariff revision, group, or base release affects all
+ * tenants at once). v1 has one org; this loop is the multi-tenant seam.
+ */
+export async function sweepAuditsAllOrgs(db: DbClient): Promise<ReauditSummary> {
+  const orgs = await db.query.orgs.findMany({ columns: { id: true } });
+  const total: ReauditSummary = { entries: 0, cleared: 0, created: 0 };
+  for (const { id } of orgs) {
+    const summary = await sweepAudits(db, id);
+    total.entries += summary.entries;
+    total.cleared += summary.cleared;
+    total.created += summary.created;
+  }
+  return total;
 }
 
 async function openKeys(db: DbClient, entryId: string): Promise<Set<string>> {

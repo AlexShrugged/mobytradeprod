@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AlertRow } from "@/lib/db/queries/entries";
+import { pairSiblingAlerts, unitIds } from "@/lib/variance/grouping";
 import { cn } from "@/lib/utils";
 
 const severityMeta = {
@@ -43,19 +44,36 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
   ) {
     setBusyId(alert.id);
     try {
-      const res = await fetch(`/api/alerts/${alert.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
+      // A rate mismatch and its duty-amount twin are one finding — decide
+      // them together here too, or this surface could re-create the
+      // accept-one-dismiss-the-other contradiction.
+      const lineAlerts = alerts.filter(
+        (a) => a.lineItemId !== null && a.lineItemId === alert.lineItemId,
+      );
+      const unit = pairSiblingAlerts(lineAlerts).find((u) =>
+        unitIds(u).includes(alert.id),
+      );
+      const ids = unit ? unitIds(unit) : [alert.id];
+      const results = await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/alerts/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status }),
+          }),
+        ),
+      );
+      const failed = results.find((r) => !r.ok);
+      if (failed) {
+        const body = await failed.json().catch(() => null);
         throw new Error(body?.error ?? "Failed to update the alert.");
       }
       toast.success(
         status === "open"
           ? "Alert reopened — the auditor owns it again."
-          : `Alert ${status}.`,
+          : status === "resolved"
+            ? "Alert accepted."
+            : "Alert dismissed.",
       );
       router.refresh();
     } catch (err) {
@@ -97,7 +115,7 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
             <span className={cn("text-xs", meta.tone)}>{meta.label}</span>
             {!isOpen ? (
               <Badge variant="secondary" className="font-normal">
-                {alert.status}
+                {alert.status === "resolved" ? "accepted" : alert.status}
               </Badge>
             ) : null}
           </div>
@@ -122,7 +140,7 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
                 disabled={busyId === alert.id}
                 onClick={() => setStatus(alert, "resolved")}
               >
-                Resolve
+                Accept
               </Button>
               <Button
                 variant="ghost"
@@ -159,7 +177,7 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
             className="w-fit text-muted-foreground"
             onClick={() => setShowResolved((v) => !v)}
           >
-            {showResolved ? "Hide" : "Show"} {resolved.length} resolved
+            {showResolved ? "Hide" : "Show"} {resolved.length} handled
           </Button>
           {showResolved ? resolved.map(renderAlert) : null}
         </>

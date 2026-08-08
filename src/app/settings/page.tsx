@@ -9,22 +9,23 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { isSuperAdmin } from "@/lib/admin";
 import { getTariffStatus } from "@/lib/db/queries/tariffs";
 import { getVendors } from "@/lib/db/queries/vendors";
 import { formatDateTime } from "@/lib/format";
 import { getCurrentOrg } from "@/lib/org";
 
 import { OrgCard } from "./org-card";
-import { SyncButton } from "./sync-button";
 import { VendorsCard } from "./vendors-card";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [org, tariff, vendors] = await Promise.all([
+  const [org, tariff, vendors, admin] = await Promise.all([
     getCurrentOrg(),
     getTariffStatus(),
     getVendors(),
+    isSuperAdmin(),
   ]);
   // Env presence decides the processor at request time — force-dynamic
   // keeps this honest after an env change.
@@ -46,10 +47,11 @@ export default async function SettingsPage() {
 
         <VendorsCard vendors={vendors} />
 
+        {/* Read-only facts about the global reference. Operations on it
+            (sync, approvals) live behind the super-admin seam at /admin. */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0">
-            <CardTitle className="text-base">Tariff reference</CardTitle>
-            <SyncButton />
+          <CardHeader>
+            <CardTitle className="text-base">Tariff schedule</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div>
@@ -79,20 +81,22 @@ export default async function SettingsPage() {
             <div className="flex items-center gap-2 pt-1">
               {tariff.openRevisionCount > 0 ? (
                 <Badge className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400">
-                  {tariff.openRevisionCount} open revision
+                  {tariff.openRevisionCount} pending change
                   {tariff.openRevisionCount === 1 ? "" : "s"}
                 </Badge>
               ) : (
                 <Badge className="border-transparent bg-muted text-muted-foreground">
-                  Review queue empty
+                  Reference up to date
                 </Badge>
               )}
-              <Link
-                href="/settings/tariffs"
-                className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
-              >
-                Review queue <ArrowRight className="size-3.5" />
-              </Link>
+              {admin ? (
+                <Link
+                  href="/admin"
+                  className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+                >
+                  Platform admin <ArrowRight className="size-3.5" />
+                </Link>
+              ) : null}
             </div>
           </CardContent>
         </Card>

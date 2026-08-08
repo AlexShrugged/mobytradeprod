@@ -22,6 +22,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-input-border: var(--input-border);
+  --color-field: var(--field);
   --color-ring: var(--ring);
   --color-tertiary: var(--tertiary);
   --color-faint: var(--faint);
@@ -43,7 +44,7 @@
   /* Cool (slate) neutral ramp — hue ~215°, subtle blue cast throughout. */
   --background: #f1f5f9;
   --foreground: #0f172a;
-  --card: #ffffff;
+  --card: #f8fafc;
   --card-foreground: #0f172a;
   --popover: #ffffff;
   --popover-foreground: #0f172a;
@@ -53,16 +54,24 @@
   --secondary-foreground: #f8fafc;
   --muted: #f1f5f9;
   --muted-foreground: #3f4c63;
-  --accent: #f1f5f9;
+  /* Deliberately a whisper below --background — just enough to register the
+     selected nav item without drawing the eye. It must never *equal*
+     --background (slate-100): at parity every bg-accent state (nav selection,
+     outline-button hover, toggle track) disappears entirely. Reads stronger on
+     the white popover/button surfaces, which is the intent. */
+  --accent: #edf1f7;
   --accent-foreground: #0f172a;
   --destructive: #ef4444;
   --border: #e2e8f0;
   --input: #ffffff;
   --input-border: #cbd5e1;
+  /* Filter/search fields. Tracks --card so a field reads as the same material
+     as a card surface; kept separate so it can be tuned independently. */
+  --field: #f8fafc;
   --ring: #94a3b8;
   --tertiary: #475569;
   --faint: #cbd5e1;
-  /* Validated categorical palette (dataviz skill, light surface #ffffff). */
+  /* Validated categorical palette (dataviz skill, light surface #f8fafc). */
   --chart-1: #2a78d6;
   --chart-2: #1baf7a;
   --chart-3: #eda100;
@@ -90,6 +99,8 @@
   --border: #252a34;
   --input: #14171e;
   --input-border: #2e343f;
+  /* Mirror image in dark: a step off the card toward the page background. */
+  --field: #12151c;
   --ring: #4f586a;
   --tertiary: #636e82;
   --faint: #353c49;

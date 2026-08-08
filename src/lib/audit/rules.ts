@@ -378,18 +378,28 @@ export function computeEntryAlerts(
           declaredDigits.has(m.ch99Digits) ||
           m.exclusionDigits.some((d) => declaredDigits.has(d));
         if (satisfied) continue;
+        // Non-ad-valorem measures (rate null) are presence-checked with the
+        // raw rate text; no expected amount can be quoted.
+        const rateLabel =
+          m.rate === null
+            ? (m.rateText ?? "a non-ad-valorem rate")
+            : pctLabel(m.rate);
+        const amountClause =
+          m.amountCents === null
+            ? " (amount not auto-computed for this rate type)"
+            : ` — expected ${fmt(m.amountCents)}`;
         alerts.push({
           alertKey: `missing_measure:line${line.lineNumber}:${m.ch99Digits}`,
           alertType: "missing_measure",
           severity: "warning",
           label: `Missing ${m.name}`,
-          message: `Line ${line.lineNumber} (${line.htsCode}, ${line.countryOfOrigin}) should carry ${m.name} (${m.ch99Code}) at ${pctLabel(m.rate)} — expected ${fmt(m.amountCents)} — but no such charge was declared.`,
+          message: `Line ${line.lineNumber} (${line.htsCode}, ${line.countryOfOrigin}) should carry ${m.name} (${m.ch99Code}) at ${rateLabel}${amountClause} — but no such charge was declared.`,
           details: {
             measure_name: m.name,
             authority: m.authority,
             expected_hts: m.ch99Code,
             expected_rate: m.rate,
-            expected_amount: dollars(m.amountCents),
+            expected_amount: m.amountCents === null ? null : dollars(m.amountCents),
             line_number: line.lineNumber,
             sku: line.sku,
           },

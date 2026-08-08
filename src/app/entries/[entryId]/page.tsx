@@ -27,6 +27,7 @@ import type { DutyBucket } from "@/lib/duty/authority";
 import { getEntryDetail, type EntryDocument } from "@/lib/db/queries/entries";
 import { liquidationWindow } from "@/lib/variance/window";
 import { formatCents, formatDate, formatMoney } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -76,15 +77,13 @@ export default async function EntryDetailPage({
     new Date().toISOString().slice(0, 10),
   );
 
-  // First (worst-severity) open alert per line — the State pill's jump into
-  // the reconciliation page. entry.alerts is already open-first, severity
-  // ordered.
-  const varianceHrefByLineNumber: Record<number, string> = {};
+  // Open alerts grouped per line — entry.alerts is already open-first,
+  // severity ordered, so index 0 is each line's worst finding (the Review
+  // button's jump) and the full list renders inline under the row.
+  const openAlertsByLineNumber: Record<number, typeof entry.alerts> = {};
   for (const a of entry.alerts) {
     if (a.status !== "open" || a.lineNumber === null) continue;
-    if (!(a.lineNumber in varianceHrefByLineNumber)) {
-      varianceHrefByLineNumber[a.lineNumber] = `/variance/${a.id}`;
-    }
+    (openAlertsByLineNumber[a.lineNumber] ??= []).push(a);
   }
 
   return (
@@ -149,15 +148,15 @@ export default async function EntryDetailPage({
         <CardHeader>
           <CardTitle className="text-base">Line items</CardTitle>
           <CardDescription>
-            Declared 7501 lines. Flagged lines link to their reconciliation;
-            expand a line for its charge-by-charge breakdown against the
-            expected duty stack.
+            Declared 7501 lines. Flagged lines show their findings inline and
+            link to their reconciliation; hover a line&apos;s duties &amp;
+            fees for its charge-by-charge breakdown.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <LineItemsTable
             lineItems={entry.lineItems}
-            varianceHrefByLineNumber={varianceHrefByLineNumber}
+            openAlertsByLineNumber={openAlertsByLineNumber}
           />
         </CardContent>
       </Card>
@@ -288,7 +287,47 @@ export default async function EntryDetailPage({
             <CardHeader>
               <CardTitle className="text-base">Linked records</CardTitle>
             </CardHeader>
+            {/* Ordered by proximity to the entry itself: what CBP received,
+                then what the seller billed, then how it moved, then what was
+                ordered. Reads outward from the filing. */}
             <CardContent className="flex flex-col gap-4">
+              {/* Paperwork hangs off the entry itself, so there is no record
+                  title to head each row — the rail is the group's whole
+                  content, sitting directly in the group box. */}
+              {entry.entryPaperwork.length > 0 ? (
+                <RecordGroup
+                  icon={Paperclip}
+                  label="Entry paperwork"
+                  empty={false}
+                >
+                  <div className="py-2">
+                    <DocumentRail documents={entry.entryPaperwork} />
+                  </div>
+                </RecordGroup>
+              ) : null}
+              <RecordGroup
+                icon={ReceiptText}
+                label="Commercial invoices"
+                empty={entry.invoices.length === 0}
+              >
+                {entry.invoices.map((inv) => (
+                  <RecordRow
+                    key={inv.id}
+                    title={inv.invoiceNumber}
+                    meta={
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {inv.totalAmount
+                          ? formatMoney(inv.totalAmount, inv.currency)
+                          : null}
+                        {inv.entryCount > 1
+                          ? `${inv.totalAmount ? " · " : ""}spans ${inv.entryCount} entries`
+                          : null}
+                      </span>
+                    }
+                    documents={inv.documents}
+                  />
+                ))}
+              </RecordGroup>
               <RecordGroup
                 icon={Ship}
                 label="Shipments"
@@ -323,42 +362,6 @@ export default async function EntryDetailPage({
                   />
                 ))}
               </RecordGroup>
-              <RecordGroup
-                icon={ReceiptText}
-                label="Commercial invoices"
-                empty={entry.invoices.length === 0}
-              >
-                {entry.invoices.map((inv) => (
-                  <RecordRow
-                    key={inv.id}
-                    title={inv.invoiceNumber}
-                    meta={
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {inv.totalAmount
-                          ? formatMoney(inv.totalAmount, inv.currency)
-                          : null}
-                        {inv.entryCount > 1
-                          ? `${inv.totalAmount ? " · " : ""}spans ${inv.entryCount} entries`
-                          : null}
-                      </span>
-                    }
-                    documents={inv.documents}
-                    emptyNote={
-                      inv.totalAmount === null
-                        ? "Referenced on the entry — invoice not yet received."
-                        : undefined
-                    }
-                  />
-                ))}
-              </RecordGroup>
-              {entry.entryPaperwork.length > 0 ? (
-                <div>
-                  <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                    <Paperclip className="size-3.5" /> Entry paperwork
-                  </h4>
-                  <DocumentRail documents={entry.entryPaperwork} />
-                </div>
-              ) : null}
             </CardContent>
           </Card>
         </div>
@@ -386,7 +389,10 @@ function RecordGroup({
       {empty ? (
         <span className="text-sm text-muted-foreground">None</span>
       ) : (
-        <div className="flex flex-col gap-2">{children}</div>
+        // One box per group, not per record: the border marks the group, and
+        // records inside it are separated by rules. Keeps all four groups the
+        // same shape whether they hold records or a bare document rail.
+        <div className="divide-y rounded-md border px-3">{children}</div>
       )}
     </div>
   );
@@ -399,26 +405,37 @@ function RecordRow({
   title,
   meta,
   documents,
-  emptyNote,
 }: {
   title: string;
   meta?: React.ReactNode;
   documents: EntryDocument[];
-  emptyNote?: string;
 }) {
+  // Full weight only when there is a file behind the row. Without one there is
+  // nothing to open, so the title drops to the muted ramp — the same contrast
+  // the rail's file names carry, so weight alone reads as "openable".
+  const hasDocuments = documents.length > 0;
   return (
-    <div className="rounded-md border px-3 py-2">
+    <div className="py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium tabular-nums">{title}</span>
+        <span
+          className={cn(
+            "text-sm tabular-nums",
+            hasDocuments
+              ? "font-medium"
+              : "font-normal text-muted-foreground",
+          )}
+        >
+          {title}
+        </span>
         {meta}
       </div>
-      {documents.length > 0 ? (
+      {hasDocuments ? (
         <div className="mt-1.5">
           <DocumentRail documents={documents} />
         </div>
       ) : (
         <p className="mt-1 text-xs text-muted-foreground">
-          {emptyNote ?? "No document on file yet."}
+          No document on file yet.
         </p>
       )}
     </div>

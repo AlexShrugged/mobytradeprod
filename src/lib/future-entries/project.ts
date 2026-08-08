@@ -225,8 +225,10 @@ function projectOne(
             input.ref,
           );
           baseDutyCents = expected.baseDuty?.amountCents ?? null;
+          // Non-computable (non-ad-valorem) measures project as 0 — the
+          // projection is an estimate and under-stating beats inventing.
           additionalDutiesCents = expected.measures.reduce(
-            (sum, m) => sum + m.amountCents,
+            (sum, m) => sum + (m.amountCents ?? 0),
             0,
           );
           sailBasis = worseBasis(sailBasis, expected.sailBasis);

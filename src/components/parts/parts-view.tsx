@@ -25,13 +25,16 @@ export function PartsView({
   queue,
   initialReviewPartId,
   initialExpandedPartId,
+  initialQuery = "",
 }: {
   parts: PartRow[];
   queue: HtsReviewQueueItem[];
   initialReviewPartId: string | null;
   initialExpandedPartId: string | null;
+  /** Seeds the search box — ?sku= deep links land pre-filtered. */
+  initialQuery?: string;
 }) {
-  const [query, setQuery] = React.useState("");
+  const [query, setQuery] = React.useState(initialQuery);
   const [reviewIndex, setReviewIndex] = React.useState<number | null>(() => {
     if (initialReviewPartId === null) return null;
     const i = queue.findIndex((q) => q.part.id === initialReviewPartId);
@@ -62,7 +65,7 @@ export function PartsView({
             placeholder="Filter by SKU, name, vendor, or HTS code…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="pl-8"
+            className="border-border bg-field pl-8 dark:bg-field"
           />
         </div>
         <Button size="sm" onClick={() => setSkuDialog({ presetSku: null })}>

@@ -31,6 +31,14 @@
 //            CLASSIFICATION_WINDOWS) — hts_reclassified, not a misfiling:
 //            the filing matched its day's expectation, and the base duty
 //            may be retroactively recoverable.
+// Entry 231-4501347-8 is the STACKED line — every issue class that can
+//   coexist on ONE line at once (the broker keyed the 7501 from a stale
+//   invoice revision): 60 of 65 batteries entered (quantity + value vs the
+//   CI, gated open by the header failure), base duty at 6.5% instead of
+//   3.4% (rate + amount pair), the 10% reciprocal omitted entirely
+//   (missing_measure), and a CI that prints HS 8507.80 and origin VN
+//   (invoice_hts_mismatch + coo_discrepancy). Deliberately NO catalog
+//   hts_discrepancy — classification doubt would suspend the money rules.
 
 import type {
   ChargeTypeValue,
@@ -516,6 +524,11 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     { poNumber: "PO-2026-010", supplierName: HANGZHOU, orderDate: day(-3), expectedDate: day(30), lines: [
       { lineNumber: 1, sku: "EB-SDL-CMF", countryOfOrigin: "CN", quantity: 500, unitPrice: 9.18 },
     ], totalAmount: 4590.0 },
+    // Backs the stacked-findings entry: 65 batteries ordered and invoiced —
+    // the ENTRY (60 entered) is the odd one out.
+    { poNumber: "PO-2026-011", supplierName: SHENZHEN, orderDate: day(-52), expectedDate: day(-16), lines: [
+      { lineNumber: 1, sku: "EB-BAT-52V", countryOfOrigin: "CN", quantity: 65, unitPrice: 428.75 },
+    ], totalAmount: 27868.75 },
   ];
 
   // ------------------------------------------------------------ shipments
@@ -535,11 +548,14 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     { shipmentNumber: "SHP-1006", billOfLading: "HLCU2288411", containerNumber: "HLXU6120458", carrier: "Hapag-Lloyd", vessel: "DALIAN EXPRESS", mode: "ocean", originPort: "Haiphong, VN", destinationPort: "Seattle, WA", etd: day(-46), eta: day(-27), sailedOnBoardDate: null },
     { shipmentNumber: "SHP-1007", billOfLading: "297-44815630", containerNumber: null, carrier: "China Airlines Cargo", vessel: null, mode: "air", originPort: "Taipei (TPE)", destinationPort: "Los Angeles (LAX)", etd: day(-15), eta: day(-14), sailedOnBoardDate: day(-15) },
     { shipmentNumber: "SHP-1008", billOfLading: "ONEY9902218", containerNumber: "ONEU7745102", carrier: "Ocean Network Express", vessel: "ONE HAMBURG", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Long Beach, CA", etd: day(-14), eta: day(4), sailedOnBoardDate: day(-13) },
+    // Carries the stacked-findings entry's batteries; sailed well before
+    // the Section 122 cutoff, so only the reciprocal/301 stack applies.
+    { shipmentNumber: "SHP-1009", billOfLading: "MSCU7781245", containerNumber: "MSDU5540911", carrier: "MSC", vessel: "MSC ARIA", mode: "ocean", originPort: "Yantian, CN", destinationPort: "Long Beach, CA", etd: day(-37), eta: day(-19), sailedOnBoardDate: day(-36) },
   ];
 
   // -------------------------------------------------------------- entries
   //
-  // 7 entries over ~6 months, all dated before the Section 122 cutoff of
+  // 8 entries over ~6 months, all dated before the Section 122 cutoff of
   // day(-10) so no seeded entry owes the surcharge. Header totals are the
   // sums of the DECLARED charge rows — consistent with lines by
   // construction; the planted findings are declared-vs-official
@@ -665,6 +681,34 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         { lineNumber: 2, sku: "EB-CTRL-V2", quantity: 150, unitValue: 43.1, supplier: HANOI, coo: "CN" },
       ],
     },
+    // THE stacked-findings entry: one line, every coexisting issue class.
+    // The broker keyed the 7501 from a stale revision of INV-2026-207 —
+    // 60 of the 65 invoiced batteries entered (quantity + per-SKU value vs
+    // the CI, gated open by the header-value failure), base duty fat-
+    // fingered at 6.5% instead of the official 3.4% (rate + amount pair,
+    // overpaid), and the 10% IEEPA reciprocal dropped entirely
+    // (missing_measure, underpaid). The CI meanwhile prints subheading
+    // 8507.80 and origin VN against the declared 8507.60.0020/CN
+    // (invoice_hts_mismatch + CI coo_discrepancy). The declared HTS matches
+    // the catalog ON PURPOSE: an hts_discrepancy would suspend the money
+    // rules, and the CI's printed code is deliberately weaker evidence.
+    {
+      entryNumber: "231-4501347-8", entryDate: day(-18), portOfEntry: "Long Beach, CA (2709)", totalRefund: null, hmf: true,
+      lines: [
+        {
+          lineNumber: 1, sku: "EB-BAT-52V", quantity: 60,
+          mutate: (charges, enteredValue) => {
+            const base = charges.find((ch) => ch.chargeType === "base_duty");
+            if (!base) throw new Error("plant failed: base duty not present");
+            base.rate = 0.065;
+            base.amount = round2(0.065 * enteredValue);
+            const i = charges.findIndex((ch) => ch.htsCode === "9903.01.25");
+            if (i < 0) throw new Error("plant failed: 9903.01.25 not present");
+            charges.splice(i, 1);
+          },
+        },
+      ],
+    },
   ];
 
   const DUTY_TYPES = new Set<ChargeTypeValue>([
@@ -739,22 +783,23 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
 
   const entryShipmentLinks: [string, string][] = [
     [E(1), S(1)], [E(2), S(2)], [E(3), S(3)], [E(4), S(4)],
-    [E(5), S(5)], [E(6), S(6)], [E(7), S(7)],
+    [E(5), S(5)], [E(6), S(6)], [E(7), S(7)], [E(8), S(9)],
   ];
   const entryPoLinks: [string, string][] = [
     [E(1), P(1)], [E(2), P(2)], [E(2), P(3)], [E(3), P(3)], [E(4), P(4)],
-    [E(5), P(5)], [E(5), P(6)], [E(6), P(7)], [E(7), P(8)],
+    [E(5), P(5)], [E(5), P(6)], [E(6), P(7)], [E(7), P(8)], [E(8), P(11)],
   ];
   const shipmentPoLinks: [string, string][] = [
     [S(1), P(1)], [S(2), P(2)], [S(2), P(3)], [S(3), P(3)], [S(4), P(4)],
     [S(5), P(5)], [S(5), P(6)], [S(6), P(7)], [S(7), P(8)], [S(8), P(9)],
+    [S(9), P(11)],
   ];
 
   // ---------------------------------------------------- commercial invoices
   //
   // The CI is the primary document an entry is checked against for variance
-  // (see audit/invoice-rules.ts). Five invoices, each directly linked to
-  // exactly one entry, with four planted CI-vs-entry findings:
+  // (see audit/invoice-rules.ts). Six invoices, each directly linked to
+  // exactly one entry, with five planted CI-vs-entry findings:
   //   INV-2026-081 → entry 1: CLEAN — the "audits clean" assertion holds.
   //   INV-2026-143 → entry 2: EB-DSP-LCD printed with origin CN (entry
   //     declares TW) → coo_discrepancy per SKU; EB-MTR-500W absent from the
@@ -770,6 +815,10 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
   //   INV-8613 → entry 7: the packet CI (see the entry-packet documents
   //     below) — clean; it mirrors the declared facts, including the CN
   //     origin the catalog rule already flags.
+  //   INV-2026-207 → entry 8: the stacked-line plant — bills 65 batteries
+  //     (entry entered 60) under HS 8507.80 with origin VN, so the header
+  //     value check fails (under-declared, error), gating the per-SKU
+  //     value alert, plus quantity, CI-HTS, and CI-origin findings.
   const invoices: InvoiceSeed[] = [
     {
       invoiceNumber: "INV-2026-081", poNumber: P(1), supplierName: SHENZHEN,
@@ -814,6 +863,18 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       ],
     },
     {
+      invoiceNumber: "INV-2026-207", poNumber: P(11), supplierName: SHENZHEN,
+      invoiceDate: day(-20), currency: "USD", totalAmount: 27868.75,
+      incoterms: "FOB Yantian",
+      lines: [
+        // 65 billed vs 60 entered; a 6-digit HS from the wrong subheading
+        // ("other storage batteries"); origin printed VN against the
+        // declared CN. Header total = line sum, so the CI is internally
+        // consistent and stays money-eligible.
+        { lineNumber: 1, sku: "EB-BAT-52V", description: "52V 20Ah Lithium Battery Pack", htsCode: "8507.80", countryOfOrigin: "VN", quantity: 65, unitPrice: 428.75 },
+      ],
+    },
+    {
       invoiceNumber: "INV-8613", poNumber: P(8), supplierName: TAICHUNG,
       invoiceDate: day(-13), currency: "USD", totalAmount: 13815.0,
       incoterms: "FOB Taipei",
@@ -832,6 +893,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     [E(3), "INV-2026-114"],
     [E(6), "INV-2026-198"],
     [E(7), "INV-8613"],
+    [E(8), "INV-2026-207"],
   ];
 
   // -------------------------------------------------------------- refunds
@@ -1162,6 +1224,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     entryDoc(4, at(-78, 10, 0), ["COSU6633540"], [P(4)], [4]),
     entryDoc(5, at(-54, 11, 0), ["YMLU4471933"], [P(5), P(6)], [5]),
     entryDoc(6, at(-23, 10, 15), ["HLCU2288411"], [P(7)], [6]),
+    entryDoc(8, at(-17, 10, 0), ["MSCU7781245"], [P(11)], [9]),
     ...packetDocuments,
     // Standalone commercial invoices — via the document inbox, a day or two
     // after their invoice dates.
@@ -1169,6 +1232,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     ciDoc("INV-2026-143", E(2), P(2), at(-141, 16, 0)),
     ciDoc("INV-2026-114", E(3), P(3), at(-112, 16, 0)),
     ciDoc("INV-2026-198", E(6), P(7), at(-26, 16, 0)),
+    ciDoc("INV-2026-207", E(8), P(11), at(-19, 16, 0)),
     // BOLs — via the broker SFTP feed, shortly after sailing.
     bolDoc(1, at(-189, 8, 0), [P(1)]),
     bolDoc(2, at(-159, 8, 0), [P(2), P(3)]),
@@ -1178,6 +1242,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     bolDoc(6, at(-44, 8, 0), [P(7)]),
     bolDoc(7, at(-14, 12, 0), [P(8)]),
     bolDoc(8, at(-12, 8, 0), [P(9)]),
+    bolDoc(9, at(-35, 8, 0), [P(11)]),
     // POs — a representative three.
     poDoc(1, at(-204, 14, 0)),
     poDoc(4, at(-114, 14, 0)),

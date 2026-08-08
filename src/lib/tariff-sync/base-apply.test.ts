@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { planBaseClose, planBaseWindow } from "./base-apply";
+import {
+  planBaseChange,
+  planBaseClose,
+  planBaseWindow,
+  SEED_RELEASE,
+} from "./base-apply";
 
 describe("planBaseWindow (changed codes)", () => {
   it("tiles a later-dated change: successor opens at eff, predecessor closes at eff−1", () => {
@@ -52,5 +57,29 @@ describe("planBaseClose (removed codes)", () => {
 
   it("legacy rows without a start close normally", () => {
     expect(planBaseClose(null, "2026-01-01")).toBe("2025-12-31");
+  });
+});
+
+describe("planBaseChange (SEED correction)", () => {
+  it("always corrects SEED windows in place — approximations are not history", () => {
+    // A later-dated release would normally tile; SEED rows never do.
+    expect(
+      planBaseChange({ validFrom: "2025-01-01", release: SEED_RELEASE }, "2026-08-01"),
+    ).toEqual({ action: "update_in_place" });
+  });
+
+  it("delegates certified windows to the pinned tiling planner", () => {
+    expect(
+      planBaseChange({ validFrom: "2025-01-01", release: "2026HTSRev9" }, "2026-08-01"),
+    ).toEqual({ action: "tile", closePredecessorAt: "2026-07-31" });
+    expect(
+      planBaseChange({ validFrom: "2026-08-01", release: "2026HTSRev9" }, "2026-08-01"),
+    ).toEqual({ action: "update_in_place" });
+  });
+
+  it("treats a null release like any certified window (never guesses SEED)", () => {
+    expect(
+      planBaseChange({ validFrom: "2025-01-01", release: null }, "2026-08-01"),
+    ).toEqual({ action: "tile", closePredecessorAt: "2026-07-31" });
   });
 });

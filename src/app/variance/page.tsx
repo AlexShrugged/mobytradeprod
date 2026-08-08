@@ -3,6 +3,7 @@ import { StatTile } from "@/components/stat-tile";
 import { VarianceView } from "@/components/variance/variance-view";
 import { getVarianceQueue, type VarianceQueueRow } from "@/lib/db/queries/variance";
 import { formatCents, formatDate } from "@/lib/format";
+import { dedupedImpactSums, partitionVarianceRows } from "@/lib/variance/grouping";
 
 export const dynamic = "force-dynamic";
 
@@ -47,47 +48,6 @@ const TYPE_FILTERS: Record<string, { label: string; types: string[] }> = {
   },
 };
 
-// A rate mismatch and an amount mismatch on the same charge describe the
-// same dollars — count each charge once in the headline sums. Same story
-// for CI value variances: the per-SKU rows slice up the dollars their
-// entry's invoice_total row already claims.
-function tileSums(rows: VarianceQueueRow[]) {
-  const amountSuffixes = new Set(
-    rows
-      .filter((r) => r.alertType === "amount_mismatch")
-      .map((r) => r.alertKey.slice(r.alertKey.indexOf(":") + 1)),
-  );
-  const invoiceTotalEntries = new Set(
-    rows
-      .filter(
-        (r) =>
-          r.alertKey === "value_mismatch:invoice_total" &&
-          r.impactCents !== null,
-      )
-      .map((r) => r.entryId),
-  );
-  let recoverable = 0;
-  let exposure = 0;
-  for (const r of rows) {
-    if (r.impactCents === null) continue;
-    if (
-      r.alertType === "rate_mismatch" &&
-      amountSuffixes.has(r.alertKey.slice(r.alertKey.indexOf(":") + 1))
-    ) {
-      continue;
-    }
-    if (
-      r.alertKey.startsWith("value_mismatch:invoice_sku:") &&
-      invoiceTotalEntries.has(r.entryId)
-    ) {
-      continue;
-    }
-    if (r.impactCents > 0) recoverable += r.impactCents;
-    else exposure += -r.impactCents;
-  }
-  return { recoverable, exposure };
-}
-
 export default async function VariancePage({
   searchParams,
 }: {
@@ -100,8 +60,15 @@ export default async function VariancePage({
 
   const activeType = type && TYPE_FILTERS[type] ? type : null;
 
-  const { recoverable, exposure } = tileSums(rows);
-  const nearest = rows
+  // The queue carries every status; the tiles report only what's open —
+  // decided rows exist solely for the table's archived view.
+  const openRows = rows.filter((r) => r.status === "open");
+
+  // Headline dollars stay issue-level (deduped); the table consolidates to
+  // one row per line item.
+  const { recoverable, exposure } = dedupedImpactSums(openRows);
+  const { active, archived } = partitionVarianceRows(rows);
+  const nearest = openRows
     .filter((r) => !r.window.closed && r.window.daysLeft !== null)
     .reduce<VarianceQueueRow | null>(
       (best, r) =>
@@ -121,8 +88,8 @@ export default async function VariancePage({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Open variances"
-          value={String(rows.length)}
-          tone={rows.length > 0 ? "amber" : "default"}
+          value={String(openRows.length)}
+          tone={openRows.length > 0 ? "amber" : "default"}
           hint="across all entries"
         />
         <StatTile
@@ -153,7 +120,8 @@ export default async function VariancePage({
       </div>
 
       <VarianceView
-        rows={rows}
+        groups={active}
+        archivedGroups={archived}
         typeFilters={TYPE_FILTERS}
         activeType={activeType}
       />

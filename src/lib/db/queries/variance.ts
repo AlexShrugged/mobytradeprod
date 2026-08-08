@@ -4,7 +4,7 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
-import { loadReferenceData } from "@/lib/duty/reference";
+import { getReferenceDataForOrg } from "./reference";
 import { resolveSailInfo } from "@/lib/duty/sail";
 import type { SailInfo } from "@/lib/duty/types";
 import { resolveWindow } from "@/lib/effective-dating";
@@ -17,6 +17,7 @@ import {
   type ImpactContext,
   type ImpactLineSnapshot,
 } from "@/lib/variance/impact";
+import { compareSiblingAlerts } from "@/lib/variance/grouping";
 import {
   liquidationWindow,
   type LiquidationWindow,
@@ -31,7 +32,7 @@ import {
 // line-reconciliation page. Impact and windows are derived on read (never
 // stored); the auditor stays the sole writer of the alerts themselves.
 
-const DUTY_CHARGE_TYPES = new Set([
+export const DUTY_CHARGE_TYPES = new Set([
   "base_duty",
   "additional_duty",
   "antidumping",
@@ -102,6 +103,9 @@ export type VarianceQueueRow = {
   alertId: string;
   alertKey: string;
   alertType: string;
+  /** Any status — the page partitions open (active) from decided
+   *  (archived); headline stats count open rows only. */
+  status: "open" | "resolved" | "dismissed";
   severity: "error" | "warning" | "info";
   label: string;
   message: string;
@@ -130,11 +134,10 @@ export type VarianceQueueRow = {
 export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
   const orgId = await getCurrentOrgId();
 
+  // Every status: decided rows feed the queue's archived view, and a line's
+  // open/decided split decides which side of it the line lands on.
   const alerts = await db.query.auditAlerts.findMany({
-    where: and(
-      eq(schema.auditAlerts.orgId, orgId),
-      eq(schema.auditAlerts.status, "open"),
-    ),
+    where: eq(schema.auditAlerts.orgId, orgId),
     with: {
       entry: {
         with: {
@@ -153,7 +156,7 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
 
   const entryIds = [...new Set(alerts.map((a) => a.entryId))];
   const [ref, shipmentLinks] = await Promise.all([
-    loadReferenceData(db),
+    getReferenceDataForOrg(),
     // inArray rejects empty arrays.
     entryIds.length === 0
       ? Promise.resolve([])
@@ -174,9 +177,13 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
   }
 
   // A trust-gate alert means the entry's charge data can't ground dollars.
+  // Open gates only — a dismissed gate is a human saying the data is fine,
+  // matching the detail page's entryTrusted check.
   const untrustedEntries = new Set(
     alerts
-      .filter((a) => a.alertType === "data_unreconciled")
+      .filter(
+        (a) => a.status === "open" && a.alertType === "data_unreconciled",
+      )
       .map((a) => a.entryId),
   );
 
@@ -212,6 +219,7 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
       alertId: a.id,
       alertKey: a.alertKey,
       alertType: a.alertType,
+      status: a.status,
       severity: a.severity,
       label: a.label,
       message: a.message,
@@ -268,8 +276,9 @@ export type VarianceCatalogExpected = {
   measures: {
     name: string;
     ch99Code: string;
-    rate: number;
-    amountCents: number;
+    // Null = non-ad-valorem measure (presence-only; amount not computable).
+    rate: number | null;
+    amountCents: number | null;
   }[];
   /** Null when the catalog base duty is non-computable. */
   totalCents: number | null;
@@ -292,6 +301,21 @@ export type VarianceInvoice = {
     unitPrice: string | null;
     totalPrice: string;
   }[];
+};
+
+export type VarianceSiblingAlert = {
+  id: string;
+  alertKey: string;
+  alertType: string;
+  severity: "error" | "warning" | "info";
+  label: string;
+  message: string;
+  status: "open" | "resolved" | "dismissed";
+  impactCents: number | null;
+  direction: "recoverable" | "exposure" | null;
+  /** The alert's comparison snapshot — lets the detail page render a whole
+   *  UNIT's diff (e.g. the rate twin's row while viewing the amount half). */
+  details: Record<string, unknown> | null;
 };
 
 export type VarianceDetail = {
@@ -327,6 +351,10 @@ export type VarianceDetail = {
   /** The commercial invoice(s) the alert's details reference — the evidence
    *  behind CI-vs-entry findings. Empty for catalog/duty findings. */
   invoices: VarianceInvoice[];
+  /** Every alert on the same line item (any status, current one included),
+   *  in the queue's within-group order so "next" is predictable. Empty for
+   *  entry-scoped alerts (which redirect to the entry page anyway). */
+  siblings: VarianceSiblingAlert[];
 };
 
 export async function getVarianceDetail(
@@ -350,7 +378,7 @@ export async function getVarianceDetail(
   });
   if (!alert) return null;
 
-  const ref = await loadReferenceData(db);
+  const ref = await getReferenceDataForOrg();
   const [detail, shipmentLinks] = await Promise.all([
     getEntryDetail(alert.entryId, ref),
     db.query.entryShipments.findMany({
@@ -379,17 +407,62 @@ export async function getVarianceDetail(
     ctx,
   );
 
+  // The navigator card's data: every alert on the same line, any status.
+  // Siblings share the line, so the snapshot/ctx above apply to all of
+  // them; impact is status-independent, so accepted rows keep their dollar
+  // figure. Decided issues band first, open ones last — a new issue landing
+  // on an already-worked line shows below its decided history ("3 of 3") —
+  // with the canonical order inside each band, so the open tail mirrors the
+  // queue's grouped row. Raw impacts throughout — the navigator card folds
+  // rate/amount twins into one unit (pairSiblingAlerts) and shows the
+  // dollars once per unit, so no per-row blanking is needed here.
+  const lineAlerts = alert.lineItemId
+    ? detail.alerts.filter((a) => a.lineItemId === alert.lineItemId)
+    : [];
+  const siblings: VarianceSiblingAlert[] = lineAlerts
+    .map((a) => ({
+      a,
+      impact: computeAlertImpact(
+        { alertType: a.alertType, details: a.details },
+        snapshot,
+        ctx,
+      ),
+    }))
+    .sort((x, y) =>
+      compareSiblingAlerts(
+        { impactCents: x.impact.impactCents, severity: x.a.severity, alertKey: x.a.alertKey, status: x.a.status },
+        { impactCents: y.impact.impactCents, severity: y.a.severity, alertKey: y.a.alertKey, status: y.a.status },
+      ),
+    )
+    .map(({ a, impact: sibImpact }) => ({
+      id: a.id,
+      alertKey: a.alertKey,
+      alertType: a.alertType,
+      severity: a.severity,
+      label: a.label,
+      message: a.message,
+      status: a.status,
+      impactCents: sibImpact.impactCents,
+      direction: sibImpact.direction,
+      details: a.details,
+    }));
+
   // The duty stack under the catalog code: the as-of code for a
   // discrepancy, the current window's code for a reclassified line (what
-  // the entry WOULD owe under today's classification).
+  // the entry WOULD owe under today's classification). Computed for the
+  // LINE's HTS issue — current alert or a sibling, any status — since the
+  // diff table renders every issue's rows at once.
   let catalogExpected: VarianceCatalogExpected | null = null;
+  const htsIssueType =
+    [alert.alertType, ...lineAlerts.map((a) => a.alertType)].find(
+      (t) => t === "hts_discrepancy" || t === "hts_reclassified",
+    ) ?? null;
   const wantsCatalogExpected =
-    alert.alertType === "hts_discrepancy" ||
-    (alert.alertType === "hts_reclassified" &&
-      snapshot?.catalogHtsDigitsCurrent);
+    htsIssueType === "hts_discrepancy" ||
+    (htsIssueType === "hts_reclassified" && snapshot?.catalogHtsDigitsCurrent);
   if (wantsCatalogExpected && snapshot) {
     const expected =
-      alert.alertType === "hts_reclassified"
+      htsIssueType === "hts_reclassified"
         ? computeCatalogExpected(
             snapshot,
             ctx,
@@ -487,5 +560,6 @@ export async function getVarianceDetail(
     catalogExpected,
     documents: detail.documents,
     invoices,
+    siblings,
   };
 }

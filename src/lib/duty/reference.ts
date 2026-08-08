@@ -4,9 +4,23 @@
 // inside a transaction, and the seed script's standalone drizzle instance
 // alike.
 //
+// Two loaders share one pure assembly step (buildReferenceData):
+//  - loadReferenceData: the FULL schedule. Only for consumers whose job is a
+//    schedule-wide scan (the stub classifier's candidate pool, the stub
+//    processor, the seed). O(hts_codes) — at a real ~30k-row USITC base
+//    schedule this is not a per-request loader.
+//  - loadReferenceDataScoped / loadReferenceDataForOrg: full Chapter 99 +
+//    measures + stacking (small, hundreds of rows) plus base-schedule
+//    windows for ONLY the digits an org can reference. This is the
+//    per-request path; loadOrgHtsDigits defines the digit universe.
+//
 // Relative imports on purpose — this module runs under the tsx seed script.
 
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+
 import type { DbClient } from "../db";
+import * as schema from "../db/schema";
+import { normalizeHts } from "./calculator";
 import type { HtsRef, MeasureRef, ReferenceData, StackingRuleRef } from "./types";
 
 // Re-exported so domain modules (auditor, tariff-sync) keep importing the
@@ -15,17 +29,23 @@ import type { HtsRef, MeasureRef, ReferenceData, StackingRuleRef } from "./types
 // code runs on node-postgres and PGlite.
 export type { DbClient };
 
-export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
-  const [htsRows, measureRows, prefixRows, stackingRows] = await Promise.all([
-    db.query.htsCodes.findMany(),
-    db.query.tradeMeasures.findMany(),
-    db.query.tradeMeasureHts.findMany(),
-    db.query.stackingRules.findMany(),
-  ]);
+export type HtsCodeRow = typeof schema.htsCodes.$inferSelect;
+export type TradeMeasureRow = typeof schema.tradeMeasures.$inferSelect;
+export type TradeMeasureHtsRow = typeof schema.tradeMeasureHts.$inferSelect;
+export type StackingRuleRow = typeof schema.stackingRules.$inferSelect;
 
+/** Pure assembly of the ReferenceData bag from raw table rows. The scoped
+ *  and full loaders differ only in which hts_codes rows they feed in; the
+ *  derived maps are byte-identical for any digits present in both. */
+export function buildReferenceData(
+  htsRows: HtsCodeRow[],
+  measureRows: TradeMeasureRow[],
+  prefixRows: TradeMeasureHtsRow[],
+  stackingRows: StackingRuleRow[],
+): ReferenceData {
   const measureById = new Map(measureRows.map((m) => [m.id, m]));
 
-  const toRef = (h: (typeof htsRows)[number]): HtsRef => ({
+  const toRef = (h: HtsCodeRow): HtsRef => ({
     code: h.code,
     codeDigits: h.codeDigits,
     description: h.description,
@@ -105,7 +125,12 @@ export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
 
   const measures: MeasureRef[] = [];
   for (const h of htsRows) {
-    if (!h.tradeMeasureId || h.exemption || h.rate === null) continue;
+    // A null rate no longer drops the measure: non-ad-valorem (specific/
+    // compound) measure lines are tracked presence-only — expected on
+    // covered entries, amount not computable. Ad-valorem rows with a null
+    // rate should not exist (apply refuses them); skip defensively.
+    if (!h.tradeMeasureId || h.exemption) continue;
+    if (h.rate === null && h.rateType === "ad_valorem") continue;
     const m = measureById.get(h.tradeMeasureId);
     if (!m) continue;
     measures.push({
@@ -114,6 +139,7 @@ export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
       authority: m.authority,
       scope: m.scope,
       countries: m.countries,
+      countriesExcluded: m.countriesExcluded ?? null,
       effectiveDate: m.effectiveDate,
       endDate: m.endDate,
       sailedOnOrAfter: m.sailedOnOrAfter,
@@ -121,7 +147,9 @@ export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
       inLieuOfBaseDuty: m.inLieuOfBaseDuty,
       ch99Code: h.code,
       ch99Digits: h.codeDigits,
-      rate: Number(h.rate),
+      rate: h.rate === null ? null : Number(h.rate),
+      rateType: h.rateType,
+      rateText: h.col1General,
       exclusionDigits: exclusionsByMeasure.get(m.id) ?? [],
       prefixes: prefixesByMeasure.get(m.id) ?? [],
     });
@@ -150,4 +178,102 @@ export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
     measures,
     stackingRules,
   };
+}
+
+export async function loadReferenceData(db: DbClient): Promise<ReferenceData> {
+  const [htsRows, measureRows, prefixRows, stackingRows] = await Promise.all([
+    db.query.htsCodes.findMany(),
+    db.query.tradeMeasures.findMany(),
+    db.query.tradeMeasureHts.findMany(),
+    db.query.stackingRules.findMany(),
+  ]);
+  return buildReferenceData(htsRows, measureRows, prefixRows, stackingRows);
+}
+
+// inArray chunk size — bounded parameter lists on both drivers.
+const DIGIT_CHUNK = 500;
+
+/** Scoped loader: the whole Chapter 99 / measure / stacking reference plus
+ *  base-schedule rows (ALL windows, open and closed — entry-date resolution
+ *  needs history) for only the given digits. Digits absent from the schedule
+ *  simply produce no rows, which downstream reads as "not in reference" —
+ *  the same contract as the full loader. */
+export async function loadReferenceDataScoped(
+  db: DbClient,
+  baseDigits: Iterable<string>,
+): Promise<ReferenceData> {
+  const digits = [...new Set(baseDigits)].filter((d) => d.length > 0);
+
+  const chunkReads: Promise<HtsCodeRow[]>[] = [];
+  for (let i = 0; i < digits.length; i += DIGIT_CHUNK) {
+    const chunk = digits.slice(i, i + DIGIT_CHUNK);
+    chunkReads.push(
+      db.query.htsCodes.findMany({
+        where: and(
+          isNull(schema.htsCodes.tradeMeasureId),
+          inArray(schema.htsCodes.codeDigits, chunk),
+        ),
+      }),
+    );
+  }
+
+  const [ch99Rows, measureRows, prefixRows, stackingRows, ...baseChunks] =
+    await Promise.all([
+      db.query.htsCodes.findMany({
+        where: isNotNull(schema.htsCodes.tradeMeasureId),
+      }),
+      db.query.tradeMeasures.findMany(),
+      db.query.tradeMeasureHts.findMany(),
+      db.query.stackingRules.findMany(),
+      ...chunkReads,
+    ] as const);
+
+  return buildReferenceData(
+    [...ch99Rows, ...baseChunks.flat()],
+    measureRows,
+    prefixRows,
+    stackingRows,
+  );
+}
+
+/** The org's HTS digit universe: every code its data can ask the reference
+ *  about. Declared entry-line digits, the parts catalog's current
+ *  projections, and every classification window (audits and variance
+ *  counterfactuals resolve historical windows too). Deliberately org-wide
+ *  rather than per-entry: one shape serves entries, variance, parts, sweeps,
+ *  and projections alike, and the union is a few hundred values. */
+export async function loadOrgHtsDigits(
+  db: DbClient,
+  orgId: string,
+): Promise<string[]> {
+  const [lineDigits, partCodes, classificationCodes] = await Promise.all([
+    db
+      .selectDistinct({ digits: schema.entryLineItems.htsCodeDigits })
+      .from(schema.entryLineItems)
+      .where(eq(schema.entryLineItems.orgId, orgId)),
+    db
+      .selectDistinct({ code: schema.parts.htsCode })
+      .from(schema.parts)
+      .where(and(eq(schema.parts.orgId, orgId), isNotNull(schema.parts.htsCode))),
+    db
+      .selectDistinct({ code: schema.partClassifications.htsCode })
+      .from(schema.partClassifications)
+      .where(eq(schema.partClassifications.orgId, orgId)),
+  ]);
+
+  const digits = new Set<string>();
+  for (const r of lineDigits) digits.add(r.digits);
+  for (const r of partCodes) if (r.code) digits.add(normalizeHts(r.code));
+  for (const r of classificationCodes) digits.add(normalizeHts(r.code));
+  return [...digits];
+}
+
+/** Convenience composition for lib-layer callers (auditor sweeps, re-audits
+ *  after reference writes). Request-scoped memoization lives in
+ *  src/lib/db/queries/reference.ts, not here — this module stays tsx-safe. */
+export async function loadReferenceDataForOrg(
+  db: DbClient,
+  orgId: string,
+): Promise<ReferenceData> {
+  return loadReferenceDataScoped(db, await loadOrgHtsDigits(db, orgId));
 }

@@ -6,7 +6,7 @@
 //
 // Relative imports on purpose — reachable from the tsx seed script.
 
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 import * as schema from "../db/schema";
 import type { DbClient } from "../duty/reference";
@@ -46,11 +46,14 @@ export async function loadTariffSyncState(db: DbClient): Promise<TariffSyncState
       authority: m.authority,
       scope: m.scope,
       countries: m.countries,
+      countriesExcluded: m.countriesExcluded ?? null,
       effectiveDate: m.effectiveDate,
       endDate: m.endDate,
       sailedOnOrAfter: m.sailedOnOrAfter,
       sailedOnOrBefore: m.sailedOnOrBefore,
       rate: h.rate === null ? null : Number(h.rate),
+      rateType: h.rateType,
+      rateText: h.col1General,
       exemption: h.exemption,
       description: h.description,
       prefixes: prefixesByMeasure.get(m.id) ?? [],
@@ -64,23 +67,31 @@ export async function loadTariffSyncState(db: DbClient): Promise<TariffSyncState
   return { byDigits };
 }
 
-/** Pending tariff revisions with their queue items, for hash-dedupe and
- *  supersession. */
+/** Pending tariff revisions, for hash-dedupe and supersession. One uniform
+ *  openness predicate — not applied, not superseded — reached two ways:
+ *  individual revisions through their pending tariff_measure_revision item,
+ *  grouped members through their group's pending tariff_measure_group item
+ *  (they carry no per-revision item; reviewItemId is null). */
 export async function loadOpenRevisions(db: DbClient): Promise<OpenRevisionRef[]> {
   const items = await db.query.reviewItems.findMany({
     where: and(
-      eq(schema.reviewItems.itemType, "tariff_measure_revision"),
+      inArray(schema.reviewItems.itemType, [
+        "tariff_measure_revision",
+        "tariff_measure_group",
+      ]),
       eq(schema.reviewItems.status, "pending"),
     ),
   });
   if (items.length === 0) return [];
 
   const out: OpenRevisionRef[] = [];
-  for (const item of items) {
+
+  for (const item of items.filter((i) => i.itemType === "tariff_measure_revision")) {
     const revision = await db.query.measureRevisions.findFirst({
       where: and(
         eq(schema.measureRevisions.id, item.subjectId),
         isNull(schema.measureRevisions.appliedAt),
+        isNull(schema.measureRevisions.supersededAt),
       ),
     });
     if (!revision) continue;
@@ -94,6 +105,31 @@ export async function loadOpenRevisions(db: DbClient): Promise<OpenRevisionRef[]
       contentHash: revision.contentHash,
     });
   }
+
+  const groupIds = items
+    .filter((i) => i.itemType === "tariff_measure_group")
+    .map((i) => i.subjectId);
+  if (groupIds.length > 0) {
+    const members = await db.query.measureRevisions.findMany({
+      where: and(
+        inArray(schema.measureRevisions.groupId, groupIds),
+        isNull(schema.measureRevisions.appliedAt),
+        isNull(schema.measureRevisions.supersededAt),
+      ),
+    });
+    for (const revision of members) {
+      out.push({
+        revisionId: revision.id,
+        reviewItemId: null,
+        announcementId: revision.announcementId,
+        ch99Digits: revision.ch99Code
+          ? revision.ch99Code.replace(/\D/g, "")
+          : null,
+        contentHash: revision.contentHash,
+      });
+    }
+  }
+
   return out;
 }
 
@@ -117,5 +153,6 @@ export async function loadCurrentBaseWindows(
       description: r.description,
       rate: r.rate === null ? null : Number(r.rate),
       validFrom: r.validFrom,
+      release: r.release,
     }));
 }

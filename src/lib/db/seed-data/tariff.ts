@@ -316,6 +316,66 @@ export const STACKING_SEED: StackingSeed[] = [
     endDate: null,
     sourceRef: "E.O. 14257, 90 FR 15041",
   },
+  // The E.O. 14257 §3(b) carve-out covers every Section 232 product action;
+  // each pair opens at the later of the action's own start and the
+  // reciprocal tariff's (2025-04-05). Same basis as the two rules above.
+  {
+    winnerAuthority: "section_232_autos",
+    loserAuthority: "reciprocal",
+    reason:
+      "Articles subject to Section 232 automobile/auto-parts duties are not subject to the IEEPA reciprocal tariff (E.O. 14257 §3(b)).",
+    effectiveDate: "2025-04-05",
+    endDate: null,
+    sourceRef: "E.O. 14257, 90 FR 15041",
+  },
+  {
+    winnerAuthority: "section_232_copper",
+    loserAuthority: "reciprocal",
+    reason:
+      "Articles subject to Section 232 copper duties are not subject to the IEEPA reciprocal tariff (E.O. 14257 §3(b)).",
+    effectiveDate: "2025-08-01",
+    endDate: null,
+    sourceRef: "E.O. 14257, 90 FR 15041",
+  },
+  {
+    winnerAuthority: "section_232_pharma",
+    loserAuthority: "reciprocal",
+    reason:
+      "Articles subject to Section 232 pharmaceutical duties are not subject to the IEEPA reciprocal tariff (E.O. 14257 §3(b)).",
+    effectiveDate: "2025-10-01",
+    endDate: null,
+    sourceRef: "E.O. 14257, 90 FR 15041",
+  },
+  {
+    winnerAuthority: "section_232_timber_furniture",
+    loserAuthority: "reciprocal",
+    reason:
+      "Articles subject to Section 232 timber/lumber/furniture duties are not subject to the IEEPA reciprocal tariff (E.O. 14257 §3(b)).",
+    effectiveDate: "2025-10-14",
+    endDate: null,
+    sourceRef: "E.O. 14257, 90 FR 15041",
+  },
+  // Section 338 U.S. note 51(c): goods another action already reaches
+  // (metals, vehicles, wood products, patented pharmaceuticals) claim
+  // exclusion from the Section 338 duties.
+  ...(
+    [
+      "section_232_steel",
+      "section_232_aluminum",
+      "section_232_copper",
+      "section_232_autos",
+      "section_232_timber_furniture",
+      "section_232_pharma",
+    ] as const
+  ).map((winnerAuthority) => ({
+    winnerAuthority,
+    loserAuthority: "section_338" as const,
+    reason:
+      "Goods already subject to a Section 232 action are excluded from the Section 338 duties (U.S. note 51(c) exclusion claims).",
+    effectiveDate: "2026-08-19",
+    endDate: null,
+    sourceRef: "U.S. note 51(c); 9903.03.15",
+  })),
 ];
 
 /**

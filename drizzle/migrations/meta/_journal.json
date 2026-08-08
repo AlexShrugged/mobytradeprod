@@ -50,6 +50,20 @@
       "when": 1786069339264,
       "tag": "0006_chunky_celestials",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786154273848,
+      "tag": "0007_flat_raider",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786218476451,
+      "tag": "0008_even_dark_phoenix",
+      "breakpoints": true
     }
   ]
 }

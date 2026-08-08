@@ -1,25 +1,27 @@
 import { NextResponse } from "next/server";
 
+import { requireSuperAdmin } from "@/lib/admin";
 import { db } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
 import { runTariffSync } from "@/lib/tariff-sync/sync";
 
 // Fetch USITC (Chapter 99 diff → staged review items, base schedule →
-// direct windowed refresh) + Federal Register context, and return the
-// per-part summary. POST = the Settings "Sync now" button; GET = Vercel
-// cron (vercel.json), which sends Authorization: Bearer CRON_SECRET.
+// staged release) + Federal Register context, and return the per-part
+// summary. POST = the admin "Sync now" button; GET = Vercel cron
+// (vercel.json), which sends Authorization: Bearer CRON_SECRET.
 export const maxDuration = 300;
 
 async function sync() {
-  const orgId = await getCurrentOrgId();
   const today = new Date().toISOString().slice(0, 10);
-  const result = await runTariffSync(db, orgId, today);
+  const result = await runTariffSync(db, today);
   return NextResponse.json(result);
 }
 
-// No auth on POST — the app has no auth layer yet (single-org shim), and
-// every mutation route shares that posture.
+// Super-admin only (dev-open until SUPER_ADMIN_SECRET is set): syncing only
+// stages review items, but it is a platform-operator action, not a tenant
+// one.
 export async function POST() {
+  const denied = await requireSuperAdmin();
+  if (denied) return denied;
   return sync();
 }
 

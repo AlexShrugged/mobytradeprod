@@ -371,3 +371,52 @@ describe("applyStacking", () => {
     expect(suppressed).toEqual([]);
   });
 });
+
+describe("countriesExcluded carve-outs", () => {
+  const excluding = measure({
+    scope: "all_products",
+    prefixes: [],
+    countries: null,
+    countriesExcluded: ["CA", "MX"],
+  });
+  const synthetic: ReferenceData = {
+    htsByDigits: ref.htsByDigits,
+    measures: [excluding],
+    stackingRules: [],
+  };
+
+  it("drops the measure for an excluded country of origin", () => {
+    const result = resolveExpectedMeasures(line("8501.31.4000", "CA"), synthetic);
+    expect(result.applicable).toEqual([]);
+  });
+
+  it("keeps the measure for a non-excluded country", () => {
+    const result = resolveExpectedMeasures(line("8501.31.4000", "CN"), synthetic);
+    expect(result.applicable.map((m) => m.id)).toEqual(["m"]);
+  });
+
+  it("an unknown COO is NOT excluded — expectations bias toward duty owed", () => {
+    const result = resolveExpectedMeasures(line("8501.31.4000", null), synthetic);
+    expect(result.applicable.map((m) => m.id)).toEqual(["m"]);
+  });
+});
+
+describe("non-ad-valorem (presence-only) measures", () => {
+  it("stays expected with a null amount — never computed, never dropped", () => {
+    const specific = measure({
+      rate: null,
+      rateType: "specific",
+      rateText: "$80/net ton",
+      prefixes: ["8501"],
+    });
+    const synthetic: ReferenceData = {
+      htsByDigits: ref.htsByDigits,
+      measures: [specific],
+      stackingRules: [],
+    };
+    const result = computeExpectedCharges(line("8501.31.4000", "CN"), synthetic);
+    expect(result.measures).toHaveLength(1);
+    expect(result.measures[0].amountCents).toBeNull();
+    expect(result.measures[0].rateText).toBe("$80/net ton");
+  });
+});

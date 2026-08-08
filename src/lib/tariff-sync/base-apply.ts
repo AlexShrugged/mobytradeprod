@@ -1,13 +1,17 @@
-// The SOLE writer of base-schedule hts_codes windows. Base refreshes apply
-// directly — ~30k objective MFN rows are not review material — but every
-// refresh records an announcement row (source "usitc_hts", sourceRef
-// "<release>-base", status resolved) so the diffstat shows up next to the
-// review-gated Chapter 99 announcements.
+// The SOLE writer of base-schedule hts_codes windows. Base releases stage
+// as ONE reviewable unit (sync.ts stageBaseRelease → a tariff_base_release
+// review item); applyBaseRelease is the approval-gated path that re-derives
+// the diff from the archived raw payload and writes the windows. ~30k
+// objective MFN rows are not per-row review material, but a release-level
+// gate is what stands between a truncated fetch and a nuked schedule.
 //
 // Window tiling (same rationale as Chapter 99 apply.ts): when a release
 // changes a code's rate or description, the current window closes at
 // effectiveDate − 1 and a successor opens at effectiveDate (valid_to null),
 // so historical entries keep auditing against the base rates of their day.
+// Exception: windows still stamped with the demo SEED release are admitted
+// approximations, not history — a certified release CORRECTS them in place
+// (planBaseChange) instead of preserving them as bogus historical windows.
 // Codes absent from the release get their window closed (absence ==
 // removal; USITC has no change feed); a code reappearing later simply opens
 // a new window next to its closed history.
@@ -18,9 +22,24 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { auditEntry } from "../audit/auditor";
 import * as schema from "../db/schema";
-import { loadReferenceData, type DbClient } from "../duty/reference";
+import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
 import { planCloseDate, planWindow } from "../effective-dating";
-import type { BaseDiff, PreparedBaseRow } from "./types";
+import { getFileStore } from "../storage";
+import { ApplyValidationError } from "./apply";
+import { checkBaseReleaseSanity } from "./base-guard";
+import { runBaseEtl } from "./base-etl";
+import { loadCurrentBaseWindows } from "./state";
+import { parseBaseRows } from "./usitc";
+import type {
+  BaseDiff,
+  BaseReleaseProposalDisplay,
+  CurrentBaseWindow,
+  PreparedBaseRow,
+} from "./types";
+
+/** Matches seed-data/tariff.ts BASE_RELEASE — the marker on demo bootstrap
+ *  rows whose rates are approximations, not certified USITC values. */
+export const SEED_RELEASE = "SEED";
 
 export type BaseWindowPlan =
   | { action: "tile"; closePredecessorAt: string }
@@ -49,45 +68,60 @@ export function planBaseClose(
   return planCloseDate(currentValidFrom, effectiveDate);
 }
 
+/** Pure change plan for one CHANGED code. SEED windows are corrected in
+ *  place regardless of dates — the demo's approximate rate was never true,
+ *  so there is no history to preserve (the certified rate is treated as
+ *  having held for the whole window). Everything else follows the
+ *  test-pinned tiling of planBaseWindow. */
+export function planBaseChange(
+  current: Pick<CurrentBaseWindow, "validFrom" | "release">,
+  effectiveDate: string,
+): BaseWindowPlan {
+  if (current.release === SEED_RELEASE) return { action: "update_in_place" };
+  return planBaseWindow(current.validFrom, effectiveDate);
+}
+
 export type ReauditSummary = {
   entries: number;
   cleared: number;
   created: number;
 };
 
-export type BaseApplyResult = {
-  release: string;
-  effectiveDate: string;
+export type BaseApplyStats = {
   added: number;
   changed: number;
   removed: number;
   unchanged: number;
-  announcementId: string;
-  /** Null when no code the org's entries declare was touched. */
+  /** Null when no touched code is declared on any entry, in any org. */
   audit: ReauditSummary | null;
+};
+
+export type BaseApplyResult = BaseApplyStats & {
+  release: string;
+  effectiveDate: string;
+  announcementId: string;
 };
 
 /** Apply a base-schedule diff inside a caller-provided transaction:
  *  unchanged rows get their release stamp refreshed in place, changed rows
  *  tile (or correct) their window, removed rows close, added/reappearing
  *  rows open a fresh window — then entries declaring a touched code are
- *  re-audited (the targeted equivalent of apply.ts's post-apply sweep). */
+ *  re-audited across EVERY org (the reference is global). Announcement
+ *  bookkeeping belongs to the callers (stageBaseRelease opens it,
+ *  applyBaseRelease resolves it). */
 export async function applyBaseSchedule(
   db: DbClient,
-  orgId: string,
   input: {
     release: string;
-    /** Release start date from releaseList, overridable by callers. */
     effectiveDate: string;
     diff: BaseDiff;
-    rawStorageKey: string | null;
   },
-): Promise<BaseApplyResult> {
+): Promise<BaseApplyStats> {
   const { release, effectiveDate, diff } = input;
 
   // Changed: tile or correct each current window.
   for (const { row, current } of diff.changed) {
-    const plan = planBaseWindow(current.validFrom, effectiveDate);
+    const plan = planBaseChange(current, effectiveDate);
     if (plan.action === "tile") {
       await db
         .update(schema.htsCodes)
@@ -152,96 +186,140 @@ export async function applyBaseSchedule(
       ),
     );
 
-  // The diffstat announcement. sourceRef "<release>-base" keeps it distinct
-  // from the same release's Chapter 99 announcement; a re-run of the same
-  // release upserts rather than duplicating. Status resolved — base
-  // refreshes apply directly, there is nothing to review.
-  const summary = `${diff.added.length} added, ${diff.changed.length} changed, ${diff.removed.length} removed (${diff.unchanged} unchanged).`;
-  const [announcement] = await db
-    .insert(schema.tariffAnnouncements)
-    .values({
-      source: "usitc_hts",
-      sourceRef: `${release}-base`,
-      title: `USITC HTS base schedule ${release}`,
-      url: "https://hts.usitc.gov/",
-      publishedDate: effectiveDate,
-      fetchedAt: new Date(),
-      rawStorageKey: input.rawStorageKey,
-      summary,
-      status: "resolved",
-    })
-    .onConflictDoUpdate({
-      target: [
-        schema.tariffAnnouncements.source,
-        schema.tariffAnnouncements.sourceRef,
-      ],
-      set: {
-        fetchedAt: new Date(),
-        summary,
-        publishedDate: effectiveDate,
-        rawStorageKey: input.rawStorageKey,
-        status: "resolved",
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
-
-  const audit = await reauditTouchedEntries(db, orgId, [
+  const audit = await reauditTouchedEntriesAllOrgs(db, [
     ...diff.changed.map((c) => c.row.codeDigits),
     ...diff.removed.map((r) => r.codeDigits),
   ]);
 
   return {
-    release,
-    effectiveDate,
     added: diff.added.length,
     changed: diff.changed.length,
     removed: diff.removed.length,
     unchanged: diff.unchanged,
-    announcementId: announcement.id,
     audit,
   };
 }
 
-/** Re-audit entries whose declared line digits match a changed/removed
- *  code. Exact digits match suffices: rate inheritance means a subheading
- *  change surfaces on every inheriting 10-digit leaf as its own changed
- *  row, so declared leaf codes are always present in the touched set. */
-async function reauditTouchedEntries(
+/** The approval-gated apply path for a staged base release. Validates the
+ *  tariff_base_release review item is approved, re-derives the diff from
+ *  the archived raw payload (the staged diffstat is display-only — deriving
+ *  against live state inside the caller's transaction stays correct even if
+ *  state moved between staging and approval), re-runs the sanity guard
+ *  (opts.force = the reviewer's explicit override), applies, and resolves
+ *  the announcement. */
+export async function applyBaseRelease(
   db: DbClient,
-  orgId: string,
+  announcementId: string,
+  opts: { effectiveDate?: string; force?: boolean } = {},
+): Promise<BaseApplyResult> {
+  const announcement = await db.query.tariffAnnouncements.findFirst({
+    where: eq(schema.tariffAnnouncements.id, announcementId),
+  });
+  if (!announcement || !announcement.sourceRef.endsWith("-base")) {
+    throw new ApplyValidationError("Not a base-schedule release announcement.");
+  }
+  if (announcement.status === "resolved") {
+    throw new ApplyValidationError(
+      "This base release was already applied and can no longer change.",
+    );
+  }
+
+  const item = await db.query.reviewItems.findFirst({
+    where: and(
+      eq(schema.reviewItems.itemType, "tariff_base_release"),
+      eq(schema.reviewItems.subjectId, announcementId),
+    ),
+    orderBy: (t, { desc }) => [desc(t.createdAt)],
+  });
+  if (!item || item.status !== "approved") {
+    throw new ApplyValidationError(
+      "Base releases apply only after the release's review item is approved.",
+    );
+  }
+  if (!announcement.rawStorageKey) {
+    throw new ApplyValidationError(
+      "The archived release payload is missing — re-run the sync to re-stage.",
+    );
+  }
+
+  const rawBytes = await getFileStore().get(announcement.rawStorageKey);
+  const rows = parseBaseRows(JSON.parse(rawBytes.toString("utf8")));
+  const current = await loadCurrentBaseWindows(db);
+  const { prepared, diff } = runBaseEtl(rows, current);
+
+  const sanity = checkBaseReleaseSanity(diff, prepared.length, current.length);
+  if (!sanity.ok && !opts.force) {
+    throw new ApplyValidationError(
+      `Sanity guard blocked the apply: ${sanity.reasons.join(" ")} Approve with the override to force it.`,
+    );
+  }
+
+  const proposal = item.proposal as BaseReleaseProposalDisplay;
+  const effectiveDate = opts.effectiveDate ?? proposal.effectiveDate;
+  const release = announcement.sourceRef.slice(0, -"-base".length);
+
+  const stats = await applyBaseSchedule(db, { release, effectiveDate, diff });
+
+  const summary = `${stats.added} added, ${stats.changed} changed, ${stats.removed} removed (${stats.unchanged} unchanged).`;
+  await db
+    .update(schema.tariffAnnouncements)
+    .set({
+      summary,
+      publishedDate: effectiveDate,
+      status: "resolved",
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.tariffAnnouncements.id, announcementId));
+
+  return { release, effectiveDate, announcementId, ...stats };
+}
+
+/** Re-audit entries whose declared line digits match a changed/removed
+ *  code, in EVERY org — base windows are global. Exact digits match
+ *  suffices: rate inheritance means a subheading change surfaces on every
+ *  inheriting 10-digit leaf as its own changed row, so declared leaf codes
+ *  are always present in the touched set. */
+async function reauditTouchedEntriesAllOrgs(
+  db: DbClient,
   touchedDigits: string[],
 ): Promise<ReauditSummary | null> {
   if (touchedDigits.length === 0) return null;
 
-  const entryIds = new Set<string>();
-  for (const digitsBatch of chunk(touchedDigits, 500)) {
-    const rows = await db
-      .selectDistinct({ entryId: schema.entryLineItems.entryId })
-      .from(schema.entryLineItems)
-      .where(
-        and(
-          eq(schema.entryLineItems.orgId, orgId),
-          inArray(schema.entryLineItems.htsCodeDigits, digitsBatch),
-        ),
-      );
-    for (const r of rows) entryIds.add(r.entryId);
-  }
-  if (entryIds.size === 0) return null;
-
-  // Reference data reloaded AFTER the window writes so the re-audit sees
-  // the new truth.
-  const ref = await loadReferenceData(db);
+  const orgs = await db.query.orgs.findMany({ columns: { id: true } });
+  let entries = 0;
   let cleared = 0;
   let created = 0;
-  for (const entryId of entryIds) {
-    const before = await openAlertKeys(db, entryId);
-    await auditEntry(db, orgId, entryId, ref);
-    const after = await openAlertKeys(db, entryId);
-    for (const key of before) if (!after.has(key)) cleared += 1;
-    for (const key of after) if (!before.has(key)) created += 1;
+
+  for (const { id: orgId } of orgs) {
+    const entryIds = new Set<string>();
+    for (const digitsBatch of chunk(touchedDigits, 500)) {
+      const rows = await db
+        .selectDistinct({ entryId: schema.entryLineItems.entryId })
+        .from(schema.entryLineItems)
+        .where(
+          and(
+            eq(schema.entryLineItems.orgId, orgId),
+            inArray(schema.entryLineItems.htsCodeDigits, digitsBatch),
+          ),
+        );
+      for (const r of rows) entryIds.add(r.entryId);
+    }
+    if (entryIds.size === 0) continue;
+
+    // Reference data reloaded AFTER the window writes so the re-audit sees
+    // the new truth.
+    const ref = await loadReferenceDataForOrg(db, orgId);
+    for (const entryId of entryIds) {
+      const before = await openAlertKeys(db, entryId);
+      await auditEntry(db, orgId, entryId, ref);
+      const after = await openAlertKeys(db, entryId);
+      for (const key of before) if (!after.has(key)) cleared += 1;
+      for (const key of after) if (!before.has(key)) created += 1;
+    }
+    entries += entryIds.size;
   }
-  return { entries: entryIds.size, cleared, created };
+
+  return entries === 0 ? null : { entries, cleared, created };
 }
 
 async function openAlertKeys(

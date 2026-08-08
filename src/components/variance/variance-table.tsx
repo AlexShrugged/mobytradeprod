@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { VarianceQueueRow } from "@/lib/db/queries/variance";
+import type { VarianceGroup } from "@/lib/variance/grouping";
 import { LIQUIDATION_WINDOW_DAYS } from "@/lib/variance/window";
 import {
   formatCents,
@@ -29,6 +30,8 @@ import {
   formatRate,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+type QueueGroup = VarianceGroup<VarianceQueueRow>;
 
 const Arrow = () => <span className="text-muted-foreground">→</span>;
 const Muted = ({ children }: { children: React.ReactNode }) => (
@@ -218,73 +221,112 @@ function WindowCell({ row }: { row: VarianceQueueRow }) {
   );
 }
 
-const columns: ColumnDef<VarianceQueueRow>[] = [
+// One row = one line item; its issues stack inside the Variance and diff
+// cells in the group's canonical order (members[0] = worst). The badge and
+// diff columns use the same fixed item height so badge N stays aligned
+// with diff N.
+const STACK_ITEM = "flex h-6 items-center";
+
+// Archived rows (visible via "Show archived") hold only decided issues —
+// active rows hold only open ones — so members[0] speaks for the group.
+const isArchived = (g: QueueGroup) => g.members[0].status !== "open";
+
+const columns: ColumnDef<QueueGroup>[] = [
   {
     id: "line",
     header: "Part / line",
-    cell: ({ row }) => (
-      <div>
-        <div className="font-medium">{row.original.sku ?? "—"}</div>
-        <div className="max-w-56 truncate text-xs text-muted-foreground">
-          {row.original.lineNumber !== null
-            ? `line ${row.original.lineNumber}`
-            : "entry-level"}
-          {row.original.description ? ` · ${row.original.description}` : ""}
+    cell: ({ row }) => {
+      const primary = row.original.members[0];
+      return (
+        <div>
+          <div className="font-medium">{primary.sku ?? "—"}</div>
+          <div className="max-w-56 truncate text-xs text-muted-foreground">
+            {primary.lineNumber !== null
+              ? `line ${primary.lineNumber}`
+              : "entry-level"}
+            {primary.description ? ` · ${primary.description}` : ""}
+          </div>
         </div>
-      </div>
-    ),
+      );
+    },
   },
   {
     id: "type",
     header: "Variance",
-    cell: ({ row }) => <StatusBadge status={row.original.alertType} />,
+    cell: ({ row }) => (
+      <div className="flex flex-col items-start gap-1.5">
+        {row.original.members.map((m) => (
+          <div key={m.alertId} className={cn(STACK_ITEM, "gap-1.5")}>
+            <StatusBadge status={m.alertType} />
+            {m.status !== "open" ? (
+              <span className="text-xs text-muted-foreground">
+                {m.status === "resolved" ? "accepted" : "dismissed"}
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    ),
   },
   {
     id: "diff",
     header: "Expected → filed",
     cell: ({ row }) => (
-      <div className="font-medium">
-        <ExpectedVsFiled row={row.original} />
+      <div className="flex flex-col gap-1.5 font-medium">
+        {row.original.members.map((m) => (
+          <div key={m.alertId} className={STACK_ITEM}>
+            <ExpectedVsFiled row={m} />
+          </div>
+        ))}
       </div>
     ),
   },
   {
     id: "entry",
     header: "Entry",
-    cell: ({ row }) => (
-      <div>
-        <Link
-          href={`/entries/${row.original.entryId}`}
-          className="tabular-nums hover:underline"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.original.entryNumber}
-        </Link>
-        <div className="text-xs text-muted-foreground">
-          filed {formatDate(row.original.entryDate)}
+    cell: ({ row }) => {
+      const primary = row.original.members[0];
+      return (
+        <div>
+          <Link
+            href={`/entries/${primary.entryId}`}
+            className="tabular-nums hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {primary.entryNumber}
+          </Link>
+          <div className="text-xs text-muted-foreground">
+            filed {formatDate(primary.entryDate)}
+          </div>
         </div>
-      </div>
-    ),
+      );
+    },
   },
   {
     id: "impact",
     header: () => <div className="text-right">Impact</div>,
     cell: ({ row }) => {
-      const { impactCents, direction } = row.original;
-      if (impactCents === null)
+      // Deduped group sums; both lines show when directions mix on a line.
+      const { recoverableCents, exposureCents } = row.original;
+      if (recoverableCents === 0 && exposureCents === 0)
         return <div className="text-right text-muted-foreground">—</div>;
       return (
-        <div
-          className={cn(
-            "text-right font-medium tabular-nums",
-            direction === "recoverable" &&
-              "text-emerald-700 dark:text-emerald-400",
-            direction === "exposure" && "text-red-700 dark:text-red-400",
-            direction === null && "text-muted-foreground",
-          )}
-        >
-          {direction === "recoverable" ? "+" : direction === "exposure" ? "−" : ""}
-          {formatCents(Math.abs(impactCents))}
+        <div className="text-right font-medium tabular-nums">
+          {recoverableCents > 0 ? (
+            <div className="text-emerald-700 dark:text-emerald-400">
+              +{formatCents(recoverableCents)}
+            </div>
+          ) : null}
+          {exposureCents > 0 ? (
+            <div
+              className={cn(
+                "text-red-700 dark:text-red-400",
+                recoverableCents > 0 && "text-xs",
+              )}
+            >
+              −{formatCents(exposureCents)}
+            </div>
+          ) : null}
         </div>
       );
     },
@@ -292,24 +334,24 @@ const columns: ColumnDef<VarianceQueueRow>[] = [
   {
     id: "window",
     header: () => <div className="text-right">Window</div>,
-    cell: ({ row }) => <WindowCell row={row.original} />,
+    cell: ({ row }) => <WindowCell row={row.original.members[0]} />,
   },
 ];
 
 export function VarianceTable({
-  rows,
+  groups,
   totalCount,
 }: {
-  rows: VarianceQueueRow[];
+  groups: QueueGroup[];
   /** Row count before the search filter — picks the right empty message. */
   totalCount: number;
 }) {
   const router = useRouter();
   const table = useReactTable({
-    data: rows,
+    data: groups,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getRowId: (row) => row.alertId,
+    getRowId: (group) => group.id,
   });
 
   return (
@@ -347,7 +389,11 @@ export function VarianceTable({
             table.getRowModel().rows.map((row) => (
               <TableRow
                 key={row.id}
-                className="cursor-pointer"
+                className={cn(
+                  "cursor-pointer",
+                  // Decided history reads as background, not work to do.
+                  isArchived(row.original) && "opacity-60",
+                )}
                 onClick={() => router.push(row.original.href)}
               >
                 {row.getVisibleCells().map((cell) => (

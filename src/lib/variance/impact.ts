@@ -87,9 +87,12 @@ export function expectedTotalCents(
   if (expected.baseDuty === null || expected.baseDuty.amountCents === null) {
     return null;
   }
+  // A non-computable measure amount (non-ad-valorem) makes the TOTAL
+  // unknowable too — same null contract as a non-computable base duty.
+  if (expected.measures.some((m) => m.amountCents === null)) return null;
   return (
     expected.baseDuty.amountCents +
-    expected.measures.reduce((sum, m) => sum + m.amountCents, 0)
+    expected.measures.reduce((sum, m) => sum + (m.amountCents ?? 0), 0)
   );
 }
 

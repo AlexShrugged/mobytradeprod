@@ -10,6 +10,8 @@ import type {
   RevisionChangeTypeValue,
 } from "../db/schema";
 
+export type { HtsRateTypeValue };
+
 /** One Chapter 99 line from the USITC exportList JSON, normalized. */
 export type Ch99Row = {
   htsno: string; // "9903.01.23"
@@ -59,11 +61,22 @@ export type ProposedMeasureChange = {
   authority: MeasureAuthorityValue;
   scope: MeasureScopeValue;
   countries: string[] | null;
+  /** Annex-style carve-outs ("all countries except…"). Optional — absent on
+   *  proposals staged before the field existed; treated as null. */
+  countriesExcluded?: string[] | null;
   effectiveDate: string | null;
   endDate: string | null;
   sailedOnOrAfter: string | null;
   sailedOnOrBefore: string | null;
   rate: number | null;
+  /** Optional (absent = "ad_valorem" — proposals staged before the field
+   *  existed). Non-ad-valorem measures carry rate null and are tracked
+   *  presence-only: the charge is expected on entries, the amount is not
+   *  auto-checked. */
+  rateType?: HtsRateTypeValue;
+  /** Raw rate text for display when the rate isn't a computable decimal
+   *  fraction ("$80/net ton", "4.4¢/kg + 3.2%"). */
+  rateText?: string | null;
   exemption: boolean;
   inLieuOfBaseDuty: boolean;
   prefixes: string[];
@@ -78,6 +91,10 @@ export type RevisionEvidence = {
   additionalDuties: string;
   footnotes: string;
   highlights: SailClauseCandidate[];
+  /** Per-field extraction (stub heuristics or Claude) with confidence and
+   *  snippets — set by the sync's extraction step on create_measure
+   *  revisions. Type-only import; no runtime cycle. */
+  extraction?: import("./extractor/types").MeasureExtraction;
 };
 
 /** measure_revisions.live_snapshot — current state for the diff view. */
@@ -89,11 +106,14 @@ export type LiveMeasureSnapshot = {
   authority: MeasureAuthorityValue;
   scope: MeasureScopeValue;
   countries: string[] | null;
+  countriesExcluded?: string[] | null;
   effectiveDate: string;
   endDate: string | null;
   sailedOnOrAfter: string | null;
   sailedOnOrBefore: string | null;
   rate: number | null;
+  rateType?: HtsRateTypeValue;
+  rateText?: string | null;
   exemption: boolean;
   description: string;
   prefixes: string[];
@@ -116,13 +136,35 @@ export type TariffSyncState = {
   byDigits: Map<string, LiveMeasureSnapshot>;
 };
 
-/** An open (pending review) revision, for hash-dedupe and supersession. */
+/** An open (pending review) revision, for hash-dedupe and supersession.
+ *  reviewItemId is null for grouped members — their group's item gates
+ *  them, and supersession lands on measure_revisions.superseded_at. */
 export type OpenRevisionRef = {
   revisionId: string;
-  reviewItemId: string;
+  reviewItemId: string | null;
   announcementId: string;
   ch99Digits: string | null;
   contentHash: string;
+};
+
+/** review_items.proposal for tariff_measure_group items — the wholesale-
+ *  adoption card's display payload. Member counts and rows are derived at
+ *  read time from measure_revisions (superseded members drop out); the
+ *  payload carries only identity and first-look samples. */
+export type GroupProposalDisplay = {
+  authority: MeasureAuthorityValue;
+  ch99Prefix: string; // 6 digits, e.g. "990388"
+  title: string;
+  codeCount: number; // at staging time — display hint, not truth
+  sampleCodes: {
+    ch99Code: string;
+    name: string;
+    rate: number | null;
+    exemption: boolean;
+  }[];
+  source: AnnouncementSourceValue;
+  sourceRef: string;
+  announcementTitle: string;
 };
 
 /** review_items.proposal for tariff_measure_revision items — the
@@ -174,6 +216,10 @@ export type CurrentBaseWindow = {
   description: string;
   rate: number | null;
   validFrom: string | null;
+  /** Release that last confirmed this window; "SEED" marks the demo
+   *  bootstrap's approximations, which a certified release corrects in
+   *  place rather than tiling into history. */
+  release: string | null;
 };
 
 /** A fully resolved base-schedule row, ready to become an hts_codes window
@@ -206,4 +252,39 @@ export type BaseDiff = {
   changed: { row: PreparedBaseRow; current: CurrentBaseWindow }[];
   removed: CurrentBaseWindow[];
   unchanged: number;
+};
+
+/** Verdict of the truncation/anomaly guard over a base-release diff
+ *  (base-guard.ts). A failed guard blocks apply unless the reviewer
+ *  explicitly forces it. */
+export type BaseReleaseSanity = {
+  ok: boolean;
+  reasons: string[];
+};
+
+/** review_items.proposal for tariff_base_release items — everything the
+ *  release-level review card renders. The FULL diff is deliberately not
+ *  persisted (derived data is never stored): approval re-derives it from
+ *  the archived raw payload inside the apply transaction. */
+export type BaseReleaseProposalDisplay = {
+  /** USITC release id (announcement sourceRef minus the "-base" suffix). */
+  release: string;
+  releaseName: string;
+  effectiveDate: string;
+  added: number;
+  changed: number;
+  removed: number;
+  unchanged: number;
+  sanity: BaseReleaseSanity;
+  /** Changed rows whose current window is the demo SEED — corrected in
+   *  place on apply, never tiled into history. */
+  seedCorrections: number;
+  sampleAdded: { code: string; description: string; rate: number | null }[];
+  sampleChanged: {
+    code: string;
+    description: string;
+    rateBefore: number | null;
+    rateAfter: number | null;
+  }[];
+  sampleRemoved: { code: string; description: string }[];
 };

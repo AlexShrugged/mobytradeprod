@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildSeedReferenceData, type DayFn } from "../db/seed-data/tariff";
+import type { MeasureRef } from "../duty/types";
 import {
   computeEntryAlerts,
   type AuditableCharge,
@@ -1147,5 +1148,50 @@ describe("rule 2: entry-date-windowed exemptions", () => {
     // exemption flag governs, the pre-windowing behavior.
     const alerts = computeEntryAlerts(entry({ lines: [exclusionLine()] }), ref);
     expect(keys(alerts)).not.toContain("unexpected_measure:line1:99038867");
+  });
+});
+
+describe("non-ad-valorem (presence-only) measures", () => {
+  // A specific-rate 232 measure covering the motor line — expected on the
+  // entry, amount never auto-checked.
+  const specific: MeasureRef = {
+    id: "spec-1",
+    name: "Port maintenance fee",
+    authority: "other",
+    scope: "hts_list",
+    countries: null,
+    effectiveDate: "2020-01-01",
+    endDate: null,
+    sailedOnOrAfter: null,
+    sailedOnOrBefore: null,
+    inLieuOfBaseDuty: false,
+    ch99Code: "9903.99.05",
+    ch99Digits: "99039905",
+    rate: null,
+    rateType: "specific",
+    rateText: "$80/net ton",
+    exclusionDigits: [],
+    prefixes: ["8501"],
+  };
+  const withSpecific = { ...ref, measures: [...ref.measures, specific] };
+
+  it("absent charge → missing_measure with the raw rate text, no amount", () => {
+    const alerts = computeEntryAlerts(entry(), withSpecific);
+    expect(keys(alerts)).toEqual(["missing_measure:line1:99039905"]);
+    expect(alerts[0].message).toContain("$80/net ton");
+    expect(alerts[0].message).toContain("amount not auto-computed");
+    expect(alerts[0].details?.expected_amount).toBeNull();
+  });
+
+  it("declared charge → presence satisfied, amount/rate never checked", () => {
+    const line = cleanMotorLine();
+    line.charges.push(
+      charge("additional_duty", "9903.99.05", null, "123.00"),
+    );
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "4023.00" }),
+      withSpecific,
+    );
+    expect(alerts).toEqual([]);
   });
 });

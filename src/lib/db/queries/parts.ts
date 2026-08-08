@@ -12,7 +12,7 @@ import type {
   ReviewItem,
 } from "@/lib/db/schema";
 import { normalizeHts } from "@/lib/duty/calculator";
-import { loadReferenceData } from "@/lib/duty/reference";
+import { getReferenceDataForOrg } from "./reference";
 import { computeEstimatedLandedCost } from "@/lib/landed-cost/estimate";
 import { rollupBySku, type RollupLine } from "@/lib/landed-cost/rollup";
 import { getCurrentOrgId } from "@/lib/org";
@@ -141,7 +141,7 @@ export async function getParts(): Promise<PartRow[]> {
         where: eq(schema.parts.orgId, orgId),
         orderBy: asc(schema.parts.sku),
       }),
-      loadReferenceData(db),
+      getReferenceDataForOrg(),
       db.query.quoteLines.findMany({
         where: eq(schema.quoteLines.orgId, orgId),
         with: {

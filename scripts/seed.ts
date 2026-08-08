@@ -101,6 +101,7 @@ async function main() {
   await db.delete(schema.scenarios);
   await db.delete(schema.proposedMeasures);
   await db.delete(schema.measureRevisions);
+  await db.delete(schema.measureRevisionGroups);
   await db.delete(schema.tariffAnnouncements);
   await db.delete(schema.tradeMeasureHts);
   await db.delete(schema.htsCodes);
@@ -766,6 +767,19 @@ async function main() {
   assertExactKeys("231-4501334-6", [
     "value_mismatch:invoice_total",
     "value_mismatch:invoice_sku:EB-WHL-27F",
+  ]);
+  // Entry 8: the stacked line — every issue class that can coexist on one
+  // line (plus the entry-level header-value alert that gates the per-SKU
+  // one). NO hts_discrepancy by design: it would suspend rate/amount.
+  assertExactKeys("231-4501347-8", [
+    "rate_mismatch:line1:base",
+    "amount_mismatch:line1:base",
+    "missing_measure:line1:99030125",
+    "invoice_hts_mismatch:invoice_sku:EB-BAT-52V",
+    "coo_discrepancy:invoice_sku:EB-BAT-52V",
+    "value_mismatch:invoice_total",
+    "value_mismatch:invoice_sku:EB-BAT-52V",
+    "quantity_discrepancy:invoice_sku:EB-BAT-52V",
   ]);
 
   // -------------------------------------------------------------- summary

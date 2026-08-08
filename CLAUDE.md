@@ -10,12 +10,37 @@ customs entries (top-level) with their shipments and POs down to line items, see
 owed and refunds, manage SKUs and HTS classification, understand per-SKU landed cost, and
 follow a chronological event feed of their import business. Scenario modeling comes later.
 
-Six pages: **Entries · Variance · Parts · Events · Data · Settings**. No auth yet
-(single seeded org, seam in `src/lib/org.ts`). Documents parse via Reducto when
-`REDUCTO_API_KEY` is set, otherwise a deterministic stub processor. Broker **entry
-packets** (one PDF bundling a 7501 + commercial invoice + supporting docs) split into
-child documents (parent-child rows on `documents`; children share the parent's file,
-page-scoped) that each run the normal per-doc pipeline.
+Six org-facing pages: **Entries · Variance · Parts · Events · Data · Settings**, plus a
+platform-operator surface at **/admin** (tariff sync + review queue). No auth yet
+(single seeded org, tenant seam in `src/lib/org.ts`; super-admin seam in
+`src/lib/admin.ts` — dev-open until `SUPER_ADMIN_SECRET` is set, then a cookie login
+via `POST /api/admin/session`). Documents parse via Reducto when `REDUCTO_API_KEY` is
+set, otherwise a deterministic stub processor. Broker **entry packets** (one PDF
+bundling a 7501 + commercial invoice + supporting docs) split into child documents
+(parent-child rows on `documents`; children share the parent's file, page-scoped) that
+each run the normal per-doc pipeline.
+
+## Customs data ingestion
+
+The daily sync (`GET /api/tariff-sync` cron, `POST` = admin button) fetches the USITC
+HTS + Federal Register and **stages, never applies**: tracked-measure Ch99 changes as
+per-revision cards, untracked codes grouped into (authority, 6-digit-prefix) adoption
+family cards (`tariff-sync/grouping.ts`), and each base-schedule release as ONE
+reviewable unit with a diffstat + truncation guard (`tariff-sync/base-guard.ts`).
+Nothing reaches the reference tables until the super admin approves it at
+`/admin/tariffs`; approval + apply + all-orgs re-audit run in one transaction. The
+tariff review queue is **global** (`review_items.org_id` null — a CHECK ties scope to
+item type); classification review stays org-scoped. Staged create_measure proposals get
+dates/countries proposed by `tariff-sync/extractor/` (Claude via `ANTHROPIC_API_KEY` +
+optional `TARIFF_EXTRACTOR_MODEL`, deterministic stub otherwise; merge rules in
+`extractor/merge.ts` — deterministic values win, sub-threshold confidence stays
+evidence-only). `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
+`--apply` to stage) bootstraps the queue from `../moby`'s hand-curated measures. Base
+windows still stamped release `"SEED"` are demo approximations — the first certified
+release corrects them in place instead of tiling them into history. Reference reads go
+through `duty/reference.ts`: the full loader is for schedule-wide scans only
+(classifier candidate pool, seed); request paths use the org-scoped loader
+(`queries/reference.ts`, React `cache()` per request).
 
 ## Architecture doctrines (carried from mobynew — do not violate)
 
@@ -27,7 +52,9 @@ page-scoped) that each run the normal per-doc pipeline.
   part writes; `classification/service.ts` owns the HTS projection; `audit/auditor.ts`
   owns `audit_alerts` (reconciled by stable `alert_key`; resolved/dismissed rows never
   touched); `tariff-sync/apply.ts` owns Ch99 reference rows; `tariff-sync/base-apply.ts`
-  owns base-schedule windows.
+  owns base-schedule windows. Both tariff writers are approval-gated: they refuse
+  unless the matching review item is approved, and the sync/extractor/import paths
+  write staging tables only.
 - **The commercial invoice is the only document class compared against entries for
   variance** (settled 2026-08-06; rules in `audit/invoice-rules.ts`, direct links via
   `entry_invoices`). PO/shipment document comparisons were deliberately retired — PO

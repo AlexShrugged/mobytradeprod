@@ -340,6 +340,9 @@ export class StubDocumentProcessor implements DocumentProcessor {
         });
       }
       for (const m of expected.measures) {
+        // The stub fabricates demo documents from the seed reference, which
+        // is all ad-valorem; skip presence-only measures defensively.
+        if (m.amountCents === null) continue;
         charges.push({
           charge_type: "additional_duty",
           hts_code: m.ch99Code,
@@ -364,7 +367,7 @@ export class StubDocumentProcessor implements DocumentProcessor {
         if (idx >= 0) charges.splice(idx, 1);
       } else if (cls === 2) {
         const reciprocal = this.reciprocal();
-        if (reciprocal) {
+        if (reciprocal && reciprocal.rate !== null) {
           charges.push({
             charge_type: "additional_duty",
             hts_code: reciprocal.ch99Code,

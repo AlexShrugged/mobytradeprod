@@ -31,6 +31,10 @@ export type MeasureRef = {
   authority: MeasureAuthorityValue;
   scope: MeasureScopeValue;
   countries: string[] | null; // null = every country of origin
+  // Annex-style carve-outs: COO in this list → measure does not apply.
+  // Checked after the inclusion list; an unknown COO is NOT excluded
+  // (expectations bias toward duty owed). Absent/null = no exclusions.
+  countriesExcluded?: string[] | null;
   effectiveDate: string; // ISO date
   endDate: string | null;
   // Sail-date conditions (null = none). The entry window above gates on the
@@ -41,7 +45,13 @@ export type MeasureRef = {
   inLieuOfBaseDuty: boolean;
   ch99Code: string;
   ch99Digits: string;
-  rate: number;
+  // Null = non-ad-valorem (specific/compound) — the measure is still
+  // EXPECTED on covered entries (presence-checked), but no amount can be
+  // computed; rateText carries the raw text for display.
+  rate: number | null;
+  // Absent = "ad_valorem" (refs built before the field existed).
+  rateType?: HtsRateTypeValue;
+  rateText?: string | null;
   // Digits of exemption Chapter 99 rows under this measure; a declared
   // charge on any of these satisfies the measure.
   exclusionDigits: string[];
@@ -126,7 +136,9 @@ export type ExpectedLineCharges = {
     amountCents: number | null; // null = non-ad-valorem, not computable
     rateType: HtsRateTypeValue;
   } | null;
-  measures: (MeasureRef & { amountCents: number })[];
+  // amountCents null = non-ad-valorem measure — expected (presence-checked)
+  // but not computable; mirrors the base-duty contract above.
+  measures: (MeasureRef & { amountCents: number | null })[];
   suppressed: SuppressedMeasure[];
   baseDutyZeroedBy: MeasureAuthorityValue | null;
   sailBasis: SailBasis;

@@ -3,8 +3,8 @@ import "server-only";
 import { and, count, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 import { db, schema } from "@/lib/db";
-import { getCurrentOrgId } from "@/lib/org";
 import type {
+  BaseReleaseProposalDisplay,
   LiveMeasureSnapshot,
   ProposedMeasureChange,
   RevisionEvidence,
@@ -28,7 +28,6 @@ export type TariffStatus = {
 };
 
 export async function getTariffStatus(): Promise<TariffStatus> {
-  const orgId = await getCurrentOrgId();
   const [byAuthority, baseRows, ch99Rows, latestAnnouncement, openItems] =
     await Promise.all([
       db
@@ -55,12 +54,13 @@ export async function getTariffStatus(): Promise<TariffStatus> {
         orderBy: (t) => [desc(t.fetchedAt)],
         columns: { fetchedAt: true },
       }),
+      // Global truth: the tariff queue has no org (super admin approves for
+      // every tenant at once).
       db
         .select({ count: count() })
         .from(schema.reviewItems)
         .where(
           and(
-            eq(schema.reviewItems.orgId, orgId),
             eq(schema.reviewItems.itemType, "tariff_measure_revision"),
             eq(schema.reviewItems.status, "pending"),
           ),
@@ -108,10 +108,8 @@ export type OpenRevision = {
 /** Pending Chapter 99 revisions for the review queue, newest announcement
  *  first, stable order within one. */
 export async function getOpenRevisions(): Promise<OpenRevision[]> {
-  const orgId = await getCurrentOrgId();
   const items = await db.query.reviewItems.findMany({
     where: and(
-      eq(schema.reviewItems.orgId, orgId),
       eq(schema.reviewItems.itemType, "tariff_measure_revision"),
       eq(schema.reviewItems.status, "pending"),
     ),
@@ -152,6 +150,169 @@ export async function getOpenRevisions(): Promise<OpenRevision[]> {
         publishedDate: r.announcement.publishedDate,
       },
     }));
+}
+
+// ------------------------------------------------------------ adoption groups
+
+export type OpenGroupMember = {
+  revisionId: string;
+  ch99Code: string | null;
+  name: string;
+  rate: number | null;
+  /** Raw rate text for non-ad-valorem measures (rate null, presence-only). */
+  rateText: string | null;
+  exemption: boolean;
+  countries: string[] | null;
+  countriesExcluded: string[] | null;
+  effectiveDate: string | null;
+  /** Extraction confidence chips for the member row (absent for stub-less
+   *  or pre-extraction stagings). */
+  extraction?: import("@/lib/tariff-sync/extractor/types").MeasureExtraction;
+};
+
+export type OpenMeasureGroup = {
+  reviewItemId: string;
+  groupId: string;
+  title: string;
+  authority: schema.MeasureAuthorityValue;
+  ch99Prefix: string;
+  /** Live members (not applied, not superseded) — derived at read time so
+   *  a card superseded down to nothing shrinks instead of lying. */
+  members: OpenGroupMember[];
+  announcement: {
+    id: string;
+    source: schema.AnnouncementSourceValue;
+    sourceRef: string;
+    title: string;
+    url: string | null;
+    publishedDate: string | null;
+  };
+  fetchedAt: Date;
+};
+
+/** Pending wholesale-adoption groups with their live members, newest
+ *  announcement first. */
+export async function getOpenMeasureGroups(): Promise<OpenMeasureGroup[]> {
+  const items = await db.query.reviewItems.findMany({
+    where: and(
+      eq(schema.reviewItems.itemType, "tariff_measure_group"),
+      eq(schema.reviewItems.status, "pending"),
+    ),
+  });
+  if (items.length === 0) return [];
+
+  const groups = await db.query.measureRevisionGroups.findMany({
+    where: inArray(
+      schema.measureRevisionGroups.id,
+      items.map((i) => i.subjectId),
+    ),
+    with: { announcement: true },
+  });
+  const itemByGroup = new Map(items.map((i) => [i.subjectId, i]));
+
+  const members = await db.query.measureRevisions.findMany({
+    where: and(
+      inArray(
+        schema.measureRevisions.groupId,
+        groups.map((g) => g.id),
+      ),
+      isNull(schema.measureRevisions.appliedAt),
+      isNull(schema.measureRevisions.supersededAt),
+    ),
+  });
+  const membersByGroup = new Map<string, typeof members>();
+  for (const m of members) {
+    if (!m.groupId) continue;
+    const list = membersByGroup.get(m.groupId) ?? [];
+    list.push(m);
+    membersByGroup.set(m.groupId, list);
+  }
+
+  return groups
+    .map((g) => ({
+      reviewItemId: itemByGroup.get(g.id)!.id,
+      groupId: g.id,
+      title: g.title,
+      authority: g.authority,
+      ch99Prefix: g.ch99Prefix,
+      members: (membersByGroup.get(g.id) ?? [])
+        .sort((a, b) => (a.ch99Code ?? "").localeCompare(b.ch99Code ?? ""))
+        .map((m) => {
+          const proposed = m.proposed as ProposedMeasureChange;
+          const evidence = m.evidence as RevisionEvidence;
+          return {
+            revisionId: m.id,
+            ch99Code: m.ch99Code,
+            name: proposed.name,
+            rate: proposed.rate,
+            rateText: proposed.rateText ?? null,
+            exemption: proposed.exemption,
+            countries: proposed.countries,
+            countriesExcluded: proposed.countriesExcluded ?? null,
+            effectiveDate: proposed.effectiveDate,
+            extraction: evidence.extraction,
+          };
+        }),
+      announcement: {
+        id: g.announcement.id,
+        source: g.announcement.source,
+        sourceRef: g.announcement.sourceRef,
+        title: g.announcement.title,
+        url: g.announcement.url,
+        publishedDate: g.announcement.publishedDate,
+      },
+      fetchedAt: g.announcement.fetchedAt,
+    }))
+    .filter((g) => g.members.length > 0)
+    .sort((a, b) => b.fetchedAt.getTime() - a.fetchedAt.getTime());
+}
+
+// ------------------------------------------------------------ base releases
+
+export type OpenBaseRelease = {
+  reviewItemId: string;
+  announcementId: string;
+  proposal: BaseReleaseProposalDisplay;
+  fetchedAt: Date;
+  title: string;
+  url: string | null;
+};
+
+/** Pending base-schedule releases (release-level approval units), newest
+ *  first. At most one is ever actionable — staging supersedes older ones —
+ *  but the list shape keeps the UI honest if that invariant slips. */
+export async function getOpenBaseReleases(): Promise<OpenBaseRelease[]> {
+  const items = await db.query.reviewItems.findMany({
+    where: and(
+      eq(schema.reviewItems.itemType, "tariff_base_release"),
+      eq(schema.reviewItems.status, "pending"),
+    ),
+  });
+  if (items.length === 0) return [];
+
+  const announcements = await db.query.tariffAnnouncements.findMany({
+    where: inArray(
+      schema.tariffAnnouncements.id,
+      items.map((i) => i.subjectId),
+    ),
+  });
+  const announcementById = new Map(announcements.map((a) => [a.id, a]));
+
+  return items
+    .map((item) => {
+      const a = announcementById.get(item.subjectId);
+      if (!a) return null;
+      return {
+        reviewItemId: item.id,
+        announcementId: a.id,
+        proposal: item.proposal as BaseReleaseProposalDisplay,
+        fetchedAt: a.fetchedAt,
+        title: a.title,
+        url: a.url,
+      };
+    })
+    .filter((r): r is OpenBaseRelease => r !== null)
+    .sort((a, b) => b.fetchedAt.getTime() - a.fetchedAt.getTime());
 }
 
 // ------------------------------------------------------------ announcements

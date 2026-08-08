@@ -38,10 +38,12 @@ export function SyncButton() {
       if (base?.error) {
         failures += 1;
         parts.push(`Base: ${base.error}`);
-      } else if (base) {
+      } else if (base?.staged) {
         parts.push(
-          `Base ${base.release}: ${base.added} added, ${base.changed} changed, ${base.removed} removed`,
+          `Base ${base.releaseId}: ${base.added} added, ${base.changed} changed, ${base.removed} removed — staged for approval`,
         );
+      } else if (base) {
+        parts.push(`Base ${base.releaseId}: no changes`);
       }
       const fr = body?.federalRegister;
       if (fr?.error) {

@@ -154,6 +154,7 @@ describe("diffBaseRelease", () => {
       description: "Purebred breeding animals",
       rate: 0,
       validFrom: "2025-01-01",
+      release: "2026HTSRev1",
     },
     {
       codeDigits: "01012900",
@@ -161,6 +162,7 @@ describe("diffBaseRelease", () => {
       description: "Other",
       rate: 0.045,
       validFrom: "2025-01-01",
+      release: "2026HTSRev1",
     },
     {
       codeDigits: "01019030",
@@ -168,6 +170,7 @@ describe("diffBaseRelease", () => {
       description: "Imported for immediate slaughter",
       rate: 0,
       validFrom: "2025-01-01",
+      release: "2026HTSRev1",
     },
   ];
 

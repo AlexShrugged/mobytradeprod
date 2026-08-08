@@ -11,7 +11,7 @@ import {
   type BucketTotal,
 } from "@/lib/duty/authority";
 import { computeExpectedCharges } from "@/lib/duty/calculator";
-import { loadReferenceData } from "@/lib/duty/reference";
+import { getReferenceDataForOrg } from "./reference";
 import { resolveSailInfo } from "@/lib/duty/sail";
 import type { ReferenceData, SailBasis } from "@/lib/duty/types";
 import { resolveWindow } from "@/lib/effective-dating";
@@ -344,7 +344,7 @@ export async function getFutureEntries(): Promise<FutureEntryRow[]> {
       .from(schema.entryShipments)
       .where(eq(schema.entryShipments.orgId, orgId)),
     loadSailWindows(),
-    loadReferenceData(db),
+    getReferenceDataForOrg(),
   ]);
 
   const today = todayIso();
@@ -569,8 +569,9 @@ export type LineChargeDetail = {
 export type MissingMeasureDetail = {
   name: string;
   ch99Code: string;
-  rate: number;
-  expectedAmount: number; // dollars
+  // Null = non-ad-valorem measure (presence-only; amount not computable).
+  rate: number | null;
+  expectedAmount: number | null; // dollars
 };
 
 export type LineItemDetail = {
@@ -614,6 +615,7 @@ export type AlertRow = {
   message: string;
   details: Record<string, unknown> | null;
   status: "open" | "resolved" | "dismissed";
+  lineItemId: string | null;
   lineNumber: number | null;
   /** The catalog part behind the flagged line — the jump into HTS review. */
   partId: string | null;
@@ -754,7 +756,7 @@ export async function getEntryDetail(
   );
 
   const [ref, documentRows] = await Promise.all([
-    preloadedRef ?? loadReferenceData(db),
+    preloadedRef ?? getReferenceDataForOrg(),
     // Source documents via provenance links — for the entry itself AND its
     // linked shipments/POs/invoices, so paperwork renders under the record
     // it belongs to. raw_extraction never leaves the server (it can be
@@ -904,7 +906,7 @@ export async function getEntryDetail(
         );
         if (em) {
           expectedRate = em.rate;
-          expectedAmount = em.amountCents / 100;
+          expectedAmount = em.amountCents === null ? null : em.amountCents / 100;
           measureName = em.name;
         } else if (sm) {
           measureName = sm.name;
@@ -948,7 +950,7 @@ export async function getEntryDetail(
             name: m.name,
             ch99Code: m.ch99Code,
             rate: m.rate,
-            expectedAmount: m.amountCents / 100,
+            expectedAmount: m.amountCents === null ? null : m.amountCents / 100,
           }))
       : [];
 
@@ -1031,6 +1033,7 @@ export async function getEntryDetail(
       message: a.message,
       details: (a.details as Record<string, unknown> | null) ?? null,
       status: a.status,
+      lineItemId: a.lineItemId,
       lineNumber: a.lineItemId
         ? (lineNumberById.get(a.lineItemId) ?? null)
         : typeof (a.details as Record<string, unknown> | null)?.line_number ===
