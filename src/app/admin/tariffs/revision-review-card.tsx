@@ -386,7 +386,7 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
 
         <div className="flex gap-2">
           <Button size="sm" onClick={approve} disabled={busy}>
-            <Check /> Approve &amp; apply
+            <Check /> Approve
           </Button>
           <Button
             size="sm"

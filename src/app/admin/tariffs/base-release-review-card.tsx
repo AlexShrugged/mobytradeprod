@@ -136,7 +136,7 @@ export function BaseReleaseReviewCard({ release }: { release: OpenBaseRelease })
               )
             }
           >
-            <Check /> Approve &amp; apply
+            <Check /> Approve
           </Button>
           <Button
             size="sm"

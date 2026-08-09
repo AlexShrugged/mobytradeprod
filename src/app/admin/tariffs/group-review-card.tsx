@@ -292,7 +292,7 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
         <div className="space-y-1.5">
           <div className="flex gap-2">
             <Button size="sm" onClick={approve} disabled={busy || includedCount === 0}>
-              <Check /> Approve &amp; apply {includedCount} code
+              <Check /> Approve {includedCount} code
               {includedCount === 1 ? "" : "s"}
             </Button>
             <Button

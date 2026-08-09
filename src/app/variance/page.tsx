@@ -2,19 +2,20 @@ import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
 import { VarianceView } from "@/components/variance/variance-view";
 import { getVarianceQueue, type VarianceQueueRow } from "@/lib/db/queries/variance";
-import { formatCents, formatDate } from "@/lib/format";
+import { formatCents } from "@/lib/format";
 import { dedupedImpactSums, partitionVarianceRows } from "@/lib/variance/grouping";
 
 export const dynamic = "force-dynamic";
 
 // ONE AXIS: what disagrees. Never group by what we compared against — the
 // commercial invoice is the primary counterparty for variance, so a "source"
-// chip would swallow most of the queue and filter nothing. (It also split
+// option would swallow most of the queue and filter nothing. (It also split
 // evidence incoherently: coo_discrepancy serves both catalog and CI evidence,
 // so CI-sourced origin landed under Origin while CI-sourced HTS landed under
 // Invoice.) Evidence source is carried by the row badge instead —
-// status-badge.tsx renders "CI HTS mismatch" vs "HTS mismatch". If source ever
-// needs to be filterable, it belongs as a second dimension, not a peer chip.
+// status-badge.tsx renders "CI HTS mismatch" vs "HTS mismatch". If source
+// ever needs to be filterable, it belongs as a second dimension, not a peer
+// option.
 //
 // Every member of audit_alert_type must appear in exactly one bucket.
 const TYPE_FILTERS: Record<string, { label: string; types: string[] }> = {
@@ -48,20 +49,11 @@ const TYPE_FILTERS: Record<string, { label: string; types: string[] }> = {
   },
 };
 
-export default async function VariancePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ type?: string }>;
-}) {
-  const [rows, { type }] = await Promise.all([
-    getVarianceQueue(),
-    searchParams,
-  ]);
-
-  const activeType = type && TYPE_FILTERS[type] ? type : null;
+export default async function VariancePage() {
+  const rows = await getVarianceQueue();
 
   // The queue carries every status; the tiles report only what's open —
-  // decided rows exist solely for the table's archived view.
+  // decided rows exist solely for the table's Resolved view.
   const openRows = rows.filter((r) => r.status === "open");
 
   // Headline dollars stay issue-level (deduped); the table consolidates to
@@ -90,19 +82,16 @@ export default async function VariancePage({
           label="Open variances"
           value={String(openRows.length)}
           tone={openRows.length > 0 ? "amber" : "default"}
-          hint="across all entries"
         />
         <StatTile
           label="Recoverable"
           value={recoverable > 0 ? `+${formatCents(recoverable)}` : "—"}
           tone={recoverable > 0 ? "green" : "default"}
-          hint="overpaid duty you can claim back"
         />
         <StatTile
           label="Exposure"
           value={exposure > 0 ? `−${formatCents(exposure)}` : "—"}
           tone={exposure > 0 ? "red" : "default"}
-          hint="underpaid duty CBP can come for"
         />
         <StatTile
           label="Nearest window"
@@ -111,19 +100,13 @@ export default async function VariancePage({
               ? `${nearest.window.daysLeft}d`
               : "—"
           }
-          hint={
-            nearest?.window.estDate
-              ? `est. liquidation ${formatDate(nearest.window.estDate)}`
-              : "no open windows"
-          }
         />
       </div>
 
       <VarianceView
-        groups={active}
-        archivedGroups={archived}
+        openGroups={active}
+        resolvedGroups={archived}
         typeFilters={TYPE_FILTERS}
-        activeType={activeType}
       />
     </div>
   );

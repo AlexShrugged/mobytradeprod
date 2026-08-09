@@ -270,7 +270,7 @@ const columns: ColumnDef<QueueGroup>[] = [
   },
   {
     id: "diff",
-    header: "Expected → filed",
+    header: "Expected → Filed",
     cell: ({ row }) => (
       <div className="flex flex-col gap-1.5 font-medium">
         {row.original.members.map((m) => (

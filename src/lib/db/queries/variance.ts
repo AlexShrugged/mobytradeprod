@@ -311,6 +311,9 @@ export type VarianceSiblingAlert = {
   label: string;
   message: string;
   status: "open" | "resolved" | "dismissed";
+  /** When the decision landed; null while open. Drives the inline Undo's
+   *  target — the most recently decided unit on the line. */
+  resolvedAt: Date | null;
   impactCents: number | null;
   direction: "recoverable" | "exposure" | null;
   /** The alert's comparison snapshot — lets the detail page render a whole
@@ -442,6 +445,7 @@ export async function getVarianceDetail(
       label: a.label,
       message: a.message,
       status: a.status,
+      resolvedAt: a.resolvedAt,
       impactCents: sibImpact.impactCents,
       direction: sibImpact.direction,
       details: a.details,

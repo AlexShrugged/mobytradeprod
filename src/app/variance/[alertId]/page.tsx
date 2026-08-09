@@ -150,6 +150,14 @@ export default async function VarianceDetailPage({
     id: u.primary.id,
     ids: unitIds(u),
     status: unitStatus(u),
+    // A unit's decision moment: the latest member stamp (twins decide
+    // together; either carries it). 0 while open or for legacy rows.
+    decidedAt: Math.max(
+      0,
+      ...[u.primary, u.consequence]
+        .filter((m) => m !== null)
+        .map((m) => m.resolvedAt?.getTime() ?? 0),
+    ),
   }));
   const currentUnit = unitRows.find((u) => u.ids.includes(alert.id)) ?? null;
   const decideIds = currentUnit?.ids ?? [alert.id];
@@ -157,14 +165,19 @@ export default async function VarianceDetailPage({
     unitRows,
     currentUnit?.id ?? alert.id,
   );
-  // Inline Undo target: the decided unit directly above this one in card
-  // order — the step-back in the review flow.
-  const position = unitRows.findIndex((u) => u.ids.includes(alert.id));
-  const previous = position > 0 ? unitRows[position - 1] : null;
-  const undoPrevious =
-    previous && previous.status !== "open"
-      ? { ids: previous.ids, backTo: previous.id }
-      : null;
+  // Inline Undo target: the line's most recently decided unit — "the one I
+  // just accepted/dismissed" — regardless of where it re-sorted in card
+  // order. Card position won't do: the decided band sorts canonically (by
+  // impact), not chronologically.
+  const undoPrevious = unitRows
+    .filter((u) => u.status !== "open" && !u.ids.includes(alert.id))
+    .reduce<{ ids: string[]; backTo: string; decidedAt: number } | null>(
+      (best, u) =>
+        best === null || u.decidedAt > best.decidedAt
+          ? { ids: u.ids, backTo: u.id, decidedAt: u.decidedAt }
+          : best,
+      null,
+    );
   const d = alert.details ?? {};
   const str = (k: string) =>
     typeof d[k] === "string" ? (d[k] as string) : null;
@@ -658,13 +671,45 @@ export default async function VarianceDetailPage({
       .filter((c) => DUTY_CHARGE_TYPES.has(c.chargeType))
       .reduce((sum, c) => sum + Math.round(Number(c.amount) * 100), 0);
     const hasCharges = line.charges.length > 0;
-    const claimant =
-      dutyUnits.find((c) => c.tag.current && c.impact.impactCents !== null) ??
-      dutyUnits.find((c) => c.impact.impactCents !== null) ??
-      null;
-    const expectedTotal = claimant
-      ? declaredCents - claimant.impact.impactCents!
-      : null;
+    // Duty-touching issues STACK into the one total: every unit with dollars
+    // contributes. Accepted impacts land in Corrected immediately; open ones
+    // keep the row in question (amber) with the potential net underneath;
+    // dismissed findings drop out of the math.
+    const impactUnits = dutyUnits.filter((c) => c.impact.impactCents !== null);
+    const sumImpact = (us: UnitCtx[]) =>
+      us.reduce((s, c) => s + (c.impact.impactCents ?? 0), 0);
+    const acceptedUnits = impactUnits.filter(
+      (c) => c.tag.status === "resolved",
+    );
+    const openUnits = impactUnits.filter((c) => c.tag.status === "open");
+    const activeUnits = impactUnits.filter(
+      (c) => c.tag.status !== "dismissed",
+    );
+    // The expectation ignores dismissed findings — unless everything was
+    // dismissed, where the struck-through column keeps the original claim.
+    const expectationUnits = activeUnits.length > 0 ? activeUnits : impactUnits;
+    const expectedTotal =
+      expectationUnits.length > 0
+        ? declaredCents - sumImpact(expectationUnits)
+        : null;
+    const correctedSoFar = declaredCents - sumImpact(acceptedUnits);
+    const netPotential = correctedSoFar - sumImpact(openUnits);
+    const tag: DiffRow["issue"] =
+      impactUnits.length === 0
+        ? undefined
+        : {
+            status:
+              openUnits.length > 0
+                ? "open"
+                : acceptedUnits.length > 0
+                  ? "resolved"
+                  : "dismissed",
+            // Amber when the reviewer is ON one of these issues, and once a
+            // partial stack exists — accepted + still-open = in question.
+            current:
+              impactUnits.some((c) => c.tag.current) ||
+              (acceptedUnits.length > 0 && openUnits.length > 0),
+          };
     const filedTotalNode = !hasCharges ? (
       muted("none declared")
     ) : (
@@ -677,34 +722,42 @@ export default async function VarianceDetailPage({
         expectedTotal !== null ? (
           <span className="tabular-nums">
             {formatCents(expectedTotal)}
-            {claimant ? impactNote(claimant) : null}
+            {expectationUnits.map((c) => (
+              <span key={c.id} className="block text-xs font-normal">
+                <ImpactText {...c.impact} />
+              </span>
+            ))}
           </span>
         ) : (
           muted("—")
         ),
       filed: !hasCharges ? (
         muted("none declared")
-      ) : claimant ? (
+      ) : impactUnits.length > 0 ? (
         amber(
           <span className="tabular-nums">{formatCents(declaredCents)}</span>,
         )
       ) : (
         <span className="tabular-nums">{formatCents(declaredCents)}</span>
       ),
-      corrected: claimant
-        ? corrected(
-            claimant.tag,
-            expectedTotal !== null ? (
-              <span className="tabular-nums">
-                {formatCents(expectedTotal)}
+      corrected:
+        acceptedUnits.length > 0 ? (
+          <span className="tabular-nums">
+            {formatCents(correctedSoFar)}
+            {openUnits.length > 0 ? (
+              <span className="block text-xs font-normal text-amber-700 dark:text-amber-400">
+                Net {formatCents(netPotential)} if remaining accepted
               </span>
-            ) : (
-              muted("—")
-            ),
-            filedTotalNode,
-          )
-        : undefined,
-      issue: claimant ? claimant.tag : undefined,
+            ) : acceptedUnits.length > 1 ? (
+              <span className="block text-xs font-normal text-muted-foreground">
+                net of {acceptedUnits.length} corrections
+              </span>
+            ) : null}
+          </span>
+        ) : tag?.status === "dismissed" ? (
+          filedTotalNode
+        ) : undefined,
+      issue: tag,
     });
   }
 

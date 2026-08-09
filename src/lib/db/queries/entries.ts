@@ -615,6 +615,8 @@ export type AlertRow = {
   message: string;
   details: Record<string, unknown> | null;
   status: "open" | "resolved" | "dismissed";
+  /** When the decision landed; null while open (cleared on reopen). */
+  resolvedAt: Date | null;
   lineItemId: string | null;
   lineNumber: number | null;
   /** The catalog part behind the flagged line — the jump into HTS review. */
@@ -1033,6 +1035,7 @@ export async function getEntryDetail(
       message: a.message,
       details: (a.details as Record<string, unknown> | null) ?? null,
       status: a.status,
+      resolvedAt: a.resolvedAt,
       lineItemId: a.lineItemId,
       lineNumber: a.lineItemId
         ? (lineNumberById.get(a.lineItemId) ?? null)
