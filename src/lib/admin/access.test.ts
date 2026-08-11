@@ -37,4 +37,14 @@ describe("resolveAdminAccess", () => {
       false,
     );
   });
+  it("admits an admin-org member who is not allowlisted", () => {
+    expect(resolveAdminAccess([], "user_a", true, true)).toBe(true);
+    expect(resolveAdminAccess(["user_b"], "user_a", true, true)).toBe(true);
+  });
+  it("rejects a non-member who is not allowlisted (default arg)", () => {
+    expect(resolveAdminAccess(["user_b"], "user_a", true, false)).toBe(false);
+  });
+  it("admin-org membership never admits a signed-out caller", () => {
+    expect(resolveAdminAccess([], null, true, true)).toBe(false);
+  });
 });

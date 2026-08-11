@@ -17,7 +17,8 @@ platform-operator surface at **/admin** (tariff sync + review queue). Auth is **
 two cron GETs; the tenant seam in `src/lib/org.ts` resolves the session's active Clerk
 org (JIT-provisioned on first sight via `src/lib/org-provisioning.ts`, keyed by
 `orgs.clerk_org_id`); the super-admin seam in `src/lib/admin/` admits Clerk user ids
-listed in `SUPER_ADMIN_USER_IDS`. With Clerk keys unset (local dev only — the app
+listed in `SUPER_ADMIN_USER_IDS` plus every member of the `SUPER_ADMIN_ORG_ID` Clerk
+organization (org id, never slug). With Clerk keys unset (local dev only — the app
 refuses to boot on Vercel without them, see `src/lib/auth/config.ts`), everything runs
 auth-open against the single seeded org exactly as before. Documents parse via Reducto
 when `REDUCTO_API_KEY` is set, otherwise a deterministic stub processor (refused on

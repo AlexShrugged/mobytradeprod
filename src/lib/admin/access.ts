@@ -17,13 +17,16 @@ export function parseAllowlist(raw: string | undefined): string[] {
  *    auth/config.ts refuses to boot on Vercel without Clerk keys, so a
  *    closed-by-default gate would only brick local dev, which has no login
  *    UI to recover through.
- *  - Clerk enabled → the signed-in user must be allowlisted. An empty
- *    allowlist admits nobody. */
+ *  - Clerk enabled → the signed-in user must be allowlisted or belong to
+ *    the platform-admin Clerk organization. An empty allowlist with no
+ *    admin org admits nobody. */
 export function resolveAdminAccess(
   allowlist: string[],
   userId: string | null,
   clerkEnabled: boolean,
+  memberOfAdminOrg = false,
 ): boolean {
   if (!clerkEnabled) return true;
-  return userId !== null && allowlist.includes(userId);
+  if (userId === null) return false;
+  return allowlist.includes(userId) || memberOfAdminOrg;
 }
