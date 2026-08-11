@@ -147,7 +147,8 @@ const ENTRY_LINE_ITEM_SCHEMA = {
     quantity: {
       type: ["number", "null"],
       description:
-        "Net quantity in HTSUS units — 7501 column 31. On the form this " +
+        "The line's net quantity in HTSUS units — the column headed 'Net " +
+        "Quantity' (column numbering varies across broker printouts). Its " +
         "figure is followed by a unit-of-measure code (NO, KG, PCS, DOZ, " +
         "X). Extract only the number; the unit suffix is what marks it as " +
         "a quantity rather than a dollar value.",
@@ -160,10 +161,12 @@ const ENTRY_LINE_ITEM_SCHEMA = {
     entered_value: {
       type: "number",
       description:
-        "The line's entered value in US dollars — 7501 column 32.A " +
-        "('Entered Value'), usually a whole-dollar figure with no unit " +
-        "suffix. A number followed by a unit code such as NO, KG, or PCS " +
-        "is column 31's net quantity, not the entered value.",
+        "The line's entered value in US dollars — the column headed " +
+        "'Entered Value'. Go by the heading, not the column number: broker " +
+        "printouts number the grid differently. It is a dollar figure, " +
+        "usually whole dollars, never followed by a unit code — a number " +
+        "trailed by NO, KG, PCS, or similar is the net quantity, not the " +
+        "entered value.",
     },
     charges: {
       type: "array",
@@ -214,8 +217,8 @@ const PORT_ENTRY_SCHEMA = {
         "broker worksheets.",
     },
     total_entered_value: money(
-      "Total entered value — 7501 block 35, the dollar total of all lines' " +
-        "entered values. Not a quantity total.",
+      "The header block labeled 'Total Entered Value' — the dollar total " +
+        "of all lines' entered values. Not a quantity or weight total.",
     ),
     total_duty: money("Total duty from the header (all duty, excluding MPF/HMF)"),
     mpf_amount: money("Total merchandise processing fee"),
