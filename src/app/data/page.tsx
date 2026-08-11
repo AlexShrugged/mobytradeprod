@@ -2,6 +2,7 @@ import { DocumentsTable } from "@/components/data/documents-table";
 import { PageHeader } from "@/components/page-header";
 import { SourceCards } from "@/components/data/source-cards";
 import { UploadDropzone } from "@/components/data/upload-dropzone";
+import { UploadStatusProvider } from "@/components/data/upload-status";
 import {
   Card,
   CardContent,
@@ -24,7 +25,10 @@ export default async function DataPage() {
   const channelSources = sources.filter((s) => s.kind !== "manual_upload");
 
   return (
-    <div className="space-y-6">
+    // Provider ties the dropzone to the documents table: in-flight uploads
+    // render as pending rows in the table itself.
+    <UploadStatusProvider>
+      <div className="space-y-6">
       <PageHeader
         title="Data"
         info="Document uploads, intake channels, and integrations in one place."
@@ -56,6 +60,7 @@ export default async function DataPage() {
         </div>
         <DocumentsTable documents={documents} />
       </div>
-    </div>
+      </div>
+    </UploadStatusProvider>
   );
 }

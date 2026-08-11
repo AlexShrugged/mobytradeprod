@@ -6,13 +6,16 @@ import {
   CornerDownRight,
   Download,
   FileJson,
+  Loader2,
   MoreHorizontal,
   Play,
   RefreshCw,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
+import { useUploadStatus } from "@/components/data/upload-status";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -86,6 +89,13 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
   const [viewing, setViewing] = React.useState<DocumentRow | null>(null);
   const [processingId, setProcessingId] = React.useState<string | null>(null);
 
+  // In-flight uploads render as pending rows at the top — each one hides
+  // itself the moment its real (registered) row arrives from the server.
+  const uploadStatus = useUploadStatus();
+  const pendingUploads = (uploadStatus?.pending ?? []).filter(
+    (p) => !p.storageKey || !documents.some((d) => d.storageKey === p.storageKey),
+  );
+
   const processDocument = async (doc: DocumentRow) => {
     setProcessingId(doc.id);
     router.refresh();
@@ -128,7 +138,36 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {documents.length === 0 ? (
+            {pendingUploads.map((p) => (
+              <TableRow key={p.key}>
+                <TableCell className="max-w-64">
+                  <span className="block truncate font-medium">{p.name}</span>
+                </TableCell>
+                <TableCell className="text-muted-foreground">—</TableCell>
+                <TableCell className="text-muted-foreground">Manual</TableCell>
+                <TableCell>
+                  <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                    {p.stage === "failed" ? (
+                      <XCircle className="size-3.5 text-red-500" />
+                    ) : (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    )}
+                    {p.stage === "failed"
+                      ? "Upload failed"
+                      : p.stage === "queued"
+                        ? "Queued"
+                        : p.pct > 0
+                          ? `Uploading ${p.pct}%`
+                          : "Uploading…"}
+                  </span>
+                </TableCell>
+                <TableCell>{formatBytes(p.size)}</TableCell>
+                <TableCell className="text-muted-foreground">—</TableCell>
+                <TableCell className="text-muted-foreground">—</TableCell>
+                <TableCell />
+              </TableRow>
+            ))}
+            {documents.length === 0 && pendingUploads.length === 0 ? (
               <TableRow>
                 <TableCell
                   colSpan={8}
