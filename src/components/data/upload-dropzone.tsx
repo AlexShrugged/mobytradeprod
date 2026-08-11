@@ -100,7 +100,9 @@ export function UploadDropzone({
                 const { file, index } = job;
                 try {
                   const result = await upload(buildUploadKey(file.name), file, {
-                    access: "public",
+                    // The store is private — broker docs are never
+                    // world-readable; reads go through the download route.
+                    access: "private",
                     handleUploadUrl: "/api/documents/upload-token",
                     multipart: true,
                     contentType: file.type || "application/octet-stream",

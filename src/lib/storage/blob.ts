@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { head, put } from "@vercel/blob";
+import { get, put } from "@vercel/blob";
 
 import type { FileStore } from "./types";
 
@@ -8,17 +8,18 @@ import type { FileStore } from "./types";
 // (documents/{uuid}-{name}), not the URL — the storage_key column stays an
 // opaque store-relative key with the same semantics as LocalFileStore's
 // {uuid}-{name}, and packet children keep sharing the parent's key. The SDK
-// reads BLOB_READ_WRITE_TOKEN from the environment.
+// authenticates via BLOB_READ_WRITE_TOKEN or Vercel OIDC.
 //
-// Access is "public" — the only mode Vercel Blob supports. URLs are
-// unguessable capability URLs; the download route enforces org-scoped auth
-// before revealing one.
+// Access is "private" — broker documents must never be world-readable.
+// Private blobs have no unauthenticated URL, so there is nothing to
+// redirect a browser to: reads go through the SDK and the download route
+// streams bytes to the client.
 export class BlobFileStore implements FileStore {
   async put(fileName: string, data: Buffer): Promise<{ storageKey: string }> {
     const safeName = fileName.replace(/[^\w.\-]+/g, "_");
     const storageKey = `documents/${randomUUID()}-${safeName}`;
     await put(storageKey, data, {
-      access: "public",
+      access: "private",
       // Our uuid already guarantees uniqueness; a Vercel-added suffix would
       // make the stored key differ from the one we computed.
       addRandomSuffix: false,
@@ -26,21 +27,18 @@ export class BlobFileStore implements FileStore {
     return { storageKey };
   }
 
-  async get(storageKey: string): Promise<Buffer> {
-    const url = await this.resolveUrl(storageKey);
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Blob fetch failed (${res.status}) for ${storageKey}`);
-    }
-    return Buffer.from(await res.arrayBuffer());
-  }
-
-  /** Resolve the public URL for a key — used by the download-route redirect. */
-  async resolveUrl(storageKey: string): Promise<string> {
-    try {
-      return (await head(storageKey)).url;
-    } catch {
+  /** Authenticated content stream — the download route pipes this to the
+   *  browser so large packets never buffer in the function. */
+  async getStream(storageKey: string): Promise<ReadableStream<Uint8Array>> {
+    const res = await get(storageKey, { access: "private" });
+    if (!res || res.statusCode !== 200 || !res.stream) {
       throw new Error(`Stored file ${storageKey} not found in the blob store.`);
     }
+    return res.stream;
+  }
+
+  async get(storageKey: string): Promise<Buffer> {
+    const stream = await this.getStream(storageKey);
+    return Buffer.from(await new Response(stream).arrayBuffer());
   }
 }

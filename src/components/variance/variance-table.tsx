@@ -395,6 +395,10 @@ export function VarianceTable({
                   isArchived(row.original) && "opacity-60",
                 )}
                 onClick={() => router.push(row.original.href)}
+                // Hover-prefetch the (force-dynamic) detail page so the
+                // click lands near-instantly; per-row viewport prefetch
+                // would fire dozens of full renders, mouse-enter fires one.
+                onMouseEnter={() => router.prefetch(row.original.href)}
               >
                 {row.getVisibleCells().map((cell) => (
                   <TableCell key={cell.id}>

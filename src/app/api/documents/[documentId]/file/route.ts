@@ -41,21 +41,27 @@ export async function GET(
 
   const store = getFileStore();
 
-  // Blob store: redirect to the CDN instead of proxying bytes through the
-  // function — avoids the serverless response-size cap entirely. Org-scoped
-  // auth above gates who learns the (unguessable) URL. ?download=1 makes
-  // Blob serve Content-Disposition: attachment.
+  const headers = {
+    "Content-Type": mimeType,
+    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${doc.fileName.replace(/"/g, "")}"`,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+
+  // Blob store: blobs are private (no unauthenticated URL to redirect to),
+  // so stream the authenticated SDK read straight through — no buffering,
+  // org-scoped auth above gates access.
   if (store instanceof BlobFileStore) {
-    let url: string;
+    let stream: ReadableStream<Uint8Array>;
     try {
-      url = await store.resolveUrl(doc.storageKey);
+      stream = await store.getStream(doc.storageKey);
     } catch {
       return Response.json(
         { error: "Stored file is missing from the file store" },
         { status: 410 },
       );
     }
-    return Response.redirect(inline ? url : `${url}?download=1`, 302);
+    return new Response(stream, { headers });
   }
 
   let bytes: Buffer;
@@ -68,12 +74,5 @@ export async function GET(
     );
   }
 
-  return new Response(new Uint8Array(bytes), {
-    headers: {
-      "Content-Type": mimeType,
-      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${doc.fileName.replace(/"/g, "")}"`,
-      "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "no-store",
-    },
-  });
+  return new Response(new Uint8Array(bytes), { headers });
 }

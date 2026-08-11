@@ -1,3 +1,4 @@
+import { AutoRefresh } from "@/components/data/auto-refresh";
 import { DocumentsTable } from "@/components/data/documents-table";
 import { PageHeader } from "@/components/page-header";
 import { SourceCards } from "@/components/data/source-cards";
@@ -23,11 +24,15 @@ export default async function DataPage() {
   // The manual-upload source IS the dropzone; the cards show the automated
   // intake seams (SFTP / email inbox / ERP).
   const channelSources = sources.filter((s) => s.kind !== "manual_upload");
+  const anyInFlight = documents.some(
+    (d) => d.status === "pending" || d.status === "processing",
+  );
 
   return (
     // Provider ties the dropzone to the documents table: in-flight uploads
     // render as pending rows in the table itself.
     <UploadStatusProvider>
+      <AutoRefresh active={anyInFlight} />
       <div className="space-y-6">
       <PageHeader
         title="Data"

@@ -66,6 +66,12 @@ export function VarianceNavCard({
               key={u.primary.id}
               href={`/variance/${u.primary.id}${fromEntry ? "?from=entry" : ""}`}
               replace
+              // Full prefetch: the page is force-dynamic, so the default
+              // only prefetches the loading skeleton — this fetches each
+              // sibling's whole payload once visible, making hops between
+              // a line's issues instant. Decisions router.refresh(), which
+              // re-fetches, so prefetched siblings never show stale states.
+              prefetch={true}
               aria-current={current ? "page" : undefined}
               className={cn(
                 "block rounded-md border p-3 transition-colors",
