@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { head } from "@vercel/blob";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db, schema } from "@/lib/db";
@@ -47,6 +48,21 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: `Invalid storage key: ${uploadItem.storageKey}` },
         { status: 400 },
+      );
+    }
+    // A key registers exactly once, ever. Client uploads mint a fresh uuid
+    // key per file, so a collision is either a double-submit or an attempt
+    // to attach another tenant's blob to a new row — refuse both. (Packet
+    // children legitimately share a parent's key, but those rows are
+    // created server-side by the processor, never through this route.)
+    const existing = await db.query.documents.findFirst({
+      where: eq(schema.documents.storageKey, uploadItem.storageKey),
+      columns: { id: true },
+    });
+    if (existing) {
+      return NextResponse.json(
+        { error: `Already registered: ${uploadItem.storageKey}` },
+        { status: 409 },
       );
     }
     let blob;
