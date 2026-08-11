@@ -45,6 +45,21 @@ export function UploadDropzone({
   const status = useUploadStatus();
   const [busy, setBusy] = React.useState<string | null>(null);
 
+  // Refreshing or closing the tab mid-upload aborts the browser-direct
+  // transfers and loses the files entirely — warn first. Scoped to the
+  // upload phase: once rows are registered, processing is server-side and
+  // the sweep finishes anything the tab doesn't.
+  const [uploading, setUploading] = React.useState(false);
+  React.useEffect(() => {
+    if (!uploading) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [uploading]);
+
   const onDrop = React.useCallback(
     async (accepted: File[]) => {
       if (accepted.length === 0) return;
@@ -73,6 +88,7 @@ export function UploadDropzone({
       let failed = 0;
 
       try {
+        setUploading(true);
         if (BLOB_UPLOADS) {
           // Upload pool of 3; each file's row is created (and shows in the
           // table as pending) as soon as its own bytes land. One bad file
@@ -137,6 +153,10 @@ export function UploadDropzone({
           router.refresh();
         }
 
+        // All bytes are safely in the store; a refresh from here on can no
+        // longer lose anything.
+        setUploading(false);
+
         // Process in a small concurrent pool: real extraction is minutes
         // per document and independent across documents, so the batch takes
         // roughly as long as its slowest doc. The cap keeps provider rate
@@ -177,6 +197,7 @@ export function UploadDropzone({
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed.");
       } finally {
+        setUploading(false);
         setBusy(null);
         status?.setPending((prev) =>
           prev.filter((it) => !it.key.startsWith(`${batch}-`)),

@@ -39,6 +39,12 @@ export async function POST(request: Request) {
     });
     return NextResponse.json(json);
   } catch (err) {
+    // Surface refusals in runtime logs — the 400 body only reaches the
+    // browser, which made blob misconfiguration invisible server-side.
+    console.error(
+      "upload-token refused:",
+      err instanceof Error ? err.message : err,
+    );
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upload token refused." },
       { status: 400 },
