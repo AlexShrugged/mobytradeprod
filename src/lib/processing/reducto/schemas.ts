@@ -144,11 +144,26 @@ const ENTRY_LINE_ITEM_SCHEMA = {
         "The foreign supplier / manufacturer named for this line, if the " +
         "entry shows one (e.g. next to the MID). Entries can span vendors.",
     },
-    quantity: { type: ["number", "null"] },
-    unit_value: money("Per-unit value"),
+    quantity: {
+      type: ["number", "null"],
+      description:
+        "Net quantity in HTSUS units — 7501 column 31. On the form this " +
+        "figure is followed by a unit-of-measure code (NO, KG, PCS, DOZ, " +
+        "X). Extract only the number; the unit suffix is what marks it as " +
+        "a quantity rather than a dollar value.",
+    },
+    unit_value: money(
+      "Per-unit value, only if the document explicitly prints one. 7501s " +
+        "usually do not — leave null rather than dividing or copying " +
+        "another column.",
+    ),
     entered_value: {
       type: "number",
-      description: "The line's entered value in US dollars.",
+      description:
+        "The line's entered value in US dollars — 7501 column 32.A " +
+        "('Entered Value'), usually a whole-dollar figure with no unit " +
+        "suffix. A number followed by a unit code such as NO, KG, or PCS " +
+        "is column 31's net quantity, not the entered value.",
     },
     charges: {
       type: "array",
@@ -198,7 +213,10 @@ const PORT_ENTRY_SCHEMA = {
         "Every commercial invoice number referenced on the entry or its " +
         "broker worksheets.",
     },
-    total_entered_value: money("Total entered value from the header"),
+    total_entered_value: money(
+      "Total entered value — 7501 block 35, the dollar total of all lines' " +
+        "entered values. Not a quantity total.",
+    ),
     total_duty: money("Total duty from the header (all duty, excluding MPF/HMF)"),
     mpf_amount: money("Total merchandise processing fee"),
     hmf_amount: money("Total harbor maintenance fee"),
