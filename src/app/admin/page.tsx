@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +14,6 @@ import { isSuperAdmin } from "@/lib/admin";
 import { getTariffStatus } from "@/lib/db/queries/tariffs";
 import { formatDateTime } from "@/lib/format";
 
-import { AdminLock } from "./admin-lock";
 import { SyncButton } from "./sync-button";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +22,9 @@ export const dynamic = "force-dynamic";
 // review queue). Org-facing Settings keeps the read-only facts; everything
 // here mutates data every tenant depends on. Each admin page guards itself —
 // layouts render independently and are not a security boundary.
+// Non-admins get a 404, not a lock screen — the surface stays hidden.
 export default async function AdminPage() {
-  if (!(await isSuperAdmin())) return <AdminLock />;
+  if (!(await isSuperAdmin())) notFound();
   const tariff = await getTariffStatus();
 
   return (

@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 import { getFileStore } from "@/lib/storage";
+import { BlobFileStore } from "@/lib/storage/blob";
 
 // mimeType is browser-supplied at upload — inline HTML/SVG from the same
 // origin would be a stored-XSS vector, so those always download.
@@ -33,20 +34,39 @@ export async function GET(
     return Response.json({ error: "Document not found" }, { status: 404 });
   }
 
+  const mimeType = doc.mimeType || "application/octet-stream";
+  const inline =
+    new URL(req.url).searchParams.get("disposition") === "inline" &&
+    !INLINE_BLOCKED.has(mimeType);
+
+  const store = getFileStore();
+
+  // Blob store: redirect to the CDN instead of proxying bytes through the
+  // function — avoids the serverless response-size cap entirely. Org-scoped
+  // auth above gates who learns the (unguessable) URL. ?download=1 makes
+  // Blob serve Content-Disposition: attachment.
+  if (store instanceof BlobFileStore) {
+    let url: string;
+    try {
+      url = await store.resolveUrl(doc.storageKey);
+    } catch {
+      return Response.json(
+        { error: "Stored file is missing from the file store" },
+        { status: 410 },
+      );
+    }
+    return Response.redirect(inline ? url : `${url}?download=1`, 302);
+  }
+
   let bytes: Buffer;
   try {
-    bytes = await getFileStore().get(doc.storageKey);
+    bytes = await store.get(doc.storageKey);
   } catch {
     return Response.json(
       { error: "Stored file is missing from the file store" },
       { status: 410 },
     );
   }
-
-  const mimeType = doc.mimeType || "application/octet-stream";
-  const inline =
-    new URL(req.url).searchParams.get("disposition") === "inline" &&
-    !INLINE_BLOCKED.has(mimeType);
 
   return new Response(new Uint8Array(bytes), {
     headers: {

@@ -1,5 +1,6 @@
 import type { DbClient } from "@/lib/db";
 import type { DocumentTypeValue } from "@/lib/db/schema";
+import { isProdRuntime } from "@/lib/env";
 
 import { ReductoDocumentProcessor } from "./reducto";
 import { loadStubContext, StubDocumentProcessor } from "./stub-processor";
@@ -8,9 +9,18 @@ import type { DocumentProcessor } from "./types";
 // With REDUCTO_API_KEY set, documents go through real Reducto extraction;
 // without it, the deterministic stub, primed with a snapshot of the org's
 // current data so fabricated documents reference real records. Everything
-// downstream only sees the interface.
+// downstream only sees the interface. On Vercel the stub is refused — it
+// fabricates document contents (with cross-org reads) and simulates
+// failures, which must never masquerade as real extraction in production.
+// The throw lands in processDocumentRow's catch, marking the doc failed
+// with this message.
 export async function getProcessor(db: DbClient): Promise<DocumentProcessor> {
   if (process.env.REDUCTO_API_KEY) return new ReductoDocumentProcessor();
+  if (isProdRuntime()) {
+    throw new Error(
+      "REDUCTO_API_KEY is required on Vercel — refusing the stub document processor.",
+    );
+  }
   return new StubDocumentProcessor(await loadStubContext(db));
 }
 

@@ -1,4 +1,7 @@
 {
+  "buildCommand": "npm run db:migrate && next build",
+  "fluid": true,
+  "regions": ["iad1"],
   "crons": [
     {
       "path": "/api/tariff-sync",

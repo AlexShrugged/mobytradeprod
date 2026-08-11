@@ -6,7 +6,7 @@ import { getCurrentOrgId } from "@/lib/org";
 import { processDocumentRow } from "@/lib/processing/run";
 
 // Real extraction (parse + two extracts) can take minutes on large scans.
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 // raw_extraction can be multiple MB of provider payload — never send it to
 // the client; it is served on demand by future AI/provenance features.

@@ -277,6 +277,9 @@ export const revisionChangeType = pgEnum("revision_change_type", [
 
 export const orgs = pgTable("orgs", {
   id: id(),
+  // Clerk Organization backing this tenant; null only for the local seed
+  // org when SEED_CLERK_ORG_ID is unset (auth-disabled dev).
+  clerkOrgId: text("clerk_org_id").unique(),
   name: text("name").notNull(),
   importerOfRecord: text("importer_of_record"),
   // The purpose-built document intake address shown on the Data page.

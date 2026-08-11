@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
 import { and, asc, eq, lt, or } from "drizzle-orm";
 
+import { requireSuperAdmin } from "@/lib/admin";
 import { db, schema } from "@/lib/db";
+import { isProdRuntime } from "@/lib/env";
 import { processDocumentRow } from "@/lib/processing/run";
 
 // Sweep documents whose browser-driven processing never ran or never
 // finished: "pending" rows (the tab closed before their turn in the upload
 // batch) and "processing" rows untouched long enough that their runner is
-// dead (a killed serverless function). POST = manual trigger, unauthed like
-// every mutation route (no auth layer yet); GET = Vercel cron (vercel.json),
+// dead (a killed serverless function). POST = manual trigger (super-admin:
+// it processes every org's documents); GET = Vercel cron (vercel.json),
 // which sends Authorization: Bearer CRON_SECRET.
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 // A healthy run touches updatedAt when it claims the row and finishes well
-// inside the route's own 300s maxDuration — 15 minutes untouched means dead.
+// inside the route's own maxDuration — 15 minutes untouched means dead.
 const STALE_PROCESSING_MS = 15 * 60 * 1000;
 
 // Same pool size as the upload dropzone, for the same reasons: provider
@@ -67,13 +69,24 @@ async function sweep() {
 }
 
 export async function POST() {
+  // Cross-org: sweeps every tenant's documents — platform-operator only.
+  const denied = await requireSuperAdmin();
+  if (denied) return denied;
   return sweep();
 }
 
 export async function GET(request: Request) {
-  // The Bearer check is skipped when CRON_SECRET is unset (local dev has no
-  // cron secret); production sets it, so unauthenticated GETs 401 there.
+  // Cron auth. Local dev keeps the open GET for manual testing; on Vercel
+  // an unset CRON_SECRET is a misconfiguration, not permission — fail
+  // closed. Vercel attaches the Bearer automatically once the env var
+  // exists.
   const secret = process.env.CRON_SECRET;
+  if (!secret && isProdRuntime()) {
+    return NextResponse.json(
+      { error: "CRON_SECRET is not configured." },
+      { status: 500 },
+    );
+  }
   if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }

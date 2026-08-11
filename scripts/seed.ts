@@ -110,7 +110,15 @@ async function main() {
   await db.delete(schema.orgs);
 
   // ------------------------------------------------------------- org
-  const [org] = await db.insert(schema.orgs).values(story.org).returning();
+  // SEED_CLERK_ORG_ID binds the seed org to a dev-instance Clerk
+  // organization so signed-in dev sessions resolve to the seeded data.
+  const [org] = await db
+    .insert(schema.orgs)
+    .values({
+      ...story.org,
+      clerkOrgId: process.env.SEED_CLERK_ORG_ID ?? null,
+    })
+    .returning();
   const orgId = org.id;
 
   // ------------------------------------------------------------- vendors

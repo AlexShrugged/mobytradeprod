@@ -11,6 +11,10 @@ import {
   resolveAnnouncementIfTerminal,
 } from "@/lib/tariff-sync/apply";
 
+// Approval applies the whole family group and re-audits every org in one
+// transaction — well past the platform's default function duration.
+export const maxDuration = 800;
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD)");
@@ -66,7 +70,7 @@ export async function PATCH(
   const body = parsed.data;
 
   try {
-    const actor = getSuperAdminActorName();
+    const actor = await getSuperAdminActorName();
     const result = await db.transaction(async (tx) => {
       const group = await tx.query.measureRevisionGroups.findFirst({
         where: eq(schema.measureRevisionGroups.id, groupId),

@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { z } from "zod";
 
 import { db, schema } from "@/lib/db";
+import { resolveSourceId } from "@/lib/documents/source";
 import { getCurrentOrgId } from "@/lib/org";
 import { inferDocType } from "@/lib/processing";
 import { getFileStore } from "@/lib/storage";
 
-const sourceIdSchema = z.uuid();
-
+// Server-side pass-through upload: bytes travel through the function, so
+// requests are subject to the platform body cap (~4.5MB on Vercel). The
+// dropzone uses the client-direct blob flow (upload-token + register) in
+// prod; this route remains the dev path and the entry point for future
+// server-side connectors.
 export async function POST(request: Request) {
   const formData = await request.formData();
   const files = formData
@@ -21,41 +23,15 @@ export async function POST(request: Request) {
 
   const orgId = await getCurrentOrgId();
 
-  // Which intake channel delivered these files. Callers wiring an automated
-  // channel pass its sourceId; the browser dropzone passes nothing and gets
-  // the org's manual-upload source row (null if the seed hasn't created one
-  // — the column tolerates unknown provenance).
   const rawSourceId = formData.get("sourceId");
-  let sourceId: string | null = null;
-  if (typeof rawSourceId === "string" && rawSourceId !== "") {
-    const parsed = sourceIdSchema.safeParse(rawSourceId);
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid sourceId." }, { status: 400 });
-    }
-    const source = await db.query.integrationSources.findFirst({
-      where: and(
-        eq(schema.integrationSources.id, parsed.data),
-        eq(schema.integrationSources.orgId, orgId),
-      ),
-      columns: { id: true },
-    });
-    if (!source) {
-      return NextResponse.json(
-        { error: "Unknown integration source." },
-        { status: 400 },
-      );
-    }
-    sourceId = source.id;
-  } else {
-    const manual = await db.query.integrationSources.findFirst({
-      where: and(
-        eq(schema.integrationSources.orgId, orgId),
-        eq(schema.integrationSources.kind, "manual_upload"),
-      ),
-      columns: { id: true },
-    });
-    sourceId = manual?.id ?? null;
+  const resolved = await resolveSourceId(
+    orgId,
+    typeof rawSourceId === "string" ? rawSourceId : null,
+  );
+  if (!resolved.ok) {
+    return NextResponse.json({ error: resolved.error }, { status: 400 });
   }
+  const { sourceId } = resolved;
 
   const store = getFileStore();
 

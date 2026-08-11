@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthControls } from "@/components/nav/auth-controls";
 import { TopNav } from "@/components/nav/top-nav";
+import { clerkEnabled } from "@/lib/auth/config";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -26,6 +29,18 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The provider (and the Clerk widgets in the nav slot) render only when
+  // keys are configured — without this condition Clerk v7's keyless mode
+  // would auto-provision a throwaway dev instance.
+  const body = (
+    <ThemeProvider>
+      <TopNav authSlot={clerkEnabled ? <AuthControls /> : null} />
+      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6">
+        {children}
+      </main>
+      <Toaster richColors />
+    </ThemeProvider>
+  );
   return (
     <html
       lang="en"
@@ -33,13 +48,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <ThemeProvider>
-          <TopNav />
-          <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6">
-            {children}
-          </main>
-          <Toaster richColors />
-        </ThemeProvider>
+        {clerkEnabled ? <ClerkProvider>{body}</ClerkProvider> : body}
       </body>
     </html>
   );

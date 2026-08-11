@@ -7,6 +7,11 @@ import { db, schema } from "@/lib/db";
 import { ApplyValidationError } from "@/lib/tariff-sync/apply";
 import { applyBaseRelease } from "@/lib/tariff-sync/base-apply";
 
+// Approval re-reads the archived base payload, runs the full ETL, and
+// re-audits touched entries across every org in one transaction — the
+// heaviest request in the app.
+export const maxDuration = 800;
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD)");
@@ -55,7 +60,7 @@ export async function PATCH(
   const body = parsed.data;
 
   try {
-    const actor = getSuperAdminActorName();
+    const actor = await getSuperAdminActorName();
     const result = await db.transaction(async (tx) => {
       const item = await tx.query.reviewItems.findFirst({
         where: and(

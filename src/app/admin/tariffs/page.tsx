@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,6 @@ import {
 } from "@/lib/db/queries/tariffs";
 import { formatDate, formatDateTime } from "@/lib/format";
 
-import { AdminLock } from "../admin-lock";
 import { BaseReleaseReviewCard } from "./base-release-review-card";
 import { GroupReviewCard } from "./group-review-card";
 import { RevisionReviewCard } from "./revision-review-card";
@@ -32,8 +32,9 @@ const SOURCE_LABEL: Record<string, string> = {
   manual: "Manual",
 };
 
+// Non-admins get a 404, not a lock screen — the surface stays hidden.
 export default async function TariffReviewPage() {
-  if (!(await isSuperAdmin())) return <AdminLock />;
+  if (!(await isSuperAdmin())) notFound();
   const [revisions, adoptionGroups, baseReleases, announcements] =
     await Promise.all([
       getOpenRevisions(),

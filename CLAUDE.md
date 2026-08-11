@@ -11,11 +11,18 @@ owed and refunds, manage SKUs and HTS classification, understand per-SKU landed 
 follow a chronological event feed of their import business. Scenario modeling comes later.
 
 Six org-facing pages: **Entries · Variance · Parts · Events · Data · Settings**, plus a
-platform-operator surface at **/admin** (tariff sync + review queue). No auth yet
-(single seeded org, tenant seam in `src/lib/org.ts`; super-admin seam in
-`src/lib/admin.ts` — dev-open until `SUPER_ADMIN_SECRET` is set, then a cookie login
-via `POST /api/admin/session`). Documents parse via Reducto when `REDUCTO_API_KEY` is
-set, otherwise a deterministic stub processor. Broker **entry packets** (one PDF
+platform-operator surface at **/admin** (tariff sync + review queue). Auth is **Clerk
+(Organizations)**: `src/proxy.ts` (Next 16's middleware replacement — never create a
+`middleware.ts`) default-protects every page and API route except sign-in/up and the
+two cron GETs; the tenant seam in `src/lib/org.ts` resolves the session's active Clerk
+org (JIT-provisioned on first sight via `src/lib/org-provisioning.ts`, keyed by
+`orgs.clerk_org_id`); the super-admin seam in `src/lib/admin/` admits Clerk user ids
+listed in `SUPER_ADMIN_USER_IDS`. With Clerk keys unset (local dev only — the app
+refuses to boot on Vercel without them, see `src/lib/auth/config.ts`), everything runs
+auth-open against the single seeded org exactly as before. Documents parse via Reducto
+when `REDUCTO_API_KEY` is set, otherwise a deterministic stub processor (refused on
+Vercel — every stub/secret fallback fails closed there, keyed on
+`isProdRuntime()` in `src/lib/env.ts`). Broker **entry packets** (one PDF
 bundling a 7501 + commercial invoice + supporting docs) split into child documents
 (parent-child rows on `documents`; children share the parent's file, page-scoped) that
 each run the normal per-doc pipeline.
@@ -74,6 +81,13 @@ embedded PGlite at `./.pglite`; set → node-postgres against that URL
 (`docker-compose up -d` provides a local Postgres at
 `postgres://mobytrade:mobytrade@localhost:5434/mobytrade`). Schema and migrations are
 identical for both. The branch lives in `src/lib/db/index.ts` + `drizzle.config.ts`.
+In production (Vercel + Neon): the app uses the pooled `DATABASE_URL`; migrations and
+drizzle-kit prefer `DATABASE_URL_UNPOOLED` (DDL bypasses PgBouncer), and the Vercel
+build runs `db:migrate` before `next build` (vercel.json). Files live in Vercel Blob
+(`src/lib/storage/blob.ts`, selected by `STORAGE_DRIVER`/`BLOB_READ_WRITE_TOKEN`);
+the dropzone uploads browser→Blob directly when `NEXT_PUBLIC_STORAGE_DRIVER=blob`
+(token route + register route under `src/app/api/documents/`). See `.env.example`
+for the full env surface and which vars are required on Vercel.
 
 ## Commands
 
@@ -92,7 +106,7 @@ npm run db:reset     # wipe .pglite, re-migrate, re-seed
 ## Known Patterns & Gotchas
 
 - **PGlite is single-process.** Stop the dev server before `db:seed` / `db:reset` /
-  `db:migrate`, then restart it (it also caches the org id — restart after reseeding).
+  `db:migrate`, then restart it.
 - **`serverExternalPackages: ["@electric-sql/pglite"]`** in `next.config.ts` is required —
   bundling PGlite breaks its WASM loading.
 - Global npm config has `ignore-scripts` on — if a native/WASM dep misbehaves, rebuild

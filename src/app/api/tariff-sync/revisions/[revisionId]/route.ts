@@ -12,6 +12,10 @@ import {
 } from "@/lib/tariff-sync/apply";
 import type { ProposedMeasureChange } from "@/lib/tariff-sync/types";
 
+// Approval applies the revision and re-audits every org in one transaction —
+// well past the platform's default function duration.
+export const maxDuration = 800;
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD)");
@@ -82,7 +86,7 @@ export async function PATCH(
   const body = parsed.data;
 
   try {
-    const actor = getSuperAdminActorName();
+    const actor = await getSuperAdminActorName();
     const result = await db.transaction(async (tx) => {
       const revision = await tx.query.measureRevisions.findFirst({
         where: eq(schema.measureRevisions.id, revisionId),
