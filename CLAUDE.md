@@ -118,3 +118,10 @@ npm run db:reset     # wipe .pglite, re-migrate, re-seed
 - tsx scripts run as CJS — no top-level await; wrap in `main()`.
 - Seed dates are relative to seed day so the demo (including the sail-tiled Section 122
   measure pair) never goes stale.
+- **Clerk dev→production instance cutover** (we launched on dev-instance keys): a
+  production instance starts EMPTY and mints new `org_`/`user_` ids. Recreate orgs and
+  re-invite users in the prod instance, then — before anyone signs in — remap each
+  tenant row (`UPDATE orgs SET clerk_org_id = '<prod org id>' WHERE clerk_org_id =
+  '<dev org id>'`) or the JIT provisioner will mint a fresh empty tenant and orphan the
+  existing data. Also update `SUPER_ADMIN_USER_IDS` (user ids change too) and swap the
+  two Clerk keys in Vercel.
