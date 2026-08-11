@@ -42,6 +42,9 @@ export function inferDocType(fileName: string): DocumentTypeValue {
   if (name.includes("entry")) return "port_entry";
   if (name.includes("bol") || name.includes("shipment") || name.includes("awb"))
     return "shipment";
+  // Before the "invoice" check: a broker's own bill must not carry a
+  // commercial_invoice hint into classification (mirrors assist sheets).
+  if (name.includes("broker") && name.includes("invoice")) return "other";
   if (name.includes("invoice")) return "commercial_invoice";
   if (name.includes("packing")) return "packing_list";
   // "quot" covers quote/quotation; "pricing" covers supplier price sheets.

@@ -149,10 +149,10 @@ export function classifyFromResponse(
     unknown
   >;
   const value = toStr(data.doc_type);
-  // assist_sheet is a classification-only label (it protects standalone
-  // assist-sheet uploads from the commercial_invoice pipeline); it has no
-  // docType of its own.
-  if (value === "assist_sheet") return "other";
+  // assist_sheet and broker_invoice are classification-only labels (they
+  // protect standalone uploads from the commercial_invoice pipeline); they
+  // have no docType of their own.
+  if (value === "assist_sheet" || value === "broker_invoice") return "other";
   if (value && DOC_TYPES.has(value)) return value as DocumentTypeValue;
   return hint;
 }

@@ -100,6 +100,14 @@ describe("classifyFromResponse", () => {
     ).toBe("other");
   });
 
+  it("maps the classification-only broker_invoice label to other", () => {
+    // A broker's own bill is USD and cites exactly one entry, so it would
+    // pass every variance gate if it ever became a commercial_invoice.
+    expect(
+      classifyFromResponse([{ doc_type: "broker_invoice" }], "commercial_invoice"),
+    ).toBe("other");
+  });
+
   it("falls back to other when the hint is other", () => {
     expect(classifyFromResponse([{}], "other")).toBe("other");
   });

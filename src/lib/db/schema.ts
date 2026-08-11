@@ -77,6 +77,10 @@ export const packetRole = pgEnum("packet_role", [
   // distinct role (mapped to docType "other") is what stops them becoming
   // bogus invoices with spurious value-mismatch alerts.
   "assist_sheet",
+  // Same trap, different document: the broker's own bill (brokerage fees,
+  // duty advancement) is invoice-shaped but must never enter the
+  // commercial_invoice pipeline.
+  "broker_invoice",
   "packing_list",
   "transport_document",
   "certificate_of_origin",

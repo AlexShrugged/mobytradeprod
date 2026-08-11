@@ -36,6 +36,14 @@ describe("normalizeRole", () => {
     expect(normalizeRole("Assist Sheet")).toBe("assist_sheet");
   });
 
+  it("matches broker invoices BEFORE the broad invoice pattern", () => {
+    // Same trap as assist sheets: the broker's own bill is invoice-shaped
+    // and must never resolve to commercial_invoice.
+    expect(normalizeRole("Broker Invoice")).toBe("broker_invoice");
+    expect(normalizeRole("Expeditors Broker Invoice")).toBe("broker_invoice");
+    expect(normalizeRole("Brokerage Invoice")).toBe("broker_invoice");
+  });
+
   it("falls back to other for empty or unknown text", () => {
     expect(normalizeRole("")).toBe("other");
     expect(normalizeRole(null)).toBe("other");
@@ -46,6 +54,7 @@ describe("normalizeRole", () => {
 describe("roleToDocType", () => {
   it("routes assist sheets and unpipelined roles to other", () => {
     expect(roleToDocType("assist_sheet")).toBe("other");
+    expect(roleToDocType("broker_invoice")).toBe("other");
     expect(roleToDocType("certificate_of_origin")).toBe("other");
     expect(roleToDocType("hts_code_list")).toBe("other");
   });

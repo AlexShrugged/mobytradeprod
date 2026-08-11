@@ -1,0 +1,1 @@
+ALTER TYPE "public"."packet_role" ADD VALUE 'broker_invoice' BEFORE 'packing_list';

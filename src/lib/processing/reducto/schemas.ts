@@ -39,6 +39,7 @@ export const CLASSIFICATION_SCHEMA = {
         "refund_report",
         "entry_packet",
         "assist_sheet",
+        "broker_invoice",
         "other",
       ],
       description:
@@ -57,7 +58,10 @@ export const CLASSIFICATION_SCHEMA = {
         "invoice, packing list, bill of lading...) in one file. assist_sheet: " +
         "a worksheet of statutory additions to customs value (tooling, " +
         "molds, furnished materials) — columnar like an invoice but NOT a " +
-        "commercial invoice. other: none of the above.",
+        "commercial invoice. broker_invoice: a customs broker's or freight " +
+        "forwarder's own bill to the importer for brokerage fees, duty/tax " +
+        "advancement, and disbursements — invoice-shaped but NOT a " +
+        "supplier's invoice for goods. other: none of the above.",
     },
   },
   required: ["doc_type"],
@@ -565,6 +569,14 @@ export const SPLIT_CATEGORIES: SplitCategory[] = [
       "A worksheet of statutory additions to customs value — tooling, " +
       "molds, materials the importer furnished to the manufacturer. " +
       "Columnar like an invoice but NOT a commercial invoice.",
+  },
+  {
+    name: "Broker Invoice",
+    description:
+      "The customs broker's or freight forwarder's own bill to the " +
+      "importer — brokerage fees, duty advancement, disbursements, " +
+      "handling charges. Invoice-shaped but NOT the supplier's commercial " +
+      "invoice for the goods.",
   },
   {
     name: "Packing List",

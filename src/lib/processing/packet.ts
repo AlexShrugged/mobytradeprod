@@ -35,6 +35,9 @@ const ROLE_PATTERNS: [PacketRoleValue, RegExp[]][] = [
   ],
   ["packing_list", [/packing\s*list/i, /\bpacking\b/i, /\bpkg\b/i, /\bp\/?l\b/i]],
   ["assist_sheet", ASSIST_SHEET_PATTERNS],
+  // Strictly BEFORE commercial_invoice for the same reason as assist_sheet:
+  // "Broker Invoice" would otherwise match the broad /\binvoice\b/ pattern.
+  ["broker_invoice", [/broker.*invoice/i, /brokerage/i, /\bbroker\b/i]],
   [
     "commercial_invoice",
     [/commercial\s*invoice/i, /\binvoice\b/i, /\bcdm\b/i, /\binv\b/i],
@@ -74,6 +77,7 @@ const ROLE_TO_DOC_TYPE: Record<PacketRoleValue, DocumentTypeValue> = {
   entry_summary_7501: "port_entry",
   commercial_invoice: "commercial_invoice",
   assist_sheet: "other",
+  broker_invoice: "other",
   packing_list: "packing_list",
   transport_document: "shipment",
   certificate_of_origin: "other",
@@ -89,6 +93,7 @@ const ROLE_LABELS: Record<PacketRoleValue, string> = {
   entry_summary_7501: "Entry summary (7501)",
   commercial_invoice: "Commercial invoice",
   assist_sheet: "Assist sheet",
+  broker_invoice: "Broker invoice",
   packing_list: "Packing list",
   transport_document: "Transport document",
   certificate_of_origin: "Certificate of origin",
