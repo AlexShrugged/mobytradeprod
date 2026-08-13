@@ -119,7 +119,7 @@ export async function POST(
   if (outcome.kind === "conflict") {
     return NextResponse.json(
       {
-        error: `${outcome.vendorName} is already a source for this part — edit that row instead.`,
+        error: `${outcome.vendorName} is already a source for this part. Edit that row instead.`,
       },
       { status: 409 },
     );

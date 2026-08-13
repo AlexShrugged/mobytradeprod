@@ -134,7 +134,7 @@ export default async function EventsPage({
                     <Badge
                       variant="outline"
                       className="border-amber-500/20 bg-amber-500/10 font-normal text-amber-700 dark:text-amber-400"
-                      title={`${fe.deadline.measureName} — this shipment is exempt only if entered by this date`}
+                      title={`${fe.deadline.measureName}: exempt only if entered by this date`}
                     >
                       exempt if entered by {formatDate(fe.deadline.enteredBy)}
                     </Badge>

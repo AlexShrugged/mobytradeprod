@@ -40,7 +40,7 @@ export function SyncButton() {
         parts.push(`Base: ${base.error}`);
       } else if (base?.staged) {
         parts.push(
-          `Base ${base.releaseId}: ${base.added} added, ${base.changed} changed, ${base.removed} removed — staged for approval`,
+          `Base ${base.releaseId}: ${base.added} added, ${base.changed} changed, ${base.removed} removed. Staged for approval.`,
         );
       } else if (base) {
         parts.push(`Base ${base.releaseId}: no changes`);

@@ -19,7 +19,7 @@ export function SailDateCell({
     return (
       <span
         className="text-muted-foreground"
-        title="Estimated — no on-board date yet, showing ETD"
+        title="Estimated: no on-board date yet, showing ETD"
       >
         ~{formatDate(etd)}
       </span>
@@ -35,13 +35,11 @@ const basisMeta: Record<SailBasisValue, { label: string; title: string }> = {
   },
   estimated: {
     label: "sailed date: estimated",
-    title:
-      "No on-board date yet — sail-conditioned duties were computed from the ETD.",
+    title: "No on-board date yet; sail-conditioned duties use the ETD.",
   },
   assumed: {
     label: "sailed date: assumed",
-    title:
-      "No sail date at all — resolved conservatively toward duty owed until a BOL arrives.",
+    title: "No sail date; resolved toward duty owed until a BOL arrives.",
   },
 };
 

@@ -173,7 +173,7 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
                   colSpan={8}
                   className="h-24 text-center text-muted-foreground"
                 >
-                  No documents yet — drop files above to get started.
+                  No documents yet. Drop files above.
                 </TableCell>
               </TableRow>
             ) : (

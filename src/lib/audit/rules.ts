@@ -387,13 +387,13 @@ export function computeEntryAlerts(
         const amountClause =
           m.amountCents === null
             ? " (amount not auto-computed for this rate type)"
-            : ` — expected ${fmt(m.amountCents)}`;
+            : ` (expected ${fmt(m.amountCents)})`;
         alerts.push({
           alertKey: `missing_measure:line${line.lineNumber}:${m.ch99Digits}`,
           alertType: "missing_measure",
           severity: "warning",
           label: `Missing ${m.name}`,
-          message: `Line ${line.lineNumber} (${line.htsCode}, ${line.countryOfOrigin}) should carry ${m.name} (${m.ch99Code}) at ${rateLabel}${amountClause} — but no such charge was declared.`,
+          message: `Line ${line.lineNumber} (${line.htsCode}, ${line.countryOfOrigin}) should carry ${m.name} (${m.ch99Code}) at ${rateLabel}${amountClause}, but no such charge was declared.`,
           details: {
             measure_name: m.name,
             authority: m.authority,
@@ -424,7 +424,7 @@ export function computeEntryAlerts(
           alertType: "missing_measure",
           severity: "warning",
           label: "Missing base duty",
-          message: `Line ${line.lineNumber} (${line.htsCode}) has a ${pctLabel(expected.baseDuty.rate)} general rate — expected ${fmt(expected.baseDuty.amountCents)} — but no base duty charge was declared.`,
+          message: `Line ${line.lineNumber} (${line.htsCode}) has a ${pctLabel(expected.baseDuty.rate)} general rate (expected ${fmt(expected.baseDuty.amountCents)}), but no base duty charge was declared.`,
           details: {
             expected_rate: expected.baseDuty.rate,
             expected_amount: dollars(expected.baseDuty.amountCents),
@@ -473,7 +473,7 @@ export function computeEntryAlerts(
           label: `Unexpected ${name}`,
           message: suppressedMatch
             ? `Line ${line.lineNumber} declares ${name} (${c.htsCode}) for ${fmt(amountCents)}, but it should not apply: ${suppressedMatch.suppressedBy.reason}`
-            : `Line ${line.lineNumber} declares ${name} (${c.htsCode}) for ${fmt(amountCents)}, which our reference data does not show applying to ${line.htsCode} from ${line.countryOfOrigin}. This may be a coverage gap — review before acting.`,
+            : `Line ${line.lineNumber} declares ${name} (${c.htsCode}) for ${fmt(amountCents)}, which our reference data does not show applying to ${line.htsCode} from ${line.countryOfOrigin}. This may be a coverage gap; review before acting.`,
           details: {
             measure_name: name,
             actual_hts: c.htsCode,
@@ -592,7 +592,7 @@ export function computeEntryAlerts(
         alertType: "sail_date_assumption",
         severity: "info",
         label: "Sail date assumed",
-        message: `Sail-conditioned tariff expectations on line(s) ${[...sailAffectedLines].sort((a, b) => a - b).join(", ")} were computed from ${basisLabel}. Confirm the on-board date from the bill of lading — the applicable measure set may change.`,
+        message: `Sail-conditioned tariff expectations on line(s) ${[...sailAffectedLines].sort((a, b) => a - b).join(", ")} were computed from ${basisLabel}. Confirm the on-board date from the bill of lading; the applicable measure set may change.`,
         details: {
           sail_basis: worstSailBasis,
           line_numbers: [...sailAffectedLines].sort((a, b) => a - b),

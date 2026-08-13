@@ -321,7 +321,7 @@ export async function decideQuoteLine(
       actor: decidedBy,
       note: `Quote${
         sheet?.supplierName ? ` from ${sheet.supplierName}` : ""
-      } approved — draft SKU finalized`,
+      } approved; draft SKU finalized`,
     });
   }
 

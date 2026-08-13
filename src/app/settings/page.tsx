@@ -120,7 +120,7 @@ export default async function SettingsPage() {
             <p className="text-muted-foreground">
               {reductoConfigured
                 ? "Uploaded documents are parsed by Reducto; full extraction payloads are retained for provenance."
-                : "REDUCTO_API_KEY is not set — uploads run through the deterministic stub processor. Add the key to the environment to switch to live extraction; no code change needed."}
+                : "REDUCTO_API_KEY is not set; uploads run through the deterministic stub processor. Set the key to enable live extraction."}
             </p>
           </CardContent>
         </Card>

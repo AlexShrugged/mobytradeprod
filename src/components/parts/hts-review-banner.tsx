@@ -18,8 +18,7 @@ export function HtsReviewBanner({
         <ScanSearch className="size-4 text-amber-700 dark:text-amber-400" />
         <span>
           <span className="font-medium">{count}</span> HTS classification
-          {count === 1 ? " suggestion needs" : " suggestions need"} review —
-          committed codes drive audits and landed cost.
+          {count === 1 ? " suggestion needs" : " suggestions need"} review.
         </span>
       </div>
       <Button size="sm" onClick={onStart}>

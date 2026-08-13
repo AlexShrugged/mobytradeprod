@@ -90,7 +90,7 @@ export async function PATCH(
         return {
           status: 409 as const,
           error:
-            "No pending review item for this group — it may have been decided or superseded. Refresh and retry.",
+            "No pending review item for this group. Refresh and retry.",
         };
       }
 

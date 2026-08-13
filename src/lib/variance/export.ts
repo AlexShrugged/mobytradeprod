@@ -7,6 +7,7 @@
 // Pure string math; the download click stays in the view.
 
 import { fieldIssue } from "./field-issue";
+import type { EntryPhase } from "./window";
 
 export type VarianceExportRow = {
   alertType: string;
@@ -21,12 +22,15 @@ export type VarianceExportRow = {
   /** Signed cents; positive = overpaid (refund due), negative = underpaid
    *  (additional duty owed) — the queue's convention. */
   impactCents: number | null;
-  window: { estDate: string | null; closed: boolean };
+  window: { phase: EntryPhase; nextPhaseDate: string | null };
 };
 
-// Est. liquidation matters to the broker: post-summary corrections can only
-// be filed while the entry is unliquidated, so the date is the deadline
-// proxy; liquidated lines need a protest instead.
+// Phase tells the broker which correction vehicle a line needs: unsubmitted
+// lines are still editable without a PSC, submitted lines take a PSC while
+// the entry is unliquidated, liquidated lines need a protest. Next phase
+// date is when that changes — exact for unsubmitted lines (15 days after
+// the entry date), the est. liquidation date for submitted ones, blank once
+// liquidated (terminal) or when the entry has no date.
 export const VARIANCE_CSV_HEADER = [
   "Entry number",
   "Line",
@@ -39,7 +43,8 @@ export const VARIANCE_CSV_HEADER = [
   "Corrected",
   "Status",
   "Duty impact USD (+ refund / - owed)",
-  "Est. liquidation",
+  "Phase",
+  "Next phase date",
   "Explanation",
 ];
 
@@ -64,7 +69,8 @@ function rowCells(r: VarianceExportRow): string[] {
     corrected,
     r.status === "resolved" ? "accepted" : r.status,
     r.impactCents === null ? "" : (r.impactCents / 100).toFixed(2),
-    r.window.closed ? "liquidated" : (r.window.estDate ?? ""),
+    r.window.phase,
+    r.window.nextPhaseDate ?? "",
     r.message,
   ];
 }

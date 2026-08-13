@@ -14,6 +14,6 @@ export const clerkEnabled: boolean = Boolean(
 // fast.
 if (!clerkEnabled && isProdRuntime()) {
   throw new Error(
-    "Clerk keys are required on Vercel — set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY.",
+    "Clerk keys are required on Vercel. Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY.",
   );
 }

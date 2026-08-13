@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
+import { UploadDropzone } from "@/components/data/upload-dropzone";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,12 +15,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // Two ways into the catalog:
 //  - Manual: a human typing the entry IS the approval → active part.
-//  - From quote: goes through POST /api/quote-sheets, the same path uploaded
-//    sheets take — an unknown SKU becomes a DRAFT part pending approval.
+//  - From quote, itself two ways: upload the vendor's quote sheet (the
+//    document pipeline parses it and ingests its lines), or type it in —
+//    which goes through POST /api/quote-sheets, the same path uploaded
+//    sheets take. Either way an unknown SKU becomes a DRAFT part pending
+//    approval.
 // Reached pre-filled from a part row's "Add quote" (presetSku fixes the SKU
 // and hides the manual tab — you are quoting an existing part).
 export function NewSkuDialog({
@@ -87,7 +92,7 @@ export function NewSkuDialog({
       return;
     }
     if ((origin.trim() || cost !== null) && vendorName.trim() === "") {
-      toast.error("Origin and cost describe a vendor — name the vendor first.");
+      toast.error("Name the vendor to set origin and cost.");
       return;
     }
     setBusy(true);
@@ -146,8 +151,8 @@ export function NewSkuDialog({
       })) as { createdPartIds?: string[] };
       toast.success(
         (result.createdPartIds?.length ?? 0) > 0
-          ? `Quote recorded — ${qSku.trim()} created as a draft SKU pending approval.`
-          : `Quote recorded for ${qSku.trim()} — review it on the row.`,
+          ? `Quote recorded. ${qSku.trim()} created as a draft SKU.`
+          : `Quote recorded for ${qSku.trim()}.`,
       );
       router.refresh();
       onClose();
@@ -160,6 +165,17 @@ export function NewSkuDialog({
 
   const quoteForm = (
     <div className="flex flex-col gap-3">
+      <UploadDropzone
+        variant="compact"
+        onComplete={(allSucceeded) => {
+          if (allSucceeded) onClose();
+        }}
+      />
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Separator className="flex-1" />
+        or fill it in manually
+        <Separator className="flex-1" />
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field id="quote-supplier" label="Vendor">
           <Input
@@ -253,11 +269,6 @@ export function NewSkuDialog({
           />
         </Field>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {presetSku === null
-          ? "An unknown SKU is created as a draft part — it stays out of audits and official costs until you approve the quote."
-          : "The quote lands under this SKU for review — approving it updates the official cost (via a confirming PO for active parts)."}
-      </p>
       <div className="flex justify-end gap-2">
         <Button variant="outline" disabled={busy} onClick={onClose}>
           Cancel
@@ -277,12 +288,12 @@ export function NewSkuDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-base">
-            {presetSku === null ? "New SKU" : `Add quote — ${presetSku}`}
+            {presetSku === null ? "New SKU" : `Add quote: ${presetSku}`}
           </DialogTitle>
           <DialogDescription>
             {presetSku === null
-              ? "Type a catalog entry directly, or record a supplier quote."
-              : "Record a supplier quote for this SKU."}
+              ? "Create a SKU manually or record a vendor quote."
+              : "Upload the vendor's quote sheet or enter it below."}
           </DialogDescription>
         </DialogHeader>
 
@@ -359,12 +370,6 @@ export function NewSkuDialog({
                     />
                   </Field>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Created active — a manual entry is its own approval. Origin
-                  and cost belong to the named vendor&apos;s source (a SKU can
-                  have several vendors). HTS codes arrive via classification,
-                  not this form.
-                </p>
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" disabled={busy} onClick={onClose}>
                     Cancel

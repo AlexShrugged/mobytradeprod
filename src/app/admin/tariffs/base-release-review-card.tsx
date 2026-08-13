@@ -95,8 +95,7 @@ export function BaseReleaseReviewCard({ release }: { release: OpenBaseRelease })
           <p className="text-sm text-muted-foreground">
             {p.seedCorrections} seeded demo rate
             {p.seedCorrections === 1 ? "" : "s"} will be corrected in place with
-            certified values (no historical window minted — the seed rates were
-            approximations).
+            certified values.
           </p>
         ) : null}
 

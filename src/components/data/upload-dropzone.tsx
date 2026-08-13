@@ -35,11 +35,15 @@ function registerUpload(u: {
 }
 
 // full: the Data page hero dropzone. compact: a one-line affordance for
-// embedding in dialogs (e.g. quote upload in New SKU).
+// embedding in dialogs (e.g. quote upload in New SKU). onComplete fires once
+// a batch has fully settled (uploaded + processed), with whether every file
+// made it — dialogs use it to close themselves on success.
 export function UploadDropzone({
   variant = "full",
+  onComplete,
 }: {
   variant?: "full" | "compact";
+  onComplete?: (allSucceeded: boolean) => void;
 }) {
   const router = useRouter();
   const status = useUploadStatus();
@@ -196,8 +200,10 @@ export function UploadDropzone({
             `${accepted.length} document${accepted.length > 1 ? "s" : ""} processed.`,
           );
         }
+        onComplete?.(failed === 0);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed.");
+        onComplete?.(false);
       } finally {
         setUploading(false);
         setBusy(null);
@@ -207,7 +213,7 @@ export function UploadDropzone({
         router.refresh();
       }
     },
-    [router, status],
+    [router, status, onComplete],
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -251,7 +257,7 @@ export function UploadDropzone({
           </p>
           <p className="text-xs text-muted-foreground">
             Port entries, bills of lading, purchase orders, invoices, quote
-            sheets, refund reports — single files or bulk.
+            sheets, refund reports. Single files or bulk.
           </p>
         </>
       ) : (

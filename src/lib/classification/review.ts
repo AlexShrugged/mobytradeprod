@@ -125,12 +125,12 @@ export function assertValidCommitCode(code: string): string {
   const digits = normalizeHts(code);
   if (digits.length !== 8 && digits.length !== 10) {
     throw new Error(
-      `Invalid HTS code "${code}" — expected 8 or 10 digits, got ${digits.length}`,
+      `Invalid HTS code "${code}": expected 8 or 10 digits, got ${digits.length}`,
     );
   }
   if (digits.startsWith("98") || digits.startsWith("99")) {
     throw new Error(
-      `Invalid HTS code "${code}" — chapter 98/99 codes are program overlays, not product classifications`,
+      `Invalid HTS code "${code}": chapter 98/99 codes are program overlays, not product classifications`,
     );
   }
   return code;

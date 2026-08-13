@@ -192,7 +192,7 @@ export function PartsTable({
               title={
                 range.min === range.max
                   ? undefined
-                  : "Vendors quote different costs — expand the row for per-vendor detail."
+                  : "Vendors quote different costs. Expand for per-vendor detail."
               }
             >
               {formatCentsRange(range)}
@@ -263,9 +263,9 @@ export function PartsTable({
               )}
               title={
                 part.hasUnapproved
-                  ? "A received quote is awaiting a decision — expand the row."
+                  ? "A received quote awaits a decision."
                   : part.pendingChanges
-                    ? "An approved quote is waiting for its confirming PO."
+                    ? "An approved quote awaits its confirming PO."
                     : undefined
               }
             >
@@ -305,7 +305,7 @@ export function PartsTable({
               )}
               title={
                 isDraft
-                  ? `${ESTIMATE_TITLE}${spread} Draft SKU — inputs come from an unapproved quote.`
+                  ? `${ESTIMATE_TITLE}${spread} Draft SKU: inputs from an unapproved quote.`
                   : `${ESTIMATE_TITLE}${spread}`
               }
             >

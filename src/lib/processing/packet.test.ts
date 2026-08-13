@@ -174,7 +174,7 @@ describe("childFileName / pageRangeLabel", () => {
       confidence: "high",
     };
     expect(childFileName("entry-packet-231.pdf", part)).toBe(
-      "entry-packet-231 — Commercial invoice (pp. 3–4).pdf",
+      "entry-packet-231 - Commercial invoice (pp. 3–4).pdf",
     );
   });
 

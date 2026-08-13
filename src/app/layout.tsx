@@ -21,7 +21,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "MobyTrade",
   description:
-    "Track customs entries, duties, and refunds down to the line item — with SKU-level landed cost and correct HTS classification.",
+    "Track customs entries, duties, and refunds down to the line item, with SKU-level landed cost and correct HTS classification.",
 };
 
 export default function RootLayout({

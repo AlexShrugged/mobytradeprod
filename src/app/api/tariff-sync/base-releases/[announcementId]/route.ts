@@ -73,7 +73,7 @@ export async function PATCH(
         return {
           status: 404 as const,
           error:
-            "No pending review item for this base release — it may have been decided or superseded. Refresh and retry.",
+            "No pending review item for this base release. Refresh and retry.",
         };
       }
 

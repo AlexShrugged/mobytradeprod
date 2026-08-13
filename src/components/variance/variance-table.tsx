@@ -168,7 +168,7 @@ function ExpectedVsFiled({ row }: { row: VarianceQueueRow }) {
         </span>
       );
     case "invoice_comparison_skipped":
-      return <Muted>{str("currency") ?? "non-USD"} invoice — skipped</Muted>;
+      return <Muted>{str("currency") ?? "non-USD"} invoice, skipped</Muted>;
     default:
       return <Muted>{row.label}</Muted>;
   }
@@ -381,7 +381,7 @@ export function VarianceTable({
                 className="h-24 text-center text-muted-foreground"
               >
                 {totalCount === 0
-                  ? "Nothing open — every entry reconciles against the catalog and reference data."
+                  ? "Nothing open. Every entry reconciles."
                   : "No variances match the filter."}
               </TableCell>
             </TableRow>

@@ -96,7 +96,7 @@ export function EventRow({ event }: { event: BusinessEvent }) {
             event.dateBasis === "estimated"
               ? "Estimated date"
               : event.dateBasis === "recorded"
-                ? "No business date on record — showing when it was recorded"
+                ? "No business date on record; showing when it was recorded"
                 : undefined
           }
         >
@@ -149,8 +149,7 @@ export function EventRow({ event }: { event: BusinessEvent }) {
           ) : null}
           {lateRecorded ? (
             <div className="text-xs text-muted-foreground">
-              Recorded {formatDate(recordedDay)} — shown by when it actually
-              occurred.
+              Recorded {formatDate(recordedDay)}; shown by occurrence date.
             </div>
           ) : null}
         </div>

@@ -86,7 +86,7 @@ export function DutiesPopover({
           {estimate ? (
             <p className="text-xs text-muted-foreground">
               Estimated from PO prices, catalog codes, and nominal MPF/HMF
-              rates — CBP applies per-entry minimums and caps.
+              rates.
             </p>
           ) : null}
           {sailBasis ? (

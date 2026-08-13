@@ -13,7 +13,7 @@ const base: VarianceExportRow = {
   sku: "EB-MTR-750W",
   description: "750W Mid-Drive Motor",
   impactCents: -173700,
-  window: { estDate: "2027-03-30", closed: false },
+  window: { phase: "submitted", nextPhaseDate: "2027-03-30" },
 };
 
 const lines = (csv: string) => csv.split("\r\n");
@@ -31,7 +31,7 @@ describe("varianceCsv", () => {
     const row = lines(varianceCsv([base]))[1];
     expect(row).toBe(
       "231-4501311-9,1,EB-MTR-750W,750W Mid-Drive Motor,Duty mismatch," +
-        "Duty rate,20%,25%,,open,-1737.00,2027-03-30," +
+        "Duty rate,20%,25%,,open,-1737.00,submitted,2027-03-30," +
         '"Declared rate 20%, expected 25%."',
     );
   });
@@ -68,13 +68,28 @@ describe("varianceCsv", () => {
         {
           ...base,
           impactCents: 162000,
-          window: { estDate: "2027-01-01", closed: true },
+          window: { phase: "liquidated", nextPhaseDate: null },
         },
       ]),
     )[1];
     const cells = row.split(",");
     expect(cells[10]).toBe("1620.00");
     expect(cells[11]).toBe("liquidated");
+    expect(cells[12]).toBe("");
+  });
+
+  it("dates the phase change for unsubmitted lines", () => {
+    const row = lines(
+      varianceCsv([
+        {
+          ...base,
+          window: { phase: "unsubmitted", nextPhaseDate: "2026-08-20" },
+        },
+      ]),
+    )[1];
+    const cells = row.split(",");
+    expect(cells[11]).toBe("unsubmitted");
+    expect(cells[12]).toBe("2026-08-20");
   });
 
   it("leaves diff cells empty for findings without a field-level diff", () => {

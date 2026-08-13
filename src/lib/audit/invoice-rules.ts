@@ -160,7 +160,7 @@ export function computeInvoiceAlerts(
         alertType: "invoice_comparison_skipped",
         severity: "info",
         label: "Invoice comparison skipped",
-        message: `Invoice ${inv.invoiceNumber} is in ${inv.currency} — value and quantity comparison is skipped (no FX support yet). Classification and origin checks still run.`,
+        message: `Invoice ${inv.invoiceNumber} is in ${inv.currency}; value and quantity comparison is skipped (no FX support yet). Classification and origin checks still run.`,
         details: {
           invoice_number: inv.invoiceNumber,
           currency: inv.currency,

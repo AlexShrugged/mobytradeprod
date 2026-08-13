@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import type { VarianceQueueRow } from "@/lib/db/queries/variance";
 import { varianceCsv } from "@/lib/variance/export";
 import type { VarianceGroup } from "@/lib/variance/grouping";
+import type { EntryPhase } from "@/lib/variance/window";
 
 export type VarianceTypeFilters = Record<
   string,
@@ -29,12 +30,29 @@ export type QueueGroup = VarianceGroup<VarianceQueueRow>;
 // by default). Status splits the queue by work state: Open = lines with at
 // least one undecided issue (the default view), Resolved = lines where
 // every correction has been decided. Phase splits it by entry lifecycle:
-// Not liquidated (the default) vs Liquidated — a liquidated entry's window
-// is history, so its lines are reference, not work. All filter state is
-// client state (same idiom as Parts' search). One table row is one line
-// item with all its issues stacked, so every filter matches a group when
-// ANY member matches, and the option counts answer "how many rows will I
-// see if I check this".
+// Unsubmitted (within 15 days of the entry date — the summary is still
+// editable without a PSC), Submitted (both checked by default), and
+// Liquidated — a liquidated entry's window is history, so its lines are
+// reference, not work. All filter state is client state (same idiom as
+// Parts' search). One table row is one line item with all its issues
+// stacked, so every filter matches a group when ANY member matches, and
+// the option counts answer "how many rows will I see if I check this".
+
+const PHASE_OPTIONS: { phase: EntryPhase; label: string; title?: string }[] = [
+  {
+    phase: "unsubmitted",
+    label: "Unsubmitted",
+    title:
+      "Within 15 days of the entry date; still editable without a PSC",
+  },
+  { phase: "submitted", label: "Submitted" },
+  {
+    phase: "liquidated",
+    label: "Liquidated",
+    title: "The entry has liquidated",
+  },
+];
+
 export function VarianceView({
   openGroups,
   resolvedGroups,
@@ -52,8 +70,9 @@ export function VarianceView({
   );
   const [showOpen, setShowOpen] = React.useState(true);
   const [showResolved, setShowResolved] = React.useState(false);
-  const [showNotLiquidated, setShowNotLiquidated] = React.useState(true);
-  const [showLiquidated, setShowLiquidated] = React.useState(false);
+  const [checkedPhases, setCheckedPhases] = React.useState<Set<EntryPhase>>(
+    () => new Set(["unsubmitted", "submitted"]),
+  );
 
   const inTypes = (types: string[]) => (g: QueueGroup) =>
     g.members.some((r) => types.includes(r.alertType));
@@ -97,9 +116,8 @@ export function VarianceView({
         (r.catalogHts ?? "").includes(q),
     );
   // Group members share one entry, so the first member speaks for the line.
-  const isLiquidated = (g: QueueGroup) => g.members[0].window.closed;
-  const phaseOk = (g: QueueGroup) =>
-    isLiquidated(g) ? showLiquidated : showNotLiquidated;
+  const phaseOf = (g: QueueGroup) => g.members[0].window.phase;
+  const phaseOk = (g: QueueGroup) => checkedPhases.has(phaseOf(g));
   const typeOk = (g: QueueGroup) =>
     allTypesChecked || g.members.some((r) => checkedAlertTypes.has(r.alertType));
 
@@ -127,10 +145,9 @@ export function VarianceView({
     ).length;
   const statusCount = (set: QueueGroup[]) =>
     set.filter((g) => phaseOk(g) && matchesQuery(g) && typeOk(g)).length;
-  const phaseCount = (liquidated: boolean) =>
+  const phaseCount = (phase: EntryPhase) =>
     statusBase.filter(
-      (g) =>
-        isLiquidated(g) === liquidated && matchesQuery(g) && typeOk(g),
+      (g) => phaseOf(g) === phase && matchesQuery(g) && typeOk(g),
     ).length;
 
   const keepOpen = (e: Event) => e.preventDefault();
@@ -254,34 +271,37 @@ export function VarianceView({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm">
               Phase:{" "}
-              {showNotLiquidated && showLiquidated
+              {checkedPhases.size === PHASE_OPTIONS.length
                 ? "All"
-                : showNotLiquidated
-                  ? "Not liquidated"
-                  : showLiquidated
-                    ? "Liquidated"
-                    : "None"}
+                : checkedPhases.size === 0
+                  ? "None"
+                  : checkedPhases.size === 1
+                    ? PHASE_OPTIONS.find((o) => checkedPhases.has(o.phase))!
+                        .label
+                    : `${checkedPhases.size} of ${PHASE_OPTIONS.length}`}
               <ChevronDown className="text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuCheckboxItem
-              checked={showNotLiquidated}
-              onCheckedChange={(v) => setShowNotLiquidated(v === true)}
-              onSelect={keepOpen}
-            >
-              Not liquidated
-              {optionCount(phaseCount(false))}
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={showLiquidated}
-              onCheckedChange={(v) => setShowLiquidated(v === true)}
-              onSelect={keepOpen}
-              title="The entry has liquidated — its window is history"
-            >
-              Liquidated
-              {optionCount(phaseCount(true))}
-            </DropdownMenuCheckboxItem>
+            {PHASE_OPTIONS.map((o) => (
+              <DropdownMenuCheckboxItem
+                key={o.phase}
+                checked={checkedPhases.has(o.phase)}
+                onCheckedChange={(v) =>
+                  setCheckedPhases((prev) => {
+                    const next = new Set(prev);
+                    if (v) next.add(o.phase);
+                    else next.delete(o.phase);
+                    return next;
+                  })
+                }
+                onSelect={keepOpen}
+                title={o.title}
+              >
+                {o.label}
+                {optionCount(phaseCount(o.phase))}
+              </DropdownMenuCheckboxItem>
+            ))}
           </DropdownMenuContent>
         </DropdownMenu>
 

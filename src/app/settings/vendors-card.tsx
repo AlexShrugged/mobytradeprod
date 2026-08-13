@@ -63,7 +63,7 @@ export function VendorsCard({ vendors }: { vendors: VendorRow[] }) {
       <CardContent className="space-y-3 text-sm">
         {vendors.length === 0 ? (
           <p className="text-muted-foreground">
-            No vendors yet — they appear as quotes, POs, and invoices name
+            No vendors yet. They appear as quotes, POs, and invoices name
             them.
           </p>
         ) : (

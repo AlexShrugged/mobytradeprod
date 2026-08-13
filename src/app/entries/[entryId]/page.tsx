@@ -104,9 +104,11 @@ export default async function EntryDetailPage({
           {formatDate(entry.entryDate)} · {entry.portOfEntry ?? "port unknown"}
           {entry.entryType ? ` · type ${entry.entryType}` : ""}
           {entry.importerOfRecord ? ` · ${entry.importerOfRecord}` : ""}
-          {!window.closed && window.estDate
-            ? ` · est. liquidation ${formatDate(window.estDate)} · ${window.daysLeft}d left`
-            : ""}
+          {window.phase === "unsubmitted" && window.nextPhaseDate
+            ? ` · unsubmitted · editable without PSC until ${formatDate(window.nextPhaseDate)}`
+            : window.phase === "submitted" && window.nextPhaseDate
+              ? ` · submitted · est. liquidation ${formatDate(window.nextPhaseDate)} · ${window.daysLeft}d left`
+              : ""}
         </p>
       </div>
 
@@ -186,7 +188,7 @@ export default async function EntryDetailPage({
                         minWidth: "6px",
                         background: BUCKET_COLORS[bucket.bucket],
                       }}
-                      title={`${bucket.label} — ${formatCents(bucket.amountCents)}${
+                      title={`${bucket.label}: ${formatCents(bucket.amountCents)}${
                         bucket.maxRate !== null
                           ? ` (${(bucket.maxRate * 100).toFixed(2).replace(/\.?0+$/, "")}%)`
                           : ""
@@ -222,8 +224,8 @@ export default async function EntryDetailPage({
               <CardTitle className="text-base">Audit findings</CardTitle>
               <CardDescription>
                 {openAlertCount === 0
-                  ? "Nothing open — declared charges match our reference data."
-                  : `${openAlertCount} open finding${openAlertCount === 1 ? "" : "s"} — expected vs declared, from deterministic rules.`}
+                  ? "Nothing open. Declared charges match reference data."
+                  : `${openAlertCount} open finding${openAlertCount === 1 ? "" : "s"}: expected vs declared.`}
               </CardDescription>
             </CardHeader>
             <CardContent>

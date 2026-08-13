@@ -176,7 +176,7 @@ export function mapSplitToManifest(parts: RawSplitPart[]): EntryPacketExtraction
 
   if (usable.length === 0) {
     throw new ProcessingError(
-      "Packet split produced no usable parts — nothing to process.",
+      "Packet split produced no usable parts. Nothing to process.",
     );
   }
   return {
@@ -212,5 +212,5 @@ export function childFileName(
   const dot = parentFileName.lastIndexOf(".");
   const stem = dot > 0 ? parentFileName.slice(0, dot) : parentFileName;
   const ext = dot > 0 ? parentFileName.slice(dot) : "";
-  return `${stem} — ${packetRoleLabel(part.role)} (${pageRangeLabel(part.pages)})${ext}`;
+  return `${stem} - ${packetRoleLabel(part.role)} (${pageRangeLabel(part.pages)})${ext}`;
 }

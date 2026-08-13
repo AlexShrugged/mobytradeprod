@@ -11,7 +11,7 @@ export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(
-      `${name} is required when running on Vercel — set it in the project environment.`,
+      `${name} is required when running on Vercel. Set it in the project environment.`,
     );
   }
   return value;

@@ -31,7 +31,7 @@ export default async function AdminPage() {
     <div className="space-y-6">
       <PageHeader
         title="Platform admin"
-        info="Global customs reference data — syncs and approvals here take effect for every organization."
+        info="Global customs reference data. Changes here apply to every organization."
       />
 
       <div className="grid gap-4 md:grid-cols-2">

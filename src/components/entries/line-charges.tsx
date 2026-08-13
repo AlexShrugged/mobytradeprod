@@ -115,7 +115,7 @@ export function LineCharges({ line }: { line: LineItemDetail }) {
             {line.missingMeasures.map((m) => (
               <TableRow key={m.ch99Code} className="bg-amber-50/50 dark:bg-amber-950/20">
                 <TableCell className="font-medium text-amber-700 dark:text-amber-400">
-                  Expected — not declared
+                  Expected, not declared
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {m.ch99Code}

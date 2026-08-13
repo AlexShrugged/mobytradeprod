@@ -45,7 +45,7 @@ const cents = (v: string | null): number | null =>
 /** The savings-clause chip text — also the hover title. */
 function deadlineNoteFor(row: FutureEntryRow): string | null {
   if (!row.deadline) return null;
-  return `${row.deadline.measureName} — duty-free only if entered by ${formatDate(row.deadline.enteredBy)}`;
+  return `${row.deadline.measureName}: duty-free only if entered by ${formatDate(row.deadline.enteredBy)}`;
 }
 
 function DutiesFeesCell({ row }: { row: EntriesTableRow }) {
@@ -141,7 +141,7 @@ const columns: ColumnDef<EntriesTableRow>[] = [
         row.original.projectedEntryDate ? (
           <span
             className="text-muted-foreground"
-            title="Projected from the shipment's ETA — no entry filed yet"
+            title="Projected from the shipment's ETA; no entry filed yet"
           >
             ~{formatDate(row.original.projectedEntryDate)}
           </span>

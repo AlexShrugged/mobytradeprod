@@ -1,6 +1,15 @@
 import "server-only";
 
-import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  countDistinct,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+} from "drizzle-orm";
 
 import type { ReviewProposal } from "@/lib/classification/service";
 import { db, schema } from "@/lib/db";
@@ -82,6 +91,16 @@ export type PartQuoteCounts = {
   applied: number;
 };
 
+/** How much real import activity a (part, vendor) pair has behind it —
+ *  distinct POs, invoices, and entries carrying this part from this vendor.
+ *  Derived on read; "used" vendors (any count > 0) rank above quote-only
+ *  vendors on the Parts page. */
+export type PartVendorUsage = {
+  poCount: number;
+  invoiceCount: number;
+  entryCount: number;
+};
+
 export type CentsRange = { min: number; max: number };
 
 /** One (part, vendor) sourcing row — the unit rendered in the SourcesCard.
@@ -98,6 +117,8 @@ export type PartSourceRow = {
   estimateIncomplete: boolean;
   /** Quote lines from this vendor for this part. */
   quoteCounts: PartQuoteCounts;
+  /** Real activity (POs / invoices / entries) behind this (part, vendor). */
+  usage: PartVendorUsage;
 };
 
 export type PartRow = Part & {
@@ -135,7 +156,7 @@ export type PartRow = Part & {
 export async function getParts(): Promise<PartRow[]> {
   const orgId = await getCurrentOrgId();
 
-  const [parts, ref, quoteLines, partSources, actualLines, openItems] =
+  const [parts, ref, quoteLines, partSources, actualLines, openItems, usage] =
     await Promise.all([
       db.query.parts.findMany({
         where: eq(schema.parts.orgId, orgId),
@@ -174,6 +195,7 @@ export async function getParts(): Promise<PartRow[]> {
         ),
         columns: { id: true, subjectId: true },
       }),
+      fetchVendorUsage(orgId),
     ]);
 
   const latestByPartId = new Map(
@@ -272,6 +294,11 @@ export async function getParts(): Promise<PartRow[]> {
             approved: 0,
             applied: 0,
           },
+          usage: usage.get(`${part.id}:${s.vendorId}`) ?? {
+            poCount: 0,
+            invoiceCount: 0,
+            entryCount: 0,
+          },
         };
       })
       .sort((a, b) => a.vendorName.localeCompare(b.vendorName));
@@ -351,6 +378,128 @@ export async function getParts(): Promise<PartRow[]> {
       quotes,
     };
   });
+}
+
+/** Per-(part, vendor) activity counts, keyed `${partId}:${vendorId}`.
+ *  Entries are reached two ways — entry↔invoice links and entry↔PO links —
+ *  so distinct entry ids are merged in code rather than summed per path. */
+async function fetchVendorUsage(
+  orgId: string,
+): Promise<Map<string, PartVendorUsage>> {
+  const [poRows, invoiceRows, entryViaInvoice, entryViaPo] = await Promise.all([
+    db
+      .select({
+        partId: schema.purchaseOrderLines.partId,
+        vendorId: schema.purchaseOrders.vendorId,
+        n: countDistinct(schema.purchaseOrderLines.purchaseOrderId),
+      })
+      .from(schema.purchaseOrderLines)
+      .innerJoin(
+        schema.purchaseOrders,
+        eq(schema.purchaseOrderLines.purchaseOrderId, schema.purchaseOrders.id),
+      )
+      .where(
+        and(
+          eq(schema.purchaseOrderLines.orgId, orgId),
+          isNotNull(schema.purchaseOrderLines.partId),
+          isNotNull(schema.purchaseOrders.vendorId),
+        ),
+      )
+      .groupBy(schema.purchaseOrderLines.partId, schema.purchaseOrders.vendorId),
+    db
+      .select({
+        partId: schema.invoiceLineItems.partId,
+        vendorId: schema.invoices.vendorId,
+        n: countDistinct(schema.invoiceLineItems.invoiceId),
+      })
+      .from(schema.invoiceLineItems)
+      .innerJoin(
+        schema.invoices,
+        eq(schema.invoiceLineItems.invoiceId, schema.invoices.id),
+      )
+      .where(
+        and(
+          eq(schema.invoiceLineItems.orgId, orgId),
+          isNotNull(schema.invoiceLineItems.partId),
+          isNotNull(schema.invoices.vendorId),
+        ),
+      )
+      .groupBy(schema.invoiceLineItems.partId, schema.invoices.vendorId),
+    db
+      .selectDistinct({
+        partId: schema.invoiceLineItems.partId,
+        vendorId: schema.invoices.vendorId,
+        entryId: schema.entryInvoices.entryId,
+      })
+      .from(schema.entryInvoices)
+      .innerJoin(
+        schema.invoices,
+        eq(schema.entryInvoices.invoiceId, schema.invoices.id),
+      )
+      .innerJoin(
+        schema.invoiceLineItems,
+        eq(schema.invoiceLineItems.invoiceId, schema.invoices.id),
+      )
+      .where(
+        and(
+          eq(schema.entryInvoices.orgId, orgId),
+          isNotNull(schema.invoiceLineItems.partId),
+          isNotNull(schema.invoices.vendorId),
+        ),
+      ),
+    db
+      .selectDistinct({
+        partId: schema.purchaseOrderLines.partId,
+        vendorId: schema.purchaseOrders.vendorId,
+        entryId: schema.entryPurchaseOrders.entryId,
+      })
+      .from(schema.entryPurchaseOrders)
+      .innerJoin(
+        schema.purchaseOrders,
+        eq(schema.entryPurchaseOrders.purchaseOrderId, schema.purchaseOrders.id),
+      )
+      .innerJoin(
+        schema.purchaseOrderLines,
+        eq(schema.purchaseOrderLines.purchaseOrderId, schema.purchaseOrders.id),
+      )
+      .where(
+        and(
+          eq(schema.entryPurchaseOrders.orgId, orgId),
+          isNotNull(schema.purchaseOrderLines.partId),
+          isNotNull(schema.purchaseOrders.vendorId),
+        ),
+      ),
+  ]);
+
+  const byKey = new Map<string, PartVendorUsage>();
+  const usageOf = (partId: string, vendorId: string): PartVendorUsage => {
+    const key = `${partId}:${vendorId}`;
+    let u = byKey.get(key);
+    if (!u) {
+      u = { poCount: 0, invoiceCount: 0, entryCount: 0 };
+      byKey.set(key, u);
+    }
+    return u;
+  };
+
+  for (const r of poRows) {
+    usageOf(r.partId as string, r.vendorId as string).poCount = r.n;
+  }
+  for (const r of invoiceRows) {
+    usageOf(r.partId as string, r.vendorId as string).invoiceCount = r.n;
+  }
+  const entrySets = new Map<string, Set<string>>();
+  for (const r of [...entryViaInvoice, ...entryViaPo]) {
+    const key = `${r.partId as string}:${r.vendorId as string}`;
+    const set = entrySets.get(key) ?? new Set<string>();
+    set.add(r.entryId);
+    entrySets.set(key, set);
+  }
+  for (const [key, set] of entrySets) {
+    const [partId, vendorId] = key.split(":");
+    usageOf(partId, vendorId).entryCount = set.size;
+  }
+  return byKey;
 }
 
 /** Entry lines (with charges) from filed entries, shaped for rollupBySku. */

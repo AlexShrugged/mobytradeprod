@@ -70,7 +70,7 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
       }
       toast.success(
         status === "open"
-          ? "Alert reopened — the auditor owns it again."
+          ? "Alert reopened."
           : status === "resolved"
             ? "Alert accepted."
             : "Alert dismissed.",

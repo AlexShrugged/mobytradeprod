@@ -28,7 +28,7 @@ function reauditToast(reaudit: ReauditSummary | null | undefined): string {
     parts.push(
       `${reaudit.created} new finding${reaudit.created === 1 ? "" : "s"} (money checks re-enabled)`,
     );
-  return ` — ${parts.join(", ")}`;
+  return `; ${parts.join(", ")}`;
 }
 
 export function HtsReviewDialog({
@@ -125,7 +125,7 @@ function ReviewDialogBody({
         <DialogHeader>
           <div className="flex items-center justify-between gap-3 pr-6">
             <DialogTitle className="text-base">
-              {part.sku} — {part.name}
+              {part.sku} · {part.name}
             </DialogTitle>
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Button
@@ -155,8 +155,8 @@ function ReviewDialogBody({
           </div>
           <DialogDescription>
             {isConfirmation
-              ? "The classifier confirms the committed code. Acknowledge to record the check, or override manually."
-              : "Choose the code that should live on the catalog. Entry lines stay as filed — corrections re-audit them against the new expectation."}
+              ? "The classifier confirms the committed code. Acknowledge or override."
+              : "Choose the code for the catalog. Entry lines stay as filed."}
           </DialogDescription>
         </DialogHeader>
 
@@ -259,8 +259,8 @@ function ReviewDialogBody({
           />
           {manualCode.trim() !== "" ? (
             <p className="text-xs text-muted-foreground">
-              Codes outside the reference schedule are allowed — duty
-              expectations will be unavailable until the schedule covers them.
+              Codes outside the reference schedule are allowed; duty
+              expectations stay unavailable until the schedule covers them.
             </p>
           ) : null}
         </div>
@@ -289,8 +289,7 @@ function ReviewDialogBody({
             />
             <p className="text-xs text-muted-foreground">
               Leave blank if this code was always correct; set a date to
-              reclassify from that day forward — earlier entries keep the
-              prior code as their expectation.
+              reclassify from that day forward.
             </p>
           </div>
         </div>

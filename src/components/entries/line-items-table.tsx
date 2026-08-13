@@ -176,7 +176,7 @@ export function LineItemsTable({
                 <Badge
                   variant="outline"
                   className="w-fit border-amber-300 font-normal text-amber-700 dark:border-amber-800 dark:text-amber-400"
-                  title="The parts catalog classifies this part differently — review its classification"
+                  title="The parts catalog classifies this part differently. Review its classification."
                   asChild
                 >
                   <Link href={`/parts?review=${row.original.partId}`}>
@@ -201,7 +201,7 @@ export function LineItemsTable({
               <Badge
                 variant="outline"
                 className="w-fit border-violet-300 font-normal text-violet-700 dark:border-violet-800 dark:text-violet-400"
-                title="Filed under the classification of its day; the part has since been reclassified — duty may be retroactively recoverable"
+                title="Filed under the classification of its day; the part has since been reclassified. Duty may be recoverable."
               >
                 now {row.original.catalogHtsCodeCurrent}
               </Badge>
@@ -228,7 +228,7 @@ export function LineItemsTable({
         header: "Supplier",
         cell: ({ row }) =>
           row.original.supplierName ? (
-            <span title="As declared on this entry line — one entry can span vendors">
+            <span title="As declared on this entry line">
               {row.original.supplierName}
             </span>
           ) : (

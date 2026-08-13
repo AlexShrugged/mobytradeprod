@@ -153,7 +153,7 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
   function approve() {
     if (!draft.effectiveDate && revision.changeType !== "end_measure") {
       toast.error(
-        "Confirm the effective date before approving — the feed never carries it.",
+        "Confirm the effective date before approving.",
       );
       return;
     }
@@ -221,7 +221,7 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
             <span className="font-mono font-semibold">{rateLabel(proposed)}</span>
             {proposed.rate === null && !proposed.exemption && proposed.rateText ? (
               <span className="ml-1.5 text-xs text-muted-foreground">
-                (non-ad-valorem — presence-only, amount not auto-checked)
+                (non-ad-valorem; presence-only, amount not auto-checked)
               </span>
             ) : null}
           </span>
@@ -336,7 +336,7 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
               ) : null}
             </div>
             <p className="text-xs text-muted-foreground">
-              Highlights and extraction suggestions are evidence only — nothing
+              Highlights and extraction suggestions are evidence only. Nothing
               applies until you confirm it below.
             </p>
           </div>

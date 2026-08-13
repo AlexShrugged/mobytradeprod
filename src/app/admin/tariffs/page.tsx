@@ -70,9 +70,7 @@ export default async function TariffReviewPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Changes to the Harmonized Tariff Schedule staged by the sync.
-          Nothing touches the duty math until a human approves and applies it
-          — Chapter 99 trade measures per revision, the base schedule per
-          release.
+          Nothing touches the duty math until a human approves and applies it.
         </p>
       </div>
 
@@ -101,7 +99,7 @@ export default async function TariffReviewPage() {
       {groups.length === 0 && adoptionGroups.length === 0 && baseReleases.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Nothing pending review — the reference matches the latest fetched
+            Nothing pending review. The reference matches the latest fetched
             release.
           </CardContent>
         </Card>
@@ -143,7 +141,7 @@ export default async function TariffReviewPage() {
         <CardContent>
           {announcements.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Nothing fetched yet — run a sync from Platform admin.
+              Nothing fetched yet. Run a sync from Platform admin.
             </p>
           ) : (
             <ul className="divide-y">

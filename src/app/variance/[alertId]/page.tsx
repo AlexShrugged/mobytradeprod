@@ -82,9 +82,9 @@ function ImpactText({
       )}
       title={
         direction === "recoverable"
-          ? "Overpaid — recoverable"
+          ? "Overpaid: recoverable"
           : direction === "exposure"
-            ? "Underpaid — exposure"
+            ? "Underpaid: exposure"
             : undefined
       }
     >
@@ -653,7 +653,7 @@ export default async function VarianceDetailPage({
               {muted("not expected")}
               {!c.dStr("stacking_reason") ? (
                 <span className="block text-xs font-normal text-muted-foreground">
-                  possible coverage gap — review
+                  possible coverage gap; review
                 </span>
               ) : null}
             </span>
@@ -879,7 +879,7 @@ export default async function VarianceDetailPage({
             <span>
               {muted("listed on a linked invoice")}
               <span className="block text-xs font-normal text-muted-foreground">
-                possible ingestion gap — review
+                possible ingestion gap; review
               </span>
             </span>
             {sourceCite(c)}
@@ -963,11 +963,13 @@ export default async function VarianceDetailPage({
           {line ? ` · line ${line.lineNumber}` : ""}
           {line?.sku ? ` · ${line.sku}` : ""}
           {entry.entryDate ? ` · filed ${formatDate(entry.entryDate)}` : ""}
-          {window.closed
+          {window.phase === "liquidated"
             ? " · liquidated"
-            : window.estDate
-              ? ` · est. liquidation ${formatDate(window.estDate)} · ${window.daysLeft}d left`
-              : ""}
+            : window.phase === "unsubmitted" && window.nextPhaseDate
+              ? ` · unsubmitted · editable without PSC until ${formatDate(window.nextPhaseDate)}`
+              : window.nextPhaseDate
+                ? ` · submitted · est. liquidation ${formatDate(window.nextPhaseDate)} · ${window.daysLeft}d left`
+                : ""}
         </p>
       </div>
 
@@ -1039,7 +1041,7 @@ export default async function VarianceDetailPage({
           </div>
           {!line ? (
             <p className="mt-3 text-sm text-muted-foreground">
-              The flagged line was re-ingested and no longer exists — showing
+              The flagged line was re-ingested and no longer exists; showing
               the facts the alert recorded when it fired.
             </p>
           ) : null}

@@ -204,7 +204,7 @@ function SourceCard({ source }: { source: IntegrationSource }) {
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent>Coming soon — schema seam ready</TooltipContent>
+            <TooltipContent>Coming soon</TooltipContent>
           </Tooltip>
           {source.status === "active" && (
             <Button
@@ -232,8 +232,7 @@ export function SourceCards({ sources }: { sources: IntegrationSource[] }) {
     return (
       <Card className="py-4">
         <CardContent className="px-4 text-sm text-muted-foreground">
-          No intake sources configured yet. Connected sources — document
-          inbox, broker SFTP, ERP — will appear here.
+          No intake sources configured yet.
         </CardContent>
       </Card>
     );

@@ -44,7 +44,7 @@ export const STUB_SUGGESTIONS: Record<string, StoryEntry> = {
         code: "8714.94.3080",
         confidence: 0.31,
         reason:
-          "The current catalog code covers brakes other than coaster brakes — defensible only if imported as mounted brake units.",
+          "The current catalog code covers brakes other than coaster brakes; defensible only if imported as mounted brake units.",
       },
     ],
   },
@@ -63,7 +63,7 @@ export const STUB_SUGGESTIONS: Record<string, StoryEntry> = {
   "EB-DSP-LCD": {
     outcome: "certain",
     reasoning:
-      "A backlit LCD display head unit is an indicator panel incorporating liquid crystal devices — squarely 8531.20.0040. The committed catalog code is correct.",
+      "A backlit LCD display head unit is an indicator panel incorporating liquid crystal devices, squarely 8531.20.0040. The committed catalog code is correct.",
     candidates: [
       {
         code: "8531.20.0040",
@@ -76,7 +76,7 @@ export const STUB_SUGGESTIONS: Record<string, StoryEntry> = {
   "EB-CTRL-V2": {
     outcome: "ambiguous",
     reasoning:
-      "A sine-wave motor controller could be a static converter (8504.40), a programmable control panel (8537.10), or an electronic assembly (8542.31) depending on whether the inverter function or the control function predominates. Needs a human call — a CROSS ruling on e-bike controllers would settle it.",
+      "A sine-wave motor controller could be a static converter (8504.40), a programmable control panel (8537.10), or an electronic assembly (8542.31) depending on whether the inverter function or the control function predominates. Needs a human call; a CROSS ruling on e-bike controllers would settle it.",
     candidates: [
       {
         code: "8537.10.9170",
@@ -88,7 +88,7 @@ export const STUB_SUGGESTIONS: Record<string, StoryEntry> = {
         code: "8504.40.9550",
         confidence: 0.41,
         reason:
-          "The current catalog code — defensible if the DC-AC inverter function predominates.",
+          "The current catalog code; defensible if the DC-AC inverter function predominates.",
       },
       {
         code: "8542.31.0001",

@@ -18,7 +18,7 @@ export async function getProcessor(db: DbClient): Promise<DocumentProcessor> {
   if (process.env.REDUCTO_API_KEY) return new ReductoDocumentProcessor();
   if (isProdRuntime()) {
     throw new Error(
-      "REDUCTO_API_KEY is required on Vercel — refusing the stub document processor.",
+      "REDUCTO_API_KEY is required on Vercel; refusing the stub document processor.",
     );
   }
   return new StubDocumentProcessor(await loadStubContext(db));

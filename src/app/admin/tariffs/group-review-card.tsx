@@ -120,7 +120,7 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
   function approve() {
     if (undatedIncluded > 0 && !defaultEffectiveDate) {
       toast.error(
-        `${undatedIncluded} included code(s) have no effective date — enter them per row, set the default below, or uncheck them for individual review. The feed never carries dates.`,
+        `${undatedIncluded} included code(s) have no effective date. Enter dates per row, set the default below, or uncheck them.`,
       );
       return;
     }
@@ -214,7 +214,7 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
                           className="text-muted-foreground"
                           title={m.extraction.countries.evidence ?? undefined}
                         >
-                          all — suggested {m.extraction.countries.value.join(", ")} (
+                          all; suggested {m.extraction.countries.value.join(", ")} (
                           {Math.round(m.extraction.countries.confidence * 100)}%)
                         </span>
                       ) : (

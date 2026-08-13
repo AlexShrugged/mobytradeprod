@@ -95,7 +95,7 @@ export function AlertActions({
     try {
       await Promise.all(ids.map((id) => patchStatus(id, next)));
       if (next === "open") {
-        toast.success("Variance reopened — the auditor owns it again.", {
+        toast.success("Variance reopened.", {
           richColors: false,
         });
         router.refresh();

@@ -21,7 +21,7 @@ export function DocumentRail({ documents }: { documents: EntryDocument[] }) {
             target="_blank"
             rel="noopener"
             className="min-w-0 flex-1"
-            title={`${doc.created ? "Created this record" : "References this record"} — open ${doc.fileName}`}
+            title={`${doc.created ? "Created this record" : "References this record"}. Open ${doc.fileName}`}
           >
             <span className="block truncate text-sm font-medium group-hover:underline">
               {doc.fileName}

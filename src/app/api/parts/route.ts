@@ -23,7 +23,7 @@ const bodySchema = z
       b.vendorName?.trim() || (b.countryOfOrigin == null && b.unitCost == null),
     {
       message:
-        "Origin and cost describe a vendor source — name the vendor they come from.",
+        "Name the vendor to set origin and cost.",
     },
   );
 
