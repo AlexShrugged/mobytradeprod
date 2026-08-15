@@ -23,6 +23,7 @@ import {
   HTS_SEED,
   STACKING_SEED,
 } from "../src/lib/db/seed-data/tariff";
+import { ADCVD_ORDER_SEED } from "../src/lib/db/seed-data/adcvd-orders";
 import { buildStory, VENDOR_SEED } from "../src/lib/db/seed-data/story";
 import type { DocLinkSeed } from "../src/lib/db/seed-data/story";
 import { normalizeHts } from "../src/lib/duty/calculator";
@@ -71,6 +72,9 @@ async function main() {
 
   // ------------------------------------------------------------- wipe
   // Children first, in FK order. Every new table must be added here.
+  await db.delete(schema.analysisFindings);
+  await db.delete(schema.analysisRuns);
+  await db.delete(schema.adcvdOrders);
   await db.delete(schema.auditAlerts);
   await db.delete(schema.entryLineCharges);
   await db.delete(schema.entryLineItems);
@@ -206,6 +210,10 @@ async function main() {
   );
 
   await db.insert(schema.stackingRules).values(STACKING_SEED);
+
+  // AD/CVD order corpus — global reference context for the AI analyst
+  // (never an input to deterministic duty math).
+  await db.insert(schema.adcvdOrders).values(ADCVD_ORDER_SEED);
 
   // ------------------------------------------------ integration sources
   const sourceIdByKind: Record<string, string> = {};
@@ -790,6 +798,15 @@ async function main() {
     "quantity_discrepancy:invoice_sku:EB-BAT-52V",
   ]);
 
+  // The analysis-defect entries (see seed-data/analysis-defects.ts) must be
+  // INVISIBLE to the deterministic engine — their defects live in fee
+  // bounds, document extracted_data, and the description-vs-code axis, which
+  // only the AI entry analyst reads. A key appearing here means a plant
+  // leaked into deterministic territory.
+  assertExactKeys("231-4501352-6", []);
+  assertExactKeys("231-4501358-3", []);
+  assertExactKeys("231-4501364-1", []);
+
   // -------------------------------------------------------------- summary
   const count = async (table: Parameters<typeof db.$count>[0]) => db.$count(table);
   const counts = {
@@ -820,6 +837,7 @@ async function main() {
     trade_measure_hts: await count(schema.tradeMeasureHts),
     hts_codes: await count(schema.htsCodes),
     stacking_rules: await count(schema.stackingRules),
+    adcvd_orders: await count(schema.adcvdOrders),
     audit_alerts: await count(schema.auditAlerts),
   };
   console.log("Seeded:", counts);

@@ -24,13 +24,21 @@ import {
 } from "@/lib/variance/window";
 import {
   getEntryDetail,
+  type AiFindingRow,
+  type EntryDetail,
   type EntryDocument,
   type LineItemDetail,
 } from "./entries";
 
-// Read-only projections over audit_alerts for the Variance queue and the
-// line-reconciliation page. Impact and windows are derived on read (never
-// stored); the auditor stays the sole writer of the alerts themselves.
+// Read-only projections over audit_alerts AND analysis_findings for the
+// Variance queue and the line-reconciliation pages. Impact and windows are
+// derived on read (never stored); the auditor stays the sole writer of the
+// alerts and analysis/service.ts of the findings. AI rows join the queue
+// under alertType "ai_<category>" — same grouping, filters, and decisions
+// as rule rows — with two deliberate differences: only NOVEL findings
+// enter (a corroboration's issue is already a rule row), and impact stays
+// null (the deterministic engine owns money math; the analyst only cites
+// it).
 
 export const DUTY_CHARGE_TYPES = new Set([
   "base_duty",
@@ -254,6 +262,56 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
     };
   });
 
+  // Novel AI findings ride the same queue. Impact stays null, so they sort
+  // into the zero-impact tail unless they share a line with a rule row —
+  // exactly where a human-triage queue wants uncosted claims.
+  const findings = await db.query.analysisFindings.findMany({
+    where: eq(schema.analysisFindings.orgId, orgId),
+    with: {
+      entry: {
+        with: { refundClaims: { columns: { liquidationDate: true } } },
+      },
+      lineItem: true,
+    },
+  });
+  for (const f of findings) {
+    const related = Array.isArray(f.relatedAlertKeys)
+      ? (f.relatedAlertKeys as string[])
+      : [];
+    if (related.length > 0) continue;
+    const entryStatus = deriveEntryStatus(f.entry.refundClaims, today);
+    rows.push({
+      alertId: f.id,
+      alertKey: f.findingKey,
+      alertType: `ai_${f.category}`,
+      status: f.status,
+      severity: f.severity,
+      label: f.title,
+      message: f.title,
+      details: {
+        line_number: f.lineNumber,
+        confidence: Number(f.confidence),
+        explanation: f.explanation,
+        suggested_action: f.suggestedAction,
+      },
+      entryId: f.entryId,
+      entryNumber: f.entry.entryNumber,
+      entryDate: f.entry.entryDate,
+      entryStatus,
+      lineItemId: f.lineItemId,
+      lineNumber: f.lineItem?.lineNumber ?? f.lineNumber,
+      sku: f.lineItem?.sku ?? null,
+      description: f.lineItem?.description ?? null,
+      partId: f.lineItem?.partId ?? null,
+      declaredHts: f.lineItem?.htsCode ?? null,
+      catalogHts: null,
+      impactCents: null,
+      direction: null,
+      window: liquidationWindow(f.entry.entryDate, entryStatus, today),
+      href: f.lineItemId ? `/variance/${f.id}` : `/entries/${f.entryId}`,
+    });
+  }
+
   // Money first (nulls last), then severity, then a stable entry/line order.
   rows.sort((x, y) => {
     const ax = x.impactCents === null ? -1 : Math.abs(x.impactCents);
@@ -419,37 +477,9 @@ export async function getVarianceDetail(
   // queue's grouped row. Raw impacts throughout — the navigator card folds
   // rate/amount twins into one unit (pairSiblingAlerts) and shows the
   // dollars once per unit, so no per-row blanking is needed here.
-  const lineAlerts = alert.lineItemId
-    ? detail.alerts.filter((a) => a.lineItemId === alert.lineItemId)
+  const siblings: VarianceSiblingAlert[] = alert.lineItemId
+    ? buildLineSiblings(detail, alert.lineItemId, snapshot, ctx)
     : [];
-  const siblings: VarianceSiblingAlert[] = lineAlerts
-    .map((a) => ({
-      a,
-      impact: computeAlertImpact(
-        { alertType: a.alertType, details: a.details },
-        snapshot,
-        ctx,
-      ),
-    }))
-    .sort((x, y) =>
-      compareSiblingAlerts(
-        { impactCents: x.impact.impactCents, severity: x.a.severity, alertKey: x.a.alertKey, status: x.a.status },
-        { impactCents: y.impact.impactCents, severity: y.a.severity, alertKey: y.a.alertKey, status: y.a.status },
-      ),
-    )
-    .map(({ a, impact: sibImpact }) => ({
-      id: a.id,
-      alertKey: a.alertKey,
-      alertType: a.alertType,
-      severity: a.severity,
-      label: a.label,
-      message: a.message,
-      status: a.status,
-      resolvedAt: a.resolvedAt,
-      impactCents: sibImpact.impactCents,
-      direction: sibImpact.direction,
-      details: a.details,
-    }));
 
   // The duty stack under the catalog code: the as-of code for a
   // discrepancy, the current window's code for a reclassified line (what
@@ -458,7 +488,7 @@ export async function getVarianceDetail(
   // diff table renders every issue's rows at once.
   let catalogExpected: VarianceCatalogExpected | null = null;
   const htsIssueType =
-    [alert.alertType, ...lineAlerts.map((a) => a.alertType)].find(
+    [alert.alertType, ...siblings.map((s) => s.alertType)].find(
       (t) => t === "hts_discrepancy" || t === "hts_reclassified",
     ) ?? null;
   const wantsCatalogExpected =
@@ -564,6 +594,153 @@ export async function getVarianceDetail(
     catalogExpected,
     documents: detail.documents,
     invoices,
+    siblings,
+  };
+}
+
+// -------------------------------------------------------------- AI detail
+
+/** Every issue on one line — rule alerts AND novel AI findings — as
+ *  navigator-card items in compareSiblingAlerts order, so both detail pages
+ *  show one complete line reconciliation. Corroborating AI findings stay
+ *  out: their issue is already a rule row. */
+function buildLineSiblings(
+  detail: EntryDetail,
+  lineItemId: string,
+  snapshot: ImpactLineSnapshot | null,
+  ctx: ImpactContext,
+): VarianceSiblingAlert[] {
+  const alertItems: VarianceSiblingAlert[] = detail.alerts
+    .filter((a) => a.lineItemId === lineItemId)
+    .map((a) => {
+      const impact = computeAlertImpact(
+        { alertType: a.alertType, details: a.details },
+        snapshot,
+        ctx,
+      );
+      return {
+        id: a.id,
+        alertKey: a.alertKey,
+        alertType: a.alertType,
+        severity: a.severity,
+        label: a.label,
+        message: a.message,
+        status: a.status,
+        resolvedAt: a.resolvedAt,
+        impactCents: impact.impactCents,
+        direction: impact.direction,
+        details: a.details,
+      };
+    });
+  const findingItems: VarianceSiblingAlert[] = detail.aiFindings
+    .filter(
+      (f) => f.lineItemId === lineItemId && f.relatedAlertKeys.length === 0,
+    )
+    .map((f) => ({
+      id: f.id,
+      alertKey: f.findingKey,
+      alertType: f.alertType,
+      severity: f.severity,
+      label: f.title,
+      message: f.title,
+      status: f.status,
+      resolvedAt: f.resolvedAt,
+      impactCents: null,
+      direction: null,
+      details: {
+        confidence: f.confidence,
+        explanation: f.explanation,
+        suggested_action: f.suggestedAction,
+      },
+    }));
+  return [...alertItems, ...findingItems].sort(compareSiblingAlerts);
+}
+
+export type AiVarianceDetail = {
+  finding: AiFindingRow;
+  analyzedAt: Date | null;
+  model: string | null;
+  entry: {
+    id: string;
+    entryNumber: string;
+    entryDate: string | null;
+    status: string;
+    portOfEntry: string | null;
+  };
+  window: LiquidationWindow;
+  /** The flagged 7501 line with its full read-side expectations; null for
+   *  entry-level findings or re-ingested-away lines. */
+  line: LineItemDetail | null;
+  documents: EntryDocument[];
+  siblings: VarianceSiblingAlert[];
+};
+
+/** Detail payload for /variance/[id] when the id is an analysis finding —
+ *  the reconciliation page's AI variant. */
+export async function getAiVarianceDetail(
+  findingId: string,
+): Promise<AiVarianceDetail | null> {
+  const orgId = await getCurrentOrgId();
+
+  const finding = await db.query.analysisFindings.findFirst({
+    where: and(
+      eq(schema.analysisFindings.id, findingId),
+      eq(schema.analysisFindings.orgId, orgId),
+    ),
+    with: {
+      lineItem: {
+        with: {
+          part: { with: { classifications: true } },
+          charges: true,
+        },
+      },
+      run: true,
+    },
+  });
+  if (!finding) return null;
+
+  const ref = await getReferenceDataForOrg();
+  const [detail, shipmentLinks] = await Promise.all([
+    getEntryDetail(finding.entryId, ref),
+    db.query.entryShipments.findMany({
+      where: eq(schema.entryShipments.entryId, finding.entryId),
+      with: { shipment: true },
+    }),
+  ]);
+  if (!detail) return null;
+  const row = detail.aiFindings.find((f) => f.id === finding.id);
+  if (!row) return null;
+
+  const line = finding.lineItemId
+    ? (detail.lineItems.find((li) => li.id === finding.lineItemId) ?? null)
+    : null;
+  const snapshot = snapshotOf(finding.lineItem, detail.entryDate);
+  const ctx: ImpactContext = {
+    ref,
+    entryDate: detail.entryDate,
+    sail: resolveSailInfo(shipmentLinks.map((l) => l.shipment)),
+    entryTrusted: !detail.alerts.some(
+      (a) => a.status === "open" && a.alertType === "data_unreconciled",
+    ),
+  };
+  const siblings = finding.lineItemId
+    ? buildLineSiblings(detail, finding.lineItemId, snapshot, ctx)
+    : [];
+
+  return {
+    finding: row,
+    analyzedAt: finding.run?.finishedAt ?? null,
+    model: finding.run?.model ?? null,
+    entry: {
+      id: detail.id,
+      entryNumber: detail.entryNumber,
+      entryDate: detail.entryDate,
+      status: detail.status,
+      portOfEntry: detail.portOfEntry,
+    },
+    window: liquidationWindow(detail.entryDate, detail.status, todayIso()),
+    line,
+    documents: detail.documents,
     siblings,
   };
 }

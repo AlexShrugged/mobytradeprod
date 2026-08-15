@@ -179,6 +179,20 @@ const ENTRY_LINE_ITEM_SCHEMA = {
         "99 additional duty, MPF, HMF, AD/CVD.",
       items: ENTRY_CHARGE_SCHEMA,
     },
+    adcvd_case_number: {
+      type: ["string", "null"],
+      description:
+        "The antidumping or countervailing duty case number declared for " +
+        "this line, formatted like A-570-121 (AD) or C-570-122 (CVD). Null " +
+        "when the line declares no AD/CVD case.",
+    },
+    manufacturer_id: {
+      type: ["string", "null"],
+      description:
+        "The manufacturer identification code (MID) for this line — a " +
+        "constructed code like CNSHEVOL123SHE. Extract the code itself, not " +
+        "the manufacturer's name.",
+    },
   },
   required: ["hts_code", "entered_value", "charges"],
 } as const;
@@ -227,6 +241,30 @@ const PORT_ENTRY_SCHEMA = {
     total_duty: money("Total duty from the header (all duty, excluding MPF/HMF)"),
     mpf_amount: money("Total merchandise processing fee"),
     hmf_amount: money("Total harbor maintenance fee"),
+    adcvd_case_numbers: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Every distinct AD/CVD case number appearing anywhere on the entry " +
+        "(header or lines), formatted like A-570-121 / C-570-122. Empty " +
+        "when the entry declares none.",
+    },
+    bond_type: {
+      type: ["string", "null"],
+      description:
+        "The bond type as shown (a code or label: continuous, single " +
+        "transaction, none/government).",
+    },
+    surety_number: {
+      type: ["string", "null"],
+      description: "The surety company code, when the form shows one.",
+    },
+    related_party: {
+      type: ["boolean", "null"],
+      description:
+        "Whether the importer declares a related-party transaction with " +
+        "the seller. Null when the form doesn't answer the question.",
+    },
     line_items: {
       type: "array",
       description:
@@ -269,6 +307,16 @@ const SHIPMENT_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description: "Purchase order numbers referenced on the document.",
+    },
+    shipper_name: {
+      type: ["string", "null"],
+      description:
+        "The shipper/consignor named on the document — the party tendering " +
+        "the goods, which may differ from the commercial seller.",
+    },
+    consignee_name: {
+      type: ["string", "null"],
+      description: "The consignee named on the document.",
     },
   },
   required: ["bill_of_lading"],
@@ -332,6 +380,17 @@ const COMMERCIAL_INVOICE_SCHEMA = {
       type: ["string", "null"],
       description: "Incoterms and named place, e.g. 'FOB Yantian'.",
     },
+    payment_terms: {
+      type: ["string", "null"],
+      description:
+        "Payment terms as printed, e.g. 'T/T 30 days' or 'L/C at sight'.",
+    },
+    related_party: {
+      type: ["boolean", "null"],
+      description:
+        "Whether the invoice states the buyer and seller are related " +
+        "parties. Null when it doesn't say.",
+    },
     line_items: {
       type: "array",
       items: {
@@ -359,6 +418,19 @@ const COMMERCIAL_INVOICE_SCHEMA = {
           quantity: { type: ["number", "null"] },
           unit_price: money("Per-unit price"),
           total_price: money("Extended line total"),
+          adcvd_case_number: {
+            type: ["string", "null"],
+            description:
+              "The AD/CVD case number printed for this line, formatted like " +
+              "A-570-121 / C-570-122. Null when the invoice shows none.",
+          },
+          manufacturer_name: {
+            type: ["string", "null"],
+            description:
+              "The manufacturer/producer named for this line when it " +
+              "differs from the invoice's seller. Null when the invoice " +
+              "names no separate producer.",
+          },
         },
         required: ["total_price"],
       },

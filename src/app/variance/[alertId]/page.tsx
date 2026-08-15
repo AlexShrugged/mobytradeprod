@@ -24,7 +24,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { DUTY_CHARGE_TYPES, getVarianceDetail } from "@/lib/db/queries/variance";
+import { AiVarianceDetailView } from "@/components/variance/ai-variance-detail";
+import {
+  DUTY_CHARGE_TYPES,
+  getAiVarianceDetail,
+  getVarianceDetail,
+} from "@/lib/db/queries/variance";
 import {
   formatCents,
   formatDate,
@@ -128,7 +133,14 @@ export default async function VarianceDetailPage({
   // the entry rather than the variance queue.
   const fromEntry = (await searchParams).from === "entry";
   const detail = await getVarianceDetail(alertId);
-  if (!detail) notFound();
+  if (!detail) {
+    // Not an audit alert: the id may be an AI analysis finding — same
+    // route, so mixed lines hop between rule and AI issues seamlessly.
+    const ai = await getAiVarianceDetail(alertId);
+    if (!ai) notFound();
+    if (ai.finding.lineItemId === null) redirect(`/entries/${ai.entry.id}`);
+    return <AiVarianceDetailView detail={ai} fromEntry={fromEntry} />;
+  }
   // Entry-scoped variances (no line) reconcile on the entry page itself.
   if (detail.alert.lineItemId === null) redirect(`/entries/${detail.entry.id}`);
 

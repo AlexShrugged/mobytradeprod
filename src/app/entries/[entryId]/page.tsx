@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { AiAnalysisCard } from "@/components/entries/ai-analysis-card";
 import { AlertList } from "@/components/entries/alert-list";
 import { DutiesPopover } from "@/components/entries/duties-popover";
 import { LineItemsTable } from "@/components/entries/line-items-table";
@@ -64,7 +65,15 @@ export default async function EntryDetailPage({
   const entry = await getEntryDetail(entryId);
   if (!entry) notFound();
 
-  const openAlertCount = entry.alerts.filter((a) => a.status === "open").length;
+  // Open variances = open rule alerts + open NOVEL AI findings, matching
+  // the variance queue (corroborations ride their rule row).
+  const openNovelFindings = entry.aiFindings.filter(
+    (f) => f.status === "open" && f.relatedAlertKeys.length === 0,
+  );
+  const openRuleAlertCount = entry.alerts.filter(
+    (a) => a.status === "open",
+  ).length;
+  const openAlertCount = openRuleAlertCount + openNovelFindings.length;
   const duty = centsOf(entry.totalDuty);
   const base = centsOf(entry.totalBaseDuty);
   const breakdownTotal = entry.authorityBreakdown.reduce(
@@ -84,6 +93,26 @@ export default async function EntryDetailPage({
   for (const a of entry.alerts) {
     if (a.status !== "open" || a.lineNumber === null) continue;
     (openAlertsByLineNumber[a.lineNumber] ??= []).push(a);
+  }
+  // Line-scoped novel AI findings join their line's inline stack in AlertRow
+  // shape; their ids route to the reconciliation page's AI variant.
+  for (const f of openNovelFindings) {
+    if (f.lineNumber === null || f.lineItemId === null) continue;
+    (openAlertsByLineNumber[f.lineNumber] ??= []).push({
+      id: f.id,
+      alertKey: f.findingKey,
+      alertType: f.alertType,
+      severity: f.severity,
+      label: f.title,
+      message: f.title,
+      details: null,
+      status: f.status,
+      resolvedAt: f.resolvedAt,
+      lineItemId: f.lineItemId,
+      lineNumber: f.lineNumber,
+      partId: f.partId,
+      resolutionNote: f.resolutionNote,
+    });
   }
 
   return (
@@ -223,15 +252,21 @@ export default async function EntryDetailPage({
             <CardHeader>
               <CardTitle className="text-base">Audit findings</CardTitle>
               <CardDescription>
-                {openAlertCount === 0
+                {openRuleAlertCount === 0
                   ? "Nothing open. Declared charges match reference data."
-                  : `${openAlertCount} open finding${openAlertCount === 1 ? "" : "s"}: expected vs declared.`}
+                  : `${openRuleAlertCount} open finding${openRuleAlertCount === 1 ? "" : "s"}: expected vs declared.`}
               </CardDescription>
             </CardHeader>
             <CardContent>
               <AlertList alerts={entry.alerts} />
             </CardContent>
           </Card>
+
+          <AiAnalysisCard
+            entryId={entry.id}
+            findings={entry.aiFindings}
+            analysis={entry.analysis}
+          />
 
           {entry.refundClaims.length > 0 ? (
             <Card>

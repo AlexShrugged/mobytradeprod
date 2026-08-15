@@ -62,14 +62,34 @@ function stableStringify(v: unknown): string {
 const detailsEqual = (a: unknown, b: unknown): boolean =>
   stableStringify(a ?? null) === stableStringify(b ?? null);
 
-export async function auditEntry(
+/** The entry header facts alongside the rule-ready snapshot — what a reader
+ *  needs to reason about the entry beyond the rules' inputs (type 03 flags
+ *  AD/CVD, MPF/HMF are ingested facts the rules deliberately skip). */
+export type AuditableSnapshot = {
+  entry: {
+    id: string;
+    entryNumber: string;
+    entryDate: string | null;
+    entryType: string | null;
+    portOfEntry: string | null;
+    importerOfRecord: string | null;
+    totalEnteredValue: string | null;
+    totalDuty: string | null;
+    totalBaseDuty: string | null;
+    mpfAmount: string | null;
+    hmfAmount: string | null;
+  };
+  auditable: AuditableEntry;
+};
+
+/** Build the exact snapshot the auditor rules run against — exported so the
+ *  entry analyst reads byte-identical facts to a production audit. Read-only:
+ *  the auditor below remains the sole writer to audit_alerts. */
+export async function loadAuditableSnapshot(
   db: DbClient,
   orgId: string,
   entryId: string,
-  // Sweeps re-auditing many entries pass one preloaded ReferenceData so the
-  // reference tables aren't re-read per entry.
-  preloadedRef?: ReferenceData,
-): Promise<void> {
+): Promise<AuditableSnapshot | null> {
   const entry = await db.query.entries.findFirst({
     where: and(
       eq(schema.entries.id, entryId),
@@ -94,9 +114,8 @@ export async function auditEntry(
       entryShipments: { with: { shipment: true } },
     },
   });
-  if (!entry) return;
+  if (!entry) return null;
 
-  const ref = preloadedRef ?? (await loadReferenceDataForOrg(db, orgId));
   const auditable: AuditableEntry = {
     entryDate: entry.entryDate,
     totalEnteredValue: entry.totalEnteredValue,
@@ -112,6 +131,8 @@ export async function auditEntry(
       vendorId: li.vendorId,
       enteredValue: li.enteredValue,
       quantity: li.quantity,
+      description: li.description,
+      supplierName: li.supplierName,
       // Classification windows hold committed codes only (provisional codes
       // never create one), resolved AS OF the entry date so historical
       // entries audit against the code of their day; undated entries and
@@ -196,7 +217,37 @@ export async function auditEntry(
       .sort((a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber));
   }
 
-  const desired = computeEntryAlerts(auditable, ref);
+  return {
+    entry: {
+      id: entry.id,
+      entryNumber: entry.entryNumber,
+      entryDate: entry.entryDate,
+      entryType: entry.entryType,
+      portOfEntry: entry.portOfEntry,
+      importerOfRecord: entry.importerOfRecord,
+      totalEnteredValue: entry.totalEnteredValue,
+      totalDuty: entry.totalDuty,
+      totalBaseDuty: entry.totalBaseDuty,
+      mpfAmount: entry.mpfAmount,
+      hmfAmount: entry.hmfAmount,
+    },
+    auditable,
+  };
+}
+
+export async function auditEntry(
+  db: DbClient,
+  orgId: string,
+  entryId: string,
+  // Sweeps re-auditing many entries pass one preloaded ReferenceData so the
+  // reference tables aren't re-read per entry.
+  preloadedRef?: ReferenceData,
+): Promise<void> {
+  const snapshot = await loadAuditableSnapshot(db, orgId, entryId);
+  if (!snapshot) return;
+
+  const ref = preloadedRef ?? (await loadReferenceDataForOrg(db, orgId));
+  const desired = computeEntryAlerts(snapshot.auditable, ref);
 
   const existing = await db.query.auditAlerts.findMany({
     where: eq(schema.auditAlerts.entryId, entryId),

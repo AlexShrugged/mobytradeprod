@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, count, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 
 import type { OpenAlertCounts } from "@/components/entries/audit-badge";
 import { db, schema } from "@/lib/db";
@@ -151,7 +151,7 @@ export type EntryRow = {
 export async function getEntries(): Promise<EntryRow[]> {
   const orgId = await getCurrentOrgId();
 
-  const [rows, lineCounts, alertCounts, linkedClaims, sailWindows] =
+  const [rows, lineCounts, alertCounts, findingCounts, linkedClaims, sailWindows] =
     await Promise.all([
       db.query.entries.findMany({
         where: eq(schema.entries.orgId, orgId),
@@ -188,6 +188,26 @@ export async function getEntries(): Promise<EntryRow[]> {
           ),
         )
         .groupBy(schema.auditAlerts.entryId, schema.auditAlerts.severity),
+      // Open NOVEL AI findings count as variances too — corroborations
+      // would double-count the rule row they ride on.
+      db
+        .select({
+          entryId: schema.analysisFindings.entryId,
+          severity: schema.analysisFindings.severity,
+          value: count(),
+        })
+        .from(schema.analysisFindings)
+        .where(
+          and(
+            eq(schema.analysisFindings.orgId, orgId),
+            eq(schema.analysisFindings.status, "open"),
+            sql`${schema.analysisFindings.relatedAlertKeys} = '[]'::jsonb`,
+          ),
+        )
+        .groupBy(
+          schema.analysisFindings.entryId,
+          schema.analysisFindings.severity,
+        ),
       db.query.refundClaims.findMany({
         where: and(
           eq(schema.refundClaims.orgId, orgId),
@@ -211,6 +231,11 @@ export async function getEntries(): Promise<EntryRow[]> {
   for (const r of alertCounts) {
     const counts = alertsByEntry.get(r.entryId) ?? { ...EMPTY_ALERTS };
     counts[r.severity] = r.value;
+    alertsByEntry.set(r.entryId, counts);
+  }
+  for (const r of findingCounts) {
+    const counts = alertsByEntry.get(r.entryId) ?? { ...EMPTY_ALERTS };
+    counts[r.severity] += r.value;
     alertsByEntry.set(r.entryId, counts);
   }
   // When an entry has several claims, surface the stage of the largest one.
@@ -624,6 +649,51 @@ export type AlertRow = {
   resolutionNote: string | null;
 };
 
+export type AiFindingRow = {
+  id: string;
+  findingKey: string;
+  category: string;
+  /** "ai_" + category — the StatusBadge vocabulary shared with the queue. */
+  alertType: string;
+  severity: "error" | "warning" | "info";
+  title: string;
+  explanation: string;
+  suggestedAction: string;
+  confidence: number;
+  status: "open" | "resolved" | "dismissed";
+  resolvedAt: Date | null;
+  resolutionNote: string | null;
+  lineItemId: string | null;
+  lineNumber: number | null;
+  partId: string | null;
+  /** Deterministic alertKeys this finding corroborates; [] = novel. */
+  relatedAlertKeys: string[];
+  evidence: {
+    source: string;
+    documentId: string | null;
+    field: string | null;
+    quote: string;
+  }[];
+};
+
+export type EntryAnalysisState = {
+  /** Most recent terminal run; null when the analyst has never finished. */
+  latestRun: {
+    id: string;
+    status: "succeeded" | "failed";
+    analyst: string | null;
+    model: string | null;
+    summary: string | null;
+    error: string | null;
+    finishedAt: Date | null;
+  } | null;
+  /** A run is executing right now. */
+  running: boolean;
+  /** A tariff apply queued a re-analysis that has not started yet. A
+   *  manual Analyze claims the queued row, so the action stays available. */
+  queued: boolean;
+};
+
 export type RefundClaimDetail = {
   id: string;
   claimType: string;
@@ -672,6 +742,11 @@ export type EntryDetail = {
   sailBasis: SailBasis;
   lineItems: LineItemDetail[];
   alerts: AlertRow[];
+  /** Persisted AI analyst findings, open-first. Corroborations included —
+   *  the entry page shows the full report; the variance queue takes only
+   *  the novel ones. */
+  aiFindings: AiFindingRow[];
+  analysis: EntryAnalysisState;
   refundClaims: RefundClaimDetail[];
   shipments: {
     id: string;
@@ -727,6 +802,11 @@ export async function getEntryDetail(
         orderBy: (li, { asc }) => [asc(li.lineNumber)],
       },
       auditAlerts: true,
+      analysisFindings: true,
+      analysisRuns: {
+        orderBy: (r, { desc }) => [desc(r.createdAt)],
+        limit: 10,
+      },
       refundClaims: true,
       entryShipments: { with: { shipment: true } },
       entryPurchaseOrders: { with: { purchaseOrder: true } },
@@ -975,6 +1055,16 @@ export async function getEntryDetail(
     );
     const openAlerts: OpenAlertCounts = { ...EMPTY_ALERTS };
     for (const a of lineAlerts) openAlerts[a.severity] += 1;
+    // Open NOVEL AI findings count as line variances too (corroborations
+    // would double-count the rule row they ride on) — same rule as the
+    // variance queue.
+    for (const f of entry.analysisFindings) {
+      const related = Array.isArray(f.relatedAlertKeys)
+        ? (f.relatedAlertKeys as string[])
+        : [];
+      if (f.status === "open" && f.lineItemId === li.id && related.length === 0)
+        openAlerts[f.severity] += 1;
+    }
 
     const landed = computeActualLandedCost(
       {
@@ -1053,6 +1143,60 @@ export async function getEntryDetail(
         a.alertKey.localeCompare(b.alertKey),
     );
 
+  const aiFindings: AiFindingRow[] = entry.analysisFindings
+    .map((f) => ({
+      id: f.id,
+      findingKey: f.findingKey,
+      category: f.category,
+      alertType: `ai_${f.category}`,
+      severity: f.severity,
+      title: f.title,
+      explanation: f.explanation,
+      suggestedAction: f.suggestedAction,
+      confidence: Number(f.confidence),
+      status: f.status,
+      resolvedAt: f.resolvedAt,
+      resolutionNote: f.resolutionNote,
+      lineItemId: f.lineItemId,
+      lineNumber: f.lineItemId
+        ? (lineNumberById.get(f.lineItemId) ?? f.lineNumber)
+        : f.lineNumber,
+      partId: f.lineItemId ? (partIdByLineId.get(f.lineItemId) ?? null) : null,
+      relatedAlertKeys: Array.isArray(f.relatedAlertKeys)
+        ? (f.relatedAlertKeys as string[])
+        : [],
+      evidence: Array.isArray(f.evidence)
+        ? (f.evidence as AiFindingRow["evidence"])
+        : [],
+    }))
+    .sort(
+      (a, b) =>
+        (a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1) ||
+        SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
+        a.findingKey.localeCompare(b.findingKey),
+    );
+
+  // Latest terminal run headlines the AI card; any pending/running row
+  // means new results are on the way (manual run or tariff-apply queue).
+  const terminalRun = entry.analysisRuns.find(
+    (r) => r.status === "succeeded" || r.status === "failed",
+  );
+  const analysis: EntryAnalysisState = {
+    latestRun: terminalRun
+      ? {
+          id: terminalRun.id,
+          status: terminalRun.status as "succeeded" | "failed",
+          analyst: terminalRun.analyst,
+          model: terminalRun.model,
+          summary: terminalRun.summary,
+          error: terminalRun.error,
+          finishedAt: terminalRun.finishedAt,
+        }
+      : null,
+    running: entry.analysisRuns.some((r) => r.status === "running"),
+    queued: entry.analysisRuns.some((r) => r.status === "pending"),
+  };
+
   const refundClaims: RefundClaimDetail[] = entry.refundClaims.map((c) => {
     const totalCents =
       Math.round(Number(c.refundClassAmount) * 100) +
@@ -1117,6 +1261,8 @@ export async function getEntryDetail(
     sailBasis,
     lineItems,
     alerts,
+    aiFindings,
+    analysis,
     refundClaims,
     shipments: entry.entryShipments.map(({ shipment }) => ({
       id: shipment.id,

@@ -63,6 +63,16 @@ function toStr(v: unknown): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+/** true/false (or their common string spellings) → boolean; else null. */
+function toBool(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  if (s === "true" || s === "yes" || s === "y") return true;
+  if (s === "false" || s === "no" || s === "n") return false;
+  return null;
+}
+
 /** "$1,575.00", "25%", 1575 → number; anything unparseable → null. */
 function toNum(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -192,6 +202,8 @@ function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
       unit_value: toNum(line.unit_value),
       entered_value: toNum(line.entered_value) ?? 0,
       charges: asRecordArray(line.charges).map(mapCharge),
+      adcvd_case_number: toStr(line.adcvd_case_number),
+      manufacturer_id: toStr(line.manufacturer_id),
     }));
 
   // A 7501 prints a line's Chapter 99 supplemental codes (Section 301/232,
@@ -252,6 +264,10 @@ function mapPortEntry(data: Record<string, unknown>): PortEntryExtraction {
     mpf_amount: toNum(data.mpf_amount),
     hmf_amount: toNum(data.hmf_amount),
     line_items: mapLineItems(data.line_items),
+    adcvd_case_numbers: toStrArray(data.adcvd_case_numbers),
+    bond_type: toStr(data.bond_type),
+    surety_number: toStr(data.surety_number),
+    related_party: toBool(data.related_party),
   };
 }
 
@@ -280,6 +296,8 @@ function mapShipment(data: Record<string, unknown>): ShipmentExtraction {
     eta: toDate(data.eta),
     shipped_on_board_date: toDate(data.shipped_on_board_date),
     referenced_pos: toStrArray(data.referenced_pos),
+    shipper_name: toStr(data.shipper_name),
+    consignee_name: toStr(data.consignee_name),
   };
 }
 
@@ -320,6 +338,8 @@ function mapCommercialInvoice(
     currency: toStr(data.currency) ?? "USD",
     amount: toNum(data.amount),
     incoterms: toStr(data.incoterms),
+    payment_terms: toStr(data.payment_terms),
+    related_party: toBool(data.related_party),
     // Map before filtering so the position fallback for line_number
     // reflects the document, not the surviving subset.
     line_items: asRecordArray(data.line_items)
@@ -332,6 +352,8 @@ function mapCommercialInvoice(
         quantity: toNum(line.quantity),
         unit_price: toNum(line.unit_price),
         total_price: toNum(line.total_price),
+        adcvd_case_number: toStr(line.adcvd_case_number),
+        manufacturer_name: toStr(line.manufacturer_name),
       }))
       .filter(
         (line): line is typeof line & { total_price: number } =>

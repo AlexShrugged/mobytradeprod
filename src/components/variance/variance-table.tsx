@@ -170,6 +170,21 @@ function ExpectedVsFiled({ row }: { row: VarianceQueueRow }) {
     case "invoice_comparison_skipped":
       return <Muted>{str("currency") ?? "non-USD"} invoice, skipped</Muted>;
     default:
+      // AI findings carry a claim, not a two-sided diff — show the claim
+      // with its confidence.
+      if (row.alertType.startsWith("ai_")) {
+        const confidence = numV("confidence");
+        return (
+          <span className="inline-flex max-w-md items-baseline gap-2">
+            <span className="truncate font-normal">{row.message}</span>
+            {confidence !== null ? (
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                {Math.round(confidence * 100)}%
+              </span>
+            ) : null}
+          </span>
+        );
+      }
       return <Muted>{row.label}</Muted>;
   }
 }

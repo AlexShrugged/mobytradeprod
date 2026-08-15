@@ -81,6 +81,17 @@ const statusMeta: Record<string, { label: string; tone: Tone }> = {
   invoice_sku_missing: { label: "Not on invoice", tone: "blue" },
   invoice_comparison_skipped: { label: "CI skipped", tone: "neutral" },
   needs_review: { label: "Needs review", tone: "amber" },
+  // AI analyst findings ("ai_" + finding category). The AI prefix carries
+  // the evidence source, same as the CI prefix above; the rest names what
+  // disagrees.
+  ai_adcvd_discrepancy: { label: "AI AD/CVD", tone: "red" },
+  ai_fee_error: { label: "AI fee error", tone: "red" },
+  ai_coo_inconsistency: { label: "AI origin", tone: "amber" },
+  ai_classification_mismatch: { label: "AI HTS", tone: "amber" },
+  ai_valuation_concern: { label: "AI valuation", tone: "blue" },
+  ai_document_inconsistency: { label: "AI documents", tone: "amber" },
+  ai_duty_calculation: { label: "AI duty", tone: "red" },
+  ai_other: { label: "AI finding", tone: "violet" },
 };
 
 export function StatusBadge({

@@ -199,7 +199,9 @@ export function AlertActions({
           <Undo2 /> Undo
         </Button>
       ) : null}
-      {(alertType === "hts_discrepancy" || alertType === "hts_reclassified") &&
+      {(alertType === "hts_discrepancy" ||
+        alertType === "hts_reclassified" ||
+        alertType === "ai_classification_mismatch") &&
       partId ? (
         <Button variant="outline" size="sm" asChild>
           <Link

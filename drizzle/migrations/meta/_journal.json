@@ -78,6 +78,13 @@
       "when": 1786473905982,
       "tag": "0010_pale_millenium_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786822891687,
+      "tag": "0011_sturdy_skullbuster",
+      "breakpoints": true
     }
   ]
 }

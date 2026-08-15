@@ -129,6 +129,18 @@ describe("port_entry mapping", () => {
     expect(f.referenced_invoices).toEqual(["SVD-8841"]);
   });
 
+  it("captures the compliance fields (AD/CVD, bond, MID, related-party)", () => {
+    expect(f.adcvd_case_numbers).toEqual(["A-570-121"]);
+    expect(f.bond_type).toBe("continuous");
+    expect(f.surety_number).toBe("128");
+    // "No" on the form coerces to boolean false.
+    expect(f.related_party).toBe(false);
+    expect(f.line_items[0].adcvd_case_number).toBe("A-570-121");
+    expect(f.line_items[0].manufacturer_id).toBe("CNSHEVOL123SHE");
+    // Lines that show none map to null, not undefined.
+    expect(f.line_items[1].adcvd_case_number).toBeNull();
+  });
+
   it("defaults referenced_invoices to [] when the entry logs none", () => {
     const split = mapExtractToResult(
       "port_entry",
@@ -231,6 +243,13 @@ describe("shipment mapping", () => {
     ]);
   });
 
+  it("captures the shipper and consignee parties", () => {
+    const result = mapExtractToResult("shipment", SHIPMENT_RESPONSE);
+    if (result.docType !== "shipment") throw new Error("wrong docType");
+    expect(result.fields.shipper_name).toBe("Shenzhen Volt Dynamics");
+    expect(result.fields.consignee_name).toBe("Waystar Royco, Inc.");
+  });
+
   it("throws when the bill of lading is missing", () => {
     expect(() => mapExtractToResult("shipment", [{}])).toThrow(
       /bill of lading/,
@@ -288,6 +307,8 @@ describe("commercial_invoice mapping", () => {
       currency: "USD",
       amount: 41900,
       incoterms: "FOB Yantian",
+      payment_terms: "T/T 30 days",
+      related_party: false,
       line_items: [
         {
           line_number: 1,
@@ -299,6 +320,8 @@ describe("commercial_invoice mapping", () => {
           quantity: 100,
           unit_price: 312,
           total_price: 31200,
+          adcvd_case_number: "A-570-133",
+          manufacturer_name: "Dongguan PowerCell Manufacturing",
         },
         // The no-total line is dropped; the SKU-only line keeps its total
         // and falls back to its position for line_number.
@@ -311,6 +334,8 @@ describe("commercial_invoice mapping", () => {
           quantity: null,
           unit_price: null,
           total_price: 10700,
+          adcvd_case_number: null,
+          manufacturer_name: null,
         },
       ],
     });

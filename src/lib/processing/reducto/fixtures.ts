@@ -42,6 +42,11 @@ export const PORT_ENTRY_RESPONSE = [
     mpf_amount: cite(54.62),
     // Inferred value with no citation.
     hmf_amount: cite(19.69, false),
+    adcvd_case_numbers: [cite("A-570-121")],
+    bond_type: cite("continuous"),
+    surety_number: cite("128"),
+    // Stringified boolean as extraction sometimes prints it.
+    related_party: cite("No"),
     line_items: [
       {
         line_number: cite(1),
@@ -51,6 +56,8 @@ export const PORT_ENTRY_RESPONSE = [
         // Lowercase in the document — must uppercase (exact-match downstream).
         country_of_origin: cite("cn"),
         supplier_name: cite("Shenzhen Volt Dynamics"),
+        adcvd_case_number: cite("A-570-121"),
+        manufacturer_id: cite("CNSHEVOL123SHE"),
         quantity: cite(100),
         unit_value: cite("$105.00"),
         entered_value: cite("$10,500.00"),
@@ -209,6 +216,8 @@ export const SHIPMENT_RESPONSE = [
     eta: cite("2026-07-02T00:00:00Z"),
     shipped_on_board_date: cite("June 16, 2026"),
     referenced_pos: [cite("PO-2026-001"), cite("PO-2026-002")],
+    shipper_name: cite("Shenzhen Volt Dynamics"),
+    consignee_name: cite("Waystar Royco, Inc."),
   },
 ];
 
@@ -249,6 +258,8 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
     currency: cite("USD"),
     amount: cite("$41,900.00"),
     incoterms: cite("FOB Yantian"),
+    payment_terms: cite("T/T 30 days"),
+    related_party: cite(false),
     line_items: [
       {
         line_number: cite("1"),
@@ -260,6 +271,8 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
         quantity: cite("100"),
         unit_price: cite("$312.00"),
         total_price: cite("$31,200.00"),
+        adcvd_case_number: cite("A-570-133"),
+        manufacturer_name: cite("Dongguan PowerCell Manufacturing"),
       },
       // No extended total — dropped (nothing to reconcile against).
       { sku: cite("EB-CTRL-V2"), quantity: cite(10), unit_price: cite(42.3) },

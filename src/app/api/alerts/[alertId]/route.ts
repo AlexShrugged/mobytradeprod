@@ -10,9 +10,13 @@ const patchBody = z.object({
   resolutionNote: z.string().trim().min(1).optional(),
 });
 
-// Human resolution of an audit alert. The auditor never touches
-// resolved/dismissed rows, so this judgment survives re-ingestion; setting
-// an alert back to "open" hands it back to the auditor.
+// Human resolution of a variance-queue row. The id is usually an audit
+// alert; when it isn't, the AI analysis finding with that id decides here
+// instead — the reconciliation flow (auto-advance, undo) works whole lines
+// whose units mix both kinds, through this one endpoint. Writers never
+// touch resolved/dismissed rows, so the judgment survives re-ingestion and
+// re-analysis alike; setting a row back to "open" hands it back to its
+// writer.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ alertId: string }> },
@@ -42,7 +46,26 @@ export async function PATCH(
     ),
   });
   if (!alert) {
-    return NextResponse.json({ error: "Alert not found." }, { status: 404 });
+    const finding = await db.query.analysisFindings.findFirst({
+      where: and(
+        eq(schema.analysisFindings.id, alertId),
+        eq(schema.analysisFindings.orgId, orgId),
+      ),
+    });
+    if (!finding) {
+      return NextResponse.json({ error: "Alert not found." }, { status: 404 });
+    }
+    const [updated] = await db
+      .update(schema.analysisFindings)
+      .set({
+        status,
+        resolvedAt: status === "open" ? null : new Date(),
+        resolutionNote: status === "open" ? null : (resolutionNote ?? null),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.analysisFindings.id, finding.id))
+      .returning();
+    return NextResponse.json({ finding: updated });
   }
 
   const [updated] = await db

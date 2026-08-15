@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { getSuperAdminActorName, requireSuperAdmin } from "@/lib/admin";
+import {
+  processPendingAnalyses,
+  queueReanalysesAllOrgs,
+} from "@/lib/analysis/service";
 import { db, schema } from "@/lib/db";
 import { ApplyValidationError } from "@/lib/tariff-sync/apply";
 import { applyBaseRelease } from "@/lib/tariff-sync/base-apply";
@@ -113,11 +118,27 @@ export async function PATCH(
         force: body.force,
       });
 
-      return { status: 200 as const, action: "applied" as const, ...applied };
+      // Base windows changed globally — queue AI re-analyses transactionally
+      // alongside the re-audit applyBaseRelease already ran.
+      const analysesQueued = await queueReanalysesAllOrgs(tx);
+
+      return {
+        status: 200 as const,
+        action: "applied" as const,
+        ...applied,
+        analysesQueued,
+      };
     });
 
     if (result.status !== 200) {
       return NextResponse.json({ error: result.error }, { status: result.status });
+    }
+    if (result.action === "applied" && result.analysesQueued > 0) {
+      after(async () => {
+        await processPendingAnalyses(db).catch((err) => {
+          console.error("re-analysis after base apply failed:", err);
+        });
+      });
     }
     return NextResponse.json(result);
   } catch (err) {

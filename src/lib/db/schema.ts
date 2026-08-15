@@ -276,6 +276,33 @@ export const revisionChangeType = pgEnum("revision_change_type", [
   "stacking_change",
   "note_change",
 ]);
+// Must stay value-identical to findingCategorySchema in
+// src/lib/analysis/findings.ts (asserted by analysis/service.test.ts) —
+// the analyst's output enum IS this column's vocabulary.
+export const analysisFindingCategory = pgEnum("analysis_finding_category", [
+  "adcvd_discrepancy",
+  "fee_error",
+  "coo_inconsistency",
+  "classification_mismatch",
+  "valuation_concern",
+  "document_inconsistency",
+  "duty_calculation",
+  "other",
+]);
+export const analysisRunStatus = pgEnum("analysis_run_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+]);
+export const analysisRunTrigger = pgEnum("analysis_run_trigger", [
+  "manual",
+  "tariff_apply",
+]);
+export const adcvdOrderStatus = pgEnum("adcvd_order_status", [
+  "active",
+  "revoked",
+]);
 
 // ---------------------------------------------------------------- tenancy
 
@@ -1499,6 +1526,122 @@ export const scenarios = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------- AI analysis
+//
+// The AI entry analyst's persisted surface. analysis_runs is the work log —
+// and, via status "pending", the re-analysis queue tariff applies enqueue
+// into. analysis_findings mirrors audit_alerts' reconcile contract: rows
+// reconcile by finding_key, resolved/dismissed rows are never touched by a
+// re-analysis. src/lib/analysis/service.ts is the sole writer of both (the
+// findings PATCH route records human status decisions, exactly as the
+// alerts route does for audit_alerts).
+
+export const analysisRuns = pgTable(
+  "analysis_runs",
+  {
+    id: id(),
+    orgId: orgId(),
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => entries.id, { onDelete: "cascade" }),
+    status: analysisRunStatus("status").notNull().default("pending"),
+    trigger: analysisRunTrigger("trigger").notNull(),
+    /** "claude" | "stub" — null while pending. */
+    analyst: varchar("analyst", { length: 16 }),
+    model: varchar("model", { length: 64 }),
+    summary: text("summary"),
+    error: text("error"),
+    usage: jsonb("usage"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index("analysis_runs_entry_idx").on(t.entryId),
+    index("analysis_runs_org_status_idx").on(t.orgId, t.status),
+    // The queue holds at most one pending row per entry — a second tariff
+    // apply before processing must not double-enqueue.
+    uniqueIndex("analysis_runs_entry_pending_uq")
+      .on(t.entryId)
+      .where(sql`status = 'pending'`),
+  ],
+);
+
+export const analysisFindings = pgTable(
+  "analysis_findings",
+  {
+    id: id(),
+    orgId: orgId(),
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => entries.id, { onDelete: "cascade" }),
+    // Display metadata only — line scope is encoded in finding_key, so a
+    // decided finding survives wholesale line re-ingestion (set null, not
+    // cascade), mirroring audit_alerts.line_item_id.
+    lineItemId: uuid("line_item_id").references(() => entryLineItems.id, {
+      onDelete: "set null",
+    }),
+    findingKey: varchar("finding_key", { length: 160 }).notNull(),
+    category: analysisFindingCategory("category").notNull(),
+    severity: auditSeverity("severity").notNull(),
+    title: text("title").notNull(),
+    explanation: text("explanation").notNull(),
+    suggestedAction: text("suggested_action").notNull(),
+    /** 0..1, three decimals — the analyst's calibrated confidence. */
+    confidence: numeric("confidence", { precision: 4, scale: 3 }).notNull(),
+    lineNumber: integer("line_number"),
+    /** FindingEvidence[] (analysis/findings.ts) — verbatim quotes. */
+    evidence: jsonb("evidence").notNull(),
+    /** Deterministic alertKeys this finding corroborates; [] = novel.
+     *  Corroborations stay off the variance queue (the alert row already
+     *  carries the issue) and render as context on the entry page. */
+    relatedAlertKeys: jsonb("related_alert_keys").notNull(),
+    /** The run that last wrote this row's content. */
+    runId: uuid("run_id").references(() => analysisRuns.id, {
+      onDelete: "set null",
+    }),
+    status: auditAlertStatus("status").notNull().default("open"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolutionNote: text("resolution_note"),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("analysis_findings_entry_key_uq").on(t.entryId, t.findingKey),
+    index("analysis_findings_org_status_idx").on(t.orgId, t.status),
+    index("analysis_findings_entry_idx").on(t.entryId),
+  ],
+);
+
+// AD/CVD order corpus — global reference like hts_codes (no org_id).
+// Seeded as demo approximations (the same caveat as pre-certification
+// "SEED" base windows); a certified ingest corrects rows in place later.
+// Read by the analyst's get_adcvd_orders tool: scope summaries and deposit
+// rates are indicative context for the model, never inputs to deterministic
+// duty math.
+export const adcvdOrders = pgTable(
+  "adcvd_orders",
+  {
+    id: id(),
+    /** Commerce case number, e.g. A-570-121 (A- = AD, C- = CVD). */
+    caseNumber: varchar("case_number", { length: 20 }).notNull().unique(),
+    country: varchar("country", { length: 2 }).notNull(),
+    merchandise: varchar("merchandise", { length: 200 }).notNull(),
+    scopeSummary: text("scope_summary").notNull(),
+    /** Indicative HTS prefixes (dotted or bare digits); scope language
+     *  governs, so membership here is a signal, not a verdict. */
+    htsPrefixes: jsonb("hts_prefixes").notNull(),
+    status: adcvdOrderStatus("status").notNull().default("active"),
+    effectiveDate: date("effective_date"),
+    revokedDate: date("revoked_date"),
+    /** [{ producer: string | null, rate: number }] — decimal-fraction
+     *  cash-deposit rates; null producer = the all-others rate. */
+    depositRates: jsonb("deposit_rates").notNull(),
+    source: text("source"),
+    ...timestamps,
+  },
+  (t) => [index("adcvd_orders_country_idx").on(t.country)],
+);
+
 // ---------------------------------------------------------------- relations
 
 export const entriesRelations = relations(entries, ({ many }) => ({
@@ -1507,6 +1650,8 @@ export const entriesRelations = relations(entries, ({ many }) => ({
   entryInvoices: many(entryInvoices),
   lineItems: many(entryLineItems),
   auditAlerts: many(auditAlerts),
+  analysisFindings: many(analysisFindings),
+  analysisRuns: many(analysisRuns),
   refundClaims: many(refundClaims),
 }));
 
@@ -1848,6 +1993,31 @@ export const refundClaimsRelations = relations(refundClaims, ({ one }) => ({
   }),
 }));
 
+export const analysisFindingsRelations = relations(
+  analysisFindings,
+  ({ one }) => ({
+    entry: one(entries, {
+      fields: [analysisFindings.entryId],
+      references: [entries.id],
+    }),
+    lineItem: one(entryLineItems, {
+      fields: [analysisFindings.lineItemId],
+      references: [entryLineItems.id],
+    }),
+    run: one(analysisRuns, {
+      fields: [analysisFindings.runId],
+      references: [analysisRuns.id],
+    }),
+  }),
+);
+
+export const analysisRunsRelations = relations(analysisRuns, ({ one }) => ({
+  entry: one(entries, {
+    fields: [analysisRuns.entryId],
+    references: [entries.id],
+  }),
+}));
+
 export const integrationSourcesRelations = relations(
   integrationSources,
   ({ many }) => ({
@@ -1885,6 +2055,9 @@ export type StackingRule = typeof stackingRules.$inferSelect;
 export type EntryLineItem = typeof entryLineItems.$inferSelect;
 export type EntryLineCharge = typeof entryLineCharges.$inferSelect;
 export type AuditAlert = typeof auditAlerts.$inferSelect;
+export type AnalysisFinding = typeof analysisFindings.$inferSelect;
+export type AnalysisRun = typeof analysisRuns.$inferSelect;
+export type AdcvdOrder = typeof adcvdOrders.$inferSelect;
 export type RefundClaim = typeof refundClaims.$inferSelect;
 export type HtsClassification = typeof htsClassifications.$inferSelect;
 export type HtsClassificationCandidate =
@@ -1919,3 +2092,7 @@ export type PartHtsReviewStatusValue = NonNullable<Part["htsReviewStatus"]>;
 export type AnnouncementSourceValue = TariffAnnouncement["source"];
 export type AnnouncementStatusValue = TariffAnnouncement["status"];
 export type RevisionChangeTypeValue = MeasureRevision["changeType"];
+export type AnalysisFindingCategoryValue = AnalysisFinding["category"];
+export type AnalysisRunStatusValue = AnalysisRun["status"];
+export type AnalysisRunTriggerValue = AnalysisRun["trigger"];
+export type AdcvdOrderStatusValue = AdcvdOrder["status"];

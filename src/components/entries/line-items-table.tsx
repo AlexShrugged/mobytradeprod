@@ -424,11 +424,14 @@ export function LineItemsTable({
                                       {issue.filed}
                                     </span>
                                   </span>
-                                ) : (
+                                ) : a.message !== a.label ? (
+                                  // AI findings carry their whole claim in
+                                  // the label — repeating it here doubled
+                                  // the text.
                                   <span className="text-muted-foreground">
                                     {a.message}
                                   </span>
-                                )}
+                                ) : null}
                                 {u.consequence ? (
                                   <span className="text-muted-foreground">
                                     · duty amount follows

@@ -26,6 +26,14 @@ export type EntryLineItemExtraction = {
   unit_value: number | null;
   entered_value: number;
   charges: EntryChargeExtraction[];
+  // Compliance-critical facts below are document-only (no relational
+  // column): they live in extracted_data for the entry analyst. Optional so
+  // pre-widening writers (stub, fixtures) stay valid; the Reducto mapper
+  // always emits them.
+  /** AD/CVD case number declared for this line (e.g. A-570-121). */
+  adcvd_case_number?: string | null;
+  /** Manufacturer ID (MID) code for the line. */
+  manufacturer_id?: string | null;
 };
 
 export type PortEntryExtraction = {
@@ -45,6 +53,15 @@ export type PortEntryExtraction = {
   mpf_amount: number | null;
   hmf_amount: number | null;
   line_items: EntryLineItemExtraction[];
+  // Document-only compliance facts (see EntryLineItemExtraction note).
+  /** Every distinct AD/CVD case number appearing anywhere on the entry. */
+  adcvd_case_numbers?: string[];
+  /** Bond type code/label (continuous, single transaction, none). */
+  bond_type?: string | null;
+  /** Surety company code. */
+  surety_number?: string | null;
+  /** Importer/seller related-party declaration, when the form shows one. */
+  related_party?: boolean | null;
 };
 
 export type ShipmentExtraction = {
@@ -63,6 +80,10 @@ export type ShipmentExtraction = {
   // measures gate on (ETD is the flagged fallback).
   shipped_on_board_date: string | null;
   referenced_pos: string[];
+  // Document-only compliance facts (see EntryLineItemExtraction note). A
+  // shipper who isn't the invoice supplier is a classic origin red flag.
+  shipper_name?: string | null;
+  consignee_name?: string | null;
 };
 
 // PO lines carry line_number + description because the linker persists them
@@ -99,6 +120,12 @@ export type InvoiceLineItemExtraction = {
   quantity: number | null;
   unit_price: number | null;
   total_price: number;
+  // Document-only compliance facts (see EntryLineItemExtraction note).
+  /** AD/CVD case number printed on the line. */
+  adcvd_case_number?: string | null;
+  /** Manufacturer/producer named for the line when it differs from the
+   *  invoice's seller — the producer-of-record signal AD/CVD rates hang on. */
+  manufacturer_name?: string | null;
 };
 
 export type CommercialInvoiceExtraction = {
@@ -110,6 +137,11 @@ export type CommercialInvoiceExtraction = {
   amount: number | null;
   incoterms: string | null;
   line_items: InvoiceLineItemExtraction[];
+  // Document-only compliance facts (see EntryLineItemExtraction note).
+  /** Payment terms as printed (e.g. "T/T 30 days", "L/C at sight"). */
+  payment_terms?: string | null;
+  /** Buyer/seller related-party statement, when the invoice carries one. */
+  related_party?: boolean | null;
 };
 
 export type PackingListExtraction = {

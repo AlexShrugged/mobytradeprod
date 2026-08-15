@@ -50,6 +50,36 @@ through `duty/reference.ts`: the full loader is for schedule-wide scans only
 (classifier candidate pool, seed); request paths use the org-scoped loader
 (`queries/reference.ts`, React `cache()` per request).
 
+## AI analysis
+
+The AI entry analyst (`src/lib/analysis/`) investigates one entry at a time:
+Claude (`ANTHROPIC_API_KEY`, tuned by `ENTRY_ANALYST_MODEL`/`_DEADLINE_MS`/
+`_MAX_ITERATIONS`) drives eight zero-IO tools over a preloaded bundle
+(auditable snapshot, document extractions, catalog, AD/CVD order corpus). The
+deterministic engine stays the source of truth for money math and is exposed
+AS tools (get_expected_charges etc.); every finding carries verbatim evidence
+citations. `analysis/service.ts` is the sole writer of `analysis_runs` +
+`analysis_findings`: findings reconcile by stable finding_key
+(`ai:<category>:<line>`), resolved/dismissed rows are never touched, and only
+a clean Claude run reconciles — failed/degraded runs never clobber findings
+and the stub never persists at all (the analyze route 503s without a key).
+NOVEL findings (empty relatedAlertKeys) join the variance queue as
+`ai_<category>` rows with null impact (the engine owns dollars) and reconcile
+at `/variance/[id]` exactly like rule alerts (the alerts PATCH route decides
+both kinds, so mixed-line review flows work); corroborations render only on
+the entry page's AI card. Tariff approvals enqueue re-analysis (pending
+`analysis_runs` rows, one per previously analyzed entry) inside the apply
+transaction and drain the queue after the response (`after()`); with no API
+key the queue stays visibly queued rather than being stub-drained.
+`scripts/analyze-entry.ts` is the read-only eval harness (planted defects in
+`seed-data/analysis-defects.ts` — deterministic-rule-invisible by design, the
+seed asserts those entries audit clean). `scripts/hts-savings.ts` runs the
+part-scoped HTS-savings analyst (`analysis/savings/`, report-only — nothing
+persists). The `adcvd_orders` reference table is seed-approximated context
+for the analyst, never an input to deterministic duty math. The HTS
+classifier behind `classification/index.ts` is Claude-backed the same way
+(pool-preselected candidates, out-of-pool codes dropped, stub fallback).
+
 ## Architecture doctrines (carried from mobynew — do not violate)
 
 - **Derived data is never stored.** Expected charges, duty totals, refund stage, landed
@@ -59,8 +89,9 @@ through `duty/reference.ts`: the full loader is for schedule-wide scans only
   (including `entry_invoices`); `quotes/service.ts` owns quote tables + quote-sourced
   part writes; `classification/service.ts` owns the HTS projection; `audit/auditor.ts`
   owns `audit_alerts` (reconciled by stable `alert_key`; resolved/dismissed rows never
-  touched); `tariff-sync/apply.ts` owns Ch99 reference rows; `tariff-sync/base-apply.ts`
-  owns base-schedule windows. Both tariff writers are approval-gated: they refuse
+  touched); `analysis/service.ts` owns `analysis_runs` + `analysis_findings` (same
+  reconcile contract, keyed by `finding_key`); `tariff-sync/apply.ts` owns Ch99
+  reference rows; `tariff-sync/base-apply.ts` owns base-schedule windows. Both tariff writers are approval-gated: they refuse
   unless the matching review item is approved, and the sync/extractor/import paths
   write staging tables only.
 - **The commercial invoice is the only document class compared against entries for

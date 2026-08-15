@@ -61,6 +61,12 @@ export type AuditableLine = {
     vendorName: string;
     countryOfOrigin: string | null;
   }[];
+  /** Free-text goods description as declared on the 7501 line. No rule reads
+   *  it — loaded for readers (the entry analyst) that reason about
+   *  descriptions. Optional so rule-test fixtures stay untouched. */
+  description?: string | null;
+  /** Supplier name as declared on the line — same reader-only status. */
+  supplierName?: string | null;
   charges: AuditableCharge[];
 };
 

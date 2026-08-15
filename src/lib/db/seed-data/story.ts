@@ -39,6 +39,26 @@
 //   (missing_measure), and a CI that prints HS 8507.80 and origin VN
 //   (invoice_hts_mismatch + coo_discrepancy). Deliberately NO catalog
 //   hts_discrepancy — classification doubt would suspend the money rules.
+//
+// Planted ANALYSIS defects (invisible to the deterministic rules BY DESIGN —
+// the AI entry analyst's eval ground truth; see seed-data/analysis-defects.ts
+// and scripts/analyze-entry.ts). All three entries must audit deterministically
+// CLEAN — seed.ts asserts it:
+// Entry 231-4501352-6 — MPF below the statutory minimum: a tiny entry
+//   ($2,940) whose broker filed the uncapped ad valorem MPF ($10.18) instead
+//   of applying the per-entry minimum. The deterministic rules skip MPF/HMF
+//   entirely (ingested facts), so only the analyst can catch it.
+// Entry 231-4501358-3 — AD/CVD case-number discrepancy: a type 03 entry
+//   whose 7501 references case A-570-121 while the commercial invoice
+//   (INV-2026-215) prints A-570-133. Case numbers live only in document
+//   extracted_data (no column exists); the declared antidumping charge
+//   carries no Ch99 code, so the money rules skip it.
+// Entry 231-4501364-1 — description/HTS mismatch: line 2 is described as a
+//   lithium battery ("48V 10Ah Range-Extender Lithium Battery") but filed
+//   under the saddle code 8714.95.0000 (301 List 3 at 7.5% instead of the
+//   battery heading's 25%). The SKU (EB-PWR-EXT) is not in the catalog, so
+//   no catalog rule fires, and the charges are self-consistent under the
+//   declared code.
 
 import type {
   ChargeTypeValue,
@@ -419,6 +439,10 @@ export type InvoiceLineSeed = {
   unitPrice: number;
   /** Extended total; defaults to qty × unit — an override IS a plant. */
   totalPrice?: number;
+  /** AD/CVD case number as printed on the CI line. Document-only: it lands
+   *  in the CI's extracted_data (no invoice column exists) — the analysis
+   *  corpus, not the relational model. */
+  adcvdCaseNumber?: string;
 };
 
 export type InvoiceSeed = {
@@ -576,6 +600,16 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
      *  from THIS declared value — a mismatch is the hts_discrepancy rule's
      *  job, and the money rules skip a line with classification doubt. */
     declaredHts?: string;
+    /** A line whose SKU is NOT in the catalog: every declared fact is spelled
+     *  out here and the part lookup is skipped (part_id lands null, so no
+     *  catalog rule can fire). The analysis-defect entries use this. */
+    custom?: {
+      description: string;
+      htsCode: string;
+      coo: string;
+      supplier: string;
+      unitValue: number;
+    };
     mutate?: (charges: ChargeSeed[], enteredValue: number) => void;
   };
 
@@ -583,6 +617,8 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     entryNumber: string;
     entryDate: string;
     portOfEntry: string;
+    /** 7501 entry type; defaults to "01" (03 = AD/CVD). */
+    entryType?: string;
     totalRefund: number | null;
     hmf: boolean; // false = air entry, no harbor maintenance fee
     lines: LineSpec[];
@@ -709,6 +745,61 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         },
       ],
     },
+    // --------------------------- analysis-defect entries (see header) ----
+    // All three audit deterministically CLEAN — seed.ts asserts it. The
+    // defects live where only the AI analyst looks: fee bounds, document
+    // extracted_data, and the description-vs-code axis.
+    //
+    // MPF below the statutory minimum: the entry is small enough that the
+    // uncapped ad valorem MPF ($2,940 × 0.3464% = $10.18) lands under the
+    // per-entry minimum the broker should have applied. Every other seeded
+    // entry's nominal MPF sits safely inside the [min, max] window.
+    {
+      entryNumber: "231-4501352-6", entryDate: day(-45), portOfEntry: "Los Angeles, CA (2704)", totalRefund: null, hmf: true,
+      lines: [
+        { lineNumber: 1, sku: "EB-SDL-CMF", quantity: 300 },
+      ],
+    },
+    // AD/CVD case-number discrepancy: type 03, an antidumping charge with NO
+    // Chapter 99 code (the money rules skip codeless charges by design), and
+    // case numbers that disagree between the 7501 document (A-570-121) and
+    // the CI INV-2026-215 (A-570-133) — see the documents section.
+    {
+      entryNumber: "231-4501358-3", entryDate: day(-35), portOfEntry: "Long Beach, CA (2709)", entryType: "03", totalRefund: null, hmf: true,
+      lines: [
+        {
+          lineNumber: 1, sku: "EB-BAT-48V", quantity: 90,
+          mutate: (charges, enteredValue) => {
+            charges.push({
+              chargeType: "antidumping",
+              htsCode: null,
+              rate: 0.2547,
+              amount: round2(0.2547 * enteredValue),
+            });
+          },
+        },
+      ],
+    },
+    // Description/HTS mismatch: line 2's declared description is plainly a
+    // lithium battery, filed under the saddle code (301 List 3 at 7.5%
+    // instead of the battery heading's 25%). Off-catalog SKU, so no catalog
+    // rule can fire; charges are self-consistent under the declared code.
+    {
+      entryNumber: "231-4501364-1", entryDate: day(-28), portOfEntry: "Oakland, CA (2811)", totalRefund: null, hmf: true,
+      lines: [
+        { lineNumber: 1, sku: "EB-CTRL-V2", quantity: 150 },
+        {
+          lineNumber: 2, sku: "EB-PWR-EXT", quantity: 45,
+          custom: {
+            description: "48V 10Ah Range-Extender Lithium Battery",
+            htsCode: "8714.95.0000",
+            coo: "CN",
+            supplier: SHENZHEN,
+            unitValue: 96.0,
+          },
+        },
+      ],
+    },
   ];
 
   const DUTY_TYPES = new Set<ChargeTypeValue>([
@@ -721,12 +812,28 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
   const entries: EntrySeed[] = entrySpecs.map((es) => {
     const sums = { entered: 0, duty: 0, base: 0, mpf: 0, hmf: 0 }; // cents
     const lines: EntryLineSeed[] = es.lines.map((ls) => {
-      const p = part(ls.sku);
-      if (!p.htsCode) throw new Error(`entry line SKU ${ls.sku} has no HTS code`);
-      const source = primary(p);
-      const unitValue = ls.unitValue ?? Number(source.unitCost);
-      const declaredCoo = ls.coo ?? source.countryOfOrigin;
-      const declaredHts = ls.declaredHts ?? p.htsCode;
+      let unitValue: number;
+      let declaredCoo: string;
+      let declaredHts: string;
+      let supplierName: string;
+      let description: string;
+      if (ls.custom) {
+        // Off-catalog line: declared facts only, no part behind it.
+        unitValue = ls.custom.unitValue;
+        declaredCoo = ls.custom.coo;
+        declaredHts = ls.custom.htsCode;
+        supplierName = ls.custom.supplier;
+        description = ls.custom.description;
+      } else {
+        const p = part(ls.sku);
+        if (!p.htsCode) throw new Error(`entry line SKU ${ls.sku} has no HTS code`);
+        const source = primary(p);
+        unitValue = ls.unitValue ?? Number(source.unitCost);
+        declaredCoo = ls.coo ?? source.countryOfOrigin;
+        declaredHts = ls.declaredHts ?? p.htsCode;
+        supplierName = ls.supplier ?? source.vendor;
+        description = p.name;
+      }
       const enteredValue = round2(ls.quantity * unitValue);
       const charges = declaredCharges(declaredHts, declaredCoo, enteredValue, { hmf: es.hmf });
       ls.mutate?.(charges, enteredValue);
@@ -743,10 +850,10 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       return {
         lineNumber: ls.lineNumber,
         sku: ls.sku,
-        description: p.name,
+        description,
         htsCode: declaredHts,
         countryOfOrigin: declaredCoo,
-        supplierName: ls.supplier ?? source.vendor,
+        supplierName,
         quantity: ls.quantity,
         unitValue,
         enteredValue,
@@ -758,7 +865,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       entryNumber: es.entryNumber,
       entryDate: es.entryDate,
       portOfEntry: es.portOfEntry,
-      entryType: "01",
+      entryType: es.entryType ?? "01",
       totalRefund: es.totalRefund,
       lines,
       totals: {
@@ -885,6 +992,30 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         { lineNumber: 2, sku: "EB-CTRL-V2", description: "Sine-Wave Motor Controller V2", htsCode: "8504.40.9550", countryOfOrigin: "CN", quantity: 150, unitPrice: 43.1 },
       ],
     },
+    // The AD/CVD entry's CI: mirrors every declared fact (so the CI-vs-entry
+    // rules stay quiet) but prints case A-570-133 against the 7501's
+    // A-570-121 — the discrepancy lives only in the document corpus. The
+    // supplier's own order ref stands in for a PO we never ingested.
+    {
+      invoiceNumber: "INV-2026-215", poNumber: "SVD-SO-8841", supplierName: SHENZHEN,
+      invoiceDate: day(-37), currency: "USD", totalAmount: 28080.0,
+      incoterms: "FOB Yantian",
+      lines: [
+        { lineNumber: 1, sku: "EB-BAT-48V", description: "48V 14Ah Lithium Battery Pack", htsCode: "8507.60.0020", countryOfOrigin: "CN", quantity: 90, unitPrice: 312.0, adcvdCaseNumber: "A-570-133" },
+      ],
+    },
+    // The description/HTS entry's CI: mirrors the declared facts — including
+    // the battery description printed against the saddle code, corroborating
+    // what the entry line already says.
+    {
+      invoiceNumber: "INV-2026-221", poNumber: "SVD-SO-8907", supplierName: SHENZHEN,
+      invoiceDate: day(-30), currency: "USD", totalAmount: 10665.0,
+      incoterms: "FOB Yantian",
+      lines: [
+        { lineNumber: 1, sku: "EB-CTRL-V2", description: "Sine-Wave Motor Controller V2", htsCode: "8504.40.9550", countryOfOrigin: "CN", quantity: 150, unitPrice: 42.3 },
+        { lineNumber: 2, sku: "EB-PWR-EXT", description: "48V 10Ah Range-Extender Lithium Battery", htsCode: "8714.95.0000", countryOfOrigin: "CN", quantity: 45, unitPrice: 96.0 },
+      ],
+    },
   ];
 
   const entryInvoiceLinks: [string, string][] = [
@@ -894,6 +1025,8 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     [E(6), "INV-2026-198"],
     [E(7), "INV-8613"],
     [E(8), "INV-2026-207"],
+    [E(10), "INV-2026-215"],
+    [E(11), "INV-2026-221"],
   ];
 
   // -------------------------------------------------------------- refunds
@@ -1009,6 +1142,9 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     bols: string[],
     pos: string[],
     shipNos: number[],
+    // Extra 7501 fields (spread LAST so it can override, e.g. entry_type
+    // "03" plus adcvd_case_numbers on the AD/CVD entry).
+    extra: Record<string, unknown> = {},
   ): DocumentSeed => ({
     fileName: `entry-${en(n).entryNumber}.pdf`,
     docType: "port_entry",
@@ -1022,6 +1158,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       importer_of_record: ORG_SEED.importerOfRecord,
       referenced_bols: bols,
       referenced_pos: pos,
+      ...extra,
     },
     links: [
       { entityType: "entry", key: en(n).entryNumber, created: true },
@@ -1103,6 +1240,8 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         quantity: l.quantity,
         unit_price: l.unitPrice,
         total_price: l.totalPrice ?? round2(l.quantity * l.unitPrice),
+        // Document-only fact: no invoice column carries case numbers.
+        ...(l.adcvdCaseNumber ? { adcvd_case_number: l.adcvdCaseNumber } : {}),
       })),
     };
   };
@@ -1225,6 +1364,15 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     entryDoc(5, at(-54, 11, 0), ["YMLU4471933"], [P(5), P(6)], [5]),
     entryDoc(6, at(-23, 10, 15), ["HLCU2288411"], [P(7)], [6]),
     entryDoc(8, at(-17, 10, 0), ["MSCU7781245"], [P(11)], [9]),
+    // The analysis-defect entries' 7501s (no BOL/PO paper trail ingested).
+    // Entry 10's carries the type-03 override and the 7501-side case number
+    // that disagrees with its CI.
+    entryDoc(9, at(-44, 10, 0), [], [], []),
+    entryDoc(10, at(-34, 10, 0), [], [], [], {
+      entry_type: "03",
+      adcvd_case_numbers: ["A-570-121"],
+    }),
+    entryDoc(11, at(-27, 10, 0), [], [], []),
     ...packetDocuments,
     // Standalone commercial invoices — via the document inbox, a day or two
     // after their invoice dates.
@@ -1233,6 +1381,30 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     ciDoc("INV-2026-114", E(3), P(3), at(-112, 16, 0)),
     ciDoc("INV-2026-198", E(6), P(7), at(-26, 16, 0)),
     ciDoc("INV-2026-207", E(8), P(11), at(-19, 16, 0)),
+    // The analysis-defect CIs reference supplier order numbers we never
+    // ingested as POs — invoice + entry links only.
+    {
+      fileName: "invoice-inv-2026-215.pdf",
+      docType: "commercial_invoice",
+      sourceKind: "email_inbox",
+      uploadedAt: at(-36, 16, 0),
+      extractedData: ciExtraction("INV-2026-215"),
+      links: [
+        { entityType: "invoice", key: "INV-2026-215", created: true },
+        { entityType: "entry", key: E(10), created: false },
+      ],
+    },
+    {
+      fileName: "invoice-inv-2026-221.pdf",
+      docType: "commercial_invoice",
+      sourceKind: "email_inbox",
+      uploadedAt: at(-29, 16, 0),
+      extractedData: ciExtraction("INV-2026-221"),
+      links: [
+        { entityType: "invoice", key: "INV-2026-221", created: true },
+        { entityType: "entry", key: E(11), created: false },
+      ],
+    },
     // BOLs — via the broker SFTP feed, shortly after sailing.
     bolDoc(1, at(-189, 8, 0), [P(1)]),
     bolDoc(2, at(-159, 8, 0), [P(2), P(3)]),

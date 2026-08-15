@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { getSuperAdminActorName, requireSuperAdmin } from "@/lib/admin";
+import {
+  processPendingAnalyses,
+  queueReanalysesAllOrgs,
+} from "@/lib/analysis/service";
 import { sweepAuditsAllOrgs } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import {
@@ -183,16 +188,28 @@ export async function PATCH(
       // the reference change is global).
       const audit = await sweepAuditsAllOrgs(tx);
 
+      // AI findings persist too, but re-deriving them costs real model runs
+      // — queue them here (transactional) and process after the response.
+      const analysesQueued = await queueReanalysesAllOrgs(tx);
+
       return {
         status: 200 as const,
         action: "applied" as const,
         measureId: applied.measureId,
         audit,
+        analysesQueued,
       };
     });
 
     if (result.status !== 200) {
       return NextResponse.json({ error: result.error }, { status: result.status });
+    }
+    if (result.action === "applied" && result.analysesQueued > 0) {
+      after(async () => {
+        await processPendingAnalyses(db).catch((err) => {
+          console.error("re-analysis after tariff apply failed:", err);
+        });
+      });
     }
     return NextResponse.json(result);
   } catch (err) {
