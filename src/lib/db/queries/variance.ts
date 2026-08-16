@@ -293,6 +293,10 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
         confidence: Number(f.confidence),
         explanation: f.explanation,
         suggested_action: f.suggestedAction,
+        // The filed-vs-expected rows — fieldIssue() reads these, so the
+        // queue cell, inline line findings, and CSV all render AI rows
+        // through the same diff path as rule rows.
+        fields: Array.isArray(f.fields) ? f.fields : [],
       },
       entryId: f.entryId,
       entryNumber: f.entry.entryNumber,
@@ -651,6 +655,7 @@ function buildLineSiblings(
         confidence: f.confidence,
         explanation: f.explanation,
         suggested_action: f.suggestedAction,
+        fields: f.fields,
       },
     }));
   return [...alertItems, ...findingItems].sort(compareSiblingAlerts);

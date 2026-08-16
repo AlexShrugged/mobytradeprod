@@ -668,11 +668,15 @@ export type AiFindingRow = {
   partId: string | null;
   /** Deterministic alertKeys this finding corroborates; [] = novel. */
   relatedAlertKeys: string[];
+  /** Filed-vs-expected rows for the reconciliation field table. */
+  fields: { field: string; filed: string | null; expected: string | null }[];
   evidence: {
     source: string;
     documentId: string | null;
     field: string | null;
     quote: string;
+    /** Human sentence; absent on findings persisted before it existed. */
+    statement?: string;
   }[];
 };
 
@@ -1164,6 +1168,9 @@ export async function getEntryDetail(
       partId: f.lineItemId ? (partIdByLineId.get(f.lineItemId) ?? null) : null,
       relatedAlertKeys: Array.isArray(f.relatedAlertKeys)
         ? (f.relatedAlertKeys as string[])
+        : [],
+      fields: Array.isArray(f.fields)
+        ? (f.fields as AiFindingRow["fields"])
         : [],
       evidence: Array.isArray(f.evidence)
         ? (f.evidence as AiFindingRow["evidence"])

@@ -63,6 +63,7 @@ export type ExistingFindingRow = {
   suggestedAction: string;
   confidence: string;
   lineItemId: string | null;
+  fields: unknown;
   evidence: unknown;
   relatedAlertKeys: unknown;
 };
@@ -105,6 +106,7 @@ export function planFindingReconcile(
       ex.suggestedAction === d.finding.suggestedAction &&
       ex.confidence === confidenceString(d.finding.confidence) &&
       ex.lineItemId === d.lineItemId &&
+      stableStringify(ex.fields) === stableStringify(d.finding.fields) &&
       stableStringify(ex.evidence) === stableStringify(d.finding.evidence) &&
       stableStringify(ex.relatedAlertKeys) ===
         stableStringify(d.finding.relatedAlertKeys);
@@ -159,6 +161,7 @@ async function reconcileFindings(
         suggestedAction: finding.suggestedAction,
         confidence: confidenceString(finding.confidence),
         lineNumber: finding.lineNumber,
+        fields: finding.fields,
         evidence: finding.evidence,
         relatedAlertKeys: finding.relatedAlertKeys,
         runId,
@@ -175,6 +178,7 @@ async function reconcileFindings(
         suggestedAction: d.finding.suggestedAction,
         confidence: confidenceString(d.finding.confidence),
         lineItemId: d.lineItemId,
+        fields: d.finding.fields,
         evidence: d.finding.evidence,
         relatedAlertKeys: d.finding.relatedAlertKeys,
         runId,

@@ -12,12 +12,14 @@ const validFinding = {
   title: "MPF below statutory minimum",
   explanation: "Declared MPF of $10.18 is below the FY minimum.",
   lineNumber: null,
+  fields: [{ field: "MPF", filed: "$10.18", expected: "$33.58" }],
   evidence: [
     {
       source: "entry",
       documentId: null,
       field: "mpfAmount",
       quote: "10.18",
+      statement: "The entry declares MPF of $10.18.",
     },
   ],
   suggestedAction: "Confirm the broker applied the per-entry minimum.",
@@ -53,9 +55,27 @@ describe("findingsReportSchema", () => {
     expect(() =>
       findingSchema.parse({
         ...validFinding,
-        evidence: [{ source: "entry", documentId: null, field: null }],
+        evidence: [
+          { source: "entry", documentId: null, field: null, statement: "x" },
+        ],
       }),
     ).toThrow();
+  });
+
+  it("rejects evidence without a human statement", () => {
+    expect(() =>
+      findingSchema.parse({
+        ...validFinding,
+        evidence: [
+          { source: "entry", documentId: null, field: null, quote: "10.18" },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a pure observation with no field diff", () => {
+    const parsed = findingSchema.parse({ ...validFinding, fields: [] });
+    expect(parsed.fields).toEqual([]);
   });
 
   it("keeps 'other' as the escape-hatch category", () => {

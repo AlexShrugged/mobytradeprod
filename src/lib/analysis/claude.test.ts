@@ -18,8 +18,15 @@ const aiReport: FindingsReport = {
       title: "MPF below minimum",
       explanation: "Declared MPF is below the statutory minimum.",
       lineNumber: null,
+      fields: [{ field: "MPF", filed: "$34.64", expected: "$33.58" }],
       evidence: [
-        { source: "entry", documentId: null, field: "mpfAmount", quote: "34.64" },
+        {
+          source: "entry",
+          documentId: null,
+          field: "mpfAmount",
+          quote: "34.64",
+          statement: "The entry declares MPF of $34.64.",
+        },
       ],
       suggestedAction: "Verify with the broker.",
       confidence: 0.8,

@@ -220,13 +220,11 @@ export function AiAnalysisCard({
                 ? "Not analyzed yet."
                 : latestRun.status === "failed"
                   ? `Last run failed: ${latestRun.error ?? "unknown error"}`
-                  : `${latestRun.model ?? latestRun.analyst ?? "model"}${
-                      latestRun.finishedAt
-                        ? ` · ${formatDate(
-                            latestRun.finishedAt.toISOString().slice(0, 10),
-                          )}`
-                        : ""
-                    }`}
+                  : latestRun.finishedAt
+                    ? `Analyzed ${formatDate(
+                        latestRun.finishedAt.toISOString().slice(0, 10),
+                      )}`
+                    : "Analyzed"}
         </CardDescription>
         <CardAction>
           <Button

@@ -84,7 +84,28 @@ export function fieldIssue(a: {
         expected: "on a linked invoice",
         filed: "not on any linked invoice",
       };
-    default:
+    default: {
+      // AI findings carry their own filed-vs-expected rows in
+      // details.fields; the first row speaks for the finding wherever a
+      // single-line diff is wanted (queue cell, inline line findings, CSV).
+      if (a.alertType.startsWith("ai_") && Array.isArray(d.fields)) {
+        const first = (d.fields as unknown[])[0];
+        if (first && typeof first === "object") {
+          const f = first as {
+            field?: unknown;
+            filed?: unknown;
+            expected?: unknown;
+          };
+          if (typeof f.field === "string") {
+            return {
+              field: f.field,
+              expected: typeof f.expected === "string" ? f.expected : "—",
+              filed: typeof f.filed === "string" ? f.filed : "—",
+            };
+          }
+        }
+      }
       return null;
+    }
   }
 }

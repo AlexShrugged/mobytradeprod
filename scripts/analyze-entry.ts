@@ -133,9 +133,13 @@ function renderMarkdown(args: {
       "",
       f.explanation,
       "",
+      ...f.fields.map(
+        (fd) =>
+          `- field ${fd.field}: filed ${fd.filed ?? "—"} → expected ${fd.expected ?? "—"}`,
+      ),
       ...f.evidence.map(
         (e) =>
-          `- evidence (${e.source}${e.documentId ? ` ${e.documentId}` : ""}${e.field ? ` · ${e.field}` : ""}): "${e.quote}"`,
+          `- evidence (${e.source}${e.documentId ? ` ${e.documentId}` : ""}${e.field ? ` · ${e.field}` : ""}): ${e.statement} — "${e.quote}"`,
       ),
       "",
       `Suggested action: ${f.suggestedAction}`,

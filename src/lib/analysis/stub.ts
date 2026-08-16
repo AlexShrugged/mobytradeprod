@@ -39,12 +39,14 @@ export function alertToFinding(alert: DesiredAlert): Finding {
     title: alert.label,
     explanation: alert.message,
     lineNumber: lineNumberOf(alert),
+    fields: [],
     evidence: [
       {
         source: "calculation",
         documentId: null,
         field: alert.alertKey,
         quote: alert.message,
+        statement: alert.message,
       },
     ],
     suggestedAction: "Review the deterministic audit finding.",

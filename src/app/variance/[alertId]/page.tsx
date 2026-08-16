@@ -275,7 +275,7 @@ export default async function VarianceDetailPage({
       case "unexpected_measure":
         return "Source: Schedule";
       default:
-        return null;
+        return c.type.startsWith("ai_") ? "Source: AI analyst" : null;
     }
   };
   // Citations sit right-aligned in the Expected column and click through to
@@ -880,6 +880,41 @@ export default async function VarianceDetailPage({
           </span>,
         ),
         issue: c.tag,
+      });
+    }
+    // AI findings carry their own filed-vs-expected rows (finding.fields)
+    // — they join the same ledger, colored by their issue's status like
+    // every other unit.
+    if (c.type.startsWith("ai_")) {
+      const aiFields = Array.isArray(c.details.fields)
+        ? (c.details.fields as {
+            field: string;
+            filed: string | null;
+            expected: string | null;
+          }[])
+        : [];
+      aiFields.forEach((f, i) => {
+        rows.push({
+          key: `ai:${c.id}:${i}`,
+          field: f.field,
+          expected: (
+            <div className="flex items-start justify-between gap-3">
+              <span className="tabular-nums">
+                {f.expected ?? muted("—")}
+              </span>
+              {i === 0 ? sourceCite(c) : null}
+            </div>
+          ),
+          filed: amber(
+            <span className="tabular-nums">{f.filed ?? "—"}</span>,
+          ),
+          corrected: corrected(
+            c.tag,
+            <span className="tabular-nums">{f.expected ?? "—"}</span>,
+            <span className="tabular-nums">{f.filed ?? "—"}</span>,
+          ),
+          issue: c.tag,
+        });
       });
     }
     if (c.type === "invoice_sku_missing") {

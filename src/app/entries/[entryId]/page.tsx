@@ -105,7 +105,9 @@ export default async function EntryDetailPage({
       severity: f.severity,
       label: f.title,
       message: f.title,
-      details: null,
+      // fieldIssue() reads details.fields, so the inline finding shows the
+      // same expected/filed diff as rule findings.
+      details: { fields: f.fields },
       status: f.status,
       resolvedAt: f.resolvedAt,
       lineItemId: f.lineItemId,

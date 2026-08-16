@@ -14,6 +14,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { AiVarianceDetail } from "@/lib/db/queries/variance";
 import { formatDate } from "@/lib/format";
 import {
@@ -22,19 +30,13 @@ import {
   unitIds,
   unitStatus,
 } from "@/lib/variance/grouping";
+import { cn } from "@/lib/utils";
 
-// The reconciliation page's AI variant: same header, same navigator, same
-// Accept/Dismiss flow as a rule variance, but the body is the analyst's
-// case file (claim, evidence quotes, suggested action) instead of a
-// field diff. Server component; the shared AlertActions client handles the
-// decisions (its endpoint decides findings too).
-
-const EVIDENCE_SOURCE_LABELS: Record<string, string> = {
-  document: "Document",
-  entry: "Entry",
-  reference: "Reference",
-  calculation: "Calculation",
-};
+// The reconciliation page's AI variant. Same shape as a rule variance: the
+// field-level Filed/Expected/Corrected table leads (finding.fields), the
+// analyst's case file (explanation, evidence, suggested action) supports it
+// below, and the shared AlertActions client drives the decisions (its
+// endpoint decides findings too).
 
 export function AiVarianceDetailView({
   detail,
@@ -72,6 +74,29 @@ export function AiVarianceDetailView({
     );
 
   const fileNameById = new Map(documents.map((d) => [d.id, d.fileName]));
+  const attribution = (e: (typeof finding.evidence)[number]): string => {
+    switch (e.source) {
+      case "document":
+        return e.documentId
+          ? (fileNameById.get(e.documentId) ?? "Document on file")
+          : "Document on file";
+      case "entry":
+        return "Entry as filed";
+      case "reference":
+        return "Reference data";
+      case "calculation":
+        return "Duty calculator";
+      default:
+        return e.source;
+    }
+  };
+
+  const muted = (text: string) => (
+    <span className="text-muted-foreground">{text}</span>
+  );
+  const isOpen = finding.status === "open";
+  const accepted = finding.status === "resolved";
+  const dismissed = finding.status === "dismissed";
 
   return (
     <div className="flex flex-col gap-4">
@@ -89,9 +114,9 @@ export function AiVarianceDetailView({
             {finding.title}
           </h1>
           <StatusBadge status={finding.alertType} />
-          {finding.status !== "open" ? (
+          {!isOpen ? (
             <Badge variant="secondary" className="font-normal">
-              {finding.status === "resolved" ? "accepted" : finding.status}
+              {accepted ? "accepted" : finding.status}
             </Badge>
           ) : null}
         </div>
@@ -117,12 +142,75 @@ export function AiVarianceDetailView({
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
+          {finding.fields.length > 0 ? (
+            <div className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
+              <Table className="[&_td]:py-3.5">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-36">Field</TableHead>
+                    <TableHead className="border-l">Filed</TableHead>
+                    <TableHead className="border-l">Expected</TableHead>
+                    <TableHead className="border-l">Corrected</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {finding.fields.map((f, i) => (
+                    <TableRow
+                      key={i}
+                      className={cn(
+                        isOpen && "bg-amber-50/50 dark:bg-amber-950/20",
+                        accepted && "bg-emerald-50/50 dark:bg-emerald-950/20",
+                        dismissed && "bg-muted",
+                      )}
+                    >
+                      <TableCell className="text-muted-foreground">
+                        {f.field}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "border-l font-medium tabular-nums",
+                          accepted && "line-through",
+                          f.filed === null && "font-normal",
+                        )}
+                      >
+                        {f.filed ?? muted("—")}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "border-l font-medium",
+                          dismissed && "line-through",
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="tabular-nums">
+                            {f.expected ?? muted("—")}
+                          </span>
+                          {i === 0 ? (
+                            <span className="shrink-0 whitespace-nowrap text-xs font-normal text-muted-foreground">
+                              Source: AI analyst
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell className="border-l font-medium tabular-nums">
+                        {accepted
+                          ? (f.expected ?? muted("—"))
+                          : dismissed
+                            ? (f.filed ?? muted("—"))
+                            : muted("—")}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : null}
+
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">AI finding</CardTitle>
+              <CardTitle className="text-base">Why this was flagged</CardTitle>
               <CardDescription>
                 Confidence {Math.round(finding.confidence * 100)}%
-                {detail.model ? ` · ${detail.model}` : ""}
                 {detail.analyzedAt
                   ? ` · analyzed ${formatDate(
                       detail.analyzedAt.toISOString().slice(0, 10),
@@ -140,21 +228,17 @@ export function AiVarianceDetailView({
                   <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Evidence
                   </h4>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2.5">
                     {finding.evidence.map((e, i) => (
-                      <div
-                        key={i}
-                        className="rounded-md border bg-muted/30 p-2.5"
-                      >
-                        <div className="text-xs text-muted-foreground">
-                          {EVIDENCE_SOURCE_LABELS[e.source] ?? e.source}
-                          {e.documentId
-                            ? ` · ${fileNameById.get(e.documentId) ?? e.documentId}`
-                            : ""}
-                          {e.field ? ` · ${e.field}` : ""}
-                        </div>
-                        <div className="mt-1 break-all font-mono text-xs">
-                          {e.quote}
+                      <div key={i} className="flex gap-2.5">
+                        <div className="mt-1.5 size-1.5 shrink-0 rounded-full bg-border" />
+                        <div>
+                          <p className="text-sm leading-relaxed">
+                            {e.statement ?? e.quote}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {attribution(e)}
+                          </p>
                         </div>
                       </div>
                     ))}

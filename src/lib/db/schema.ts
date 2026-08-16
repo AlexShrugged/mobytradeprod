@@ -1590,7 +1590,11 @@ export const analysisFindings = pgTable(
     /** 0..1, three decimals — the analyst's calibrated confidence. */
     confidence: numeric("confidence", { precision: 4, scale: 3 }).notNull(),
     lineNumber: integer("line_number"),
-    /** FindingEvidence[] (analysis/findings.ts) — verbatim quotes. */
+    /** FindingField[] (analysis/findings.ts) — the filed-vs-expected diff
+     *  the reconciliation UI renders as its field table. */
+    fields: jsonb("fields").notNull().default([]),
+    /** FindingEvidence[] (analysis/findings.ts) — verbatim quotes plus a
+     *  human statement per item. */
     evidence: jsonb("evidence").notNull(),
     /** Deterministic alertKeys this finding corroborates; [] = novel.
      *  Corroborations stay off the variance queue (the alert row already

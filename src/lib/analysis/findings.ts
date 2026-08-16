@@ -30,8 +30,23 @@ export const evidenceSchema = z.object({
   field: z.string().nullable(),
   /** Verbatim value or snippet the claim rests on. */
   quote: z.string(),
+  /** One human sentence saying what this evidence shows — the line a
+   *  reviewer reads; the quote is the receipt behind it. */
+  statement: z.string(),
 });
 export type FindingEvidence = z.infer<typeof evidenceSchema>;
+
+export const findingFieldSchema = z.object({
+  /** Short field label, e.g. "AD deposit", "Case number", "MPF". */
+  field: z.string(),
+  /** The value as declared, in short human form ("$10.18", "not declared",
+   *  "A-570-133"); null when nothing was filed for this field. */
+  filed: z.string().nullable(),
+  /** The value the finding expects, same form; dollar figures must come
+   *  from tool outputs. Null when no expectation is expressible. */
+  expected: z.string().nullable(),
+});
+export type FindingField = z.infer<typeof findingFieldSchema>;
 
 export const findingSchema = z.object({
   category: findingCategorySchema,
@@ -40,6 +55,10 @@ export const findingSchema = z.object({
   explanation: z.string(),
   /** null = entry-level finding. */
   lineNumber: z.number().nullable(),
+  /** The filed-vs-expected diff a broker would correct from — what the
+   *  reconciliation UI renders as its field table. Empty when the finding
+   *  has no filed/expected framing (pure observations). */
+  fields: z.array(findingFieldSchema),
   evidence: z.array(evidenceSchema),
   suggestedAction: z.string(),
   /** 0..1 — numeric bounds are validated client-side by the SDK. */

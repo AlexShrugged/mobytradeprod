@@ -1,0 +1,1 @@
+ALTER TABLE "analysis_findings" ADD COLUMN "fields" jsonb DEFAULT '[]'::jsonb NOT NULL;

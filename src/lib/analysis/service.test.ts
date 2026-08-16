@@ -15,7 +15,16 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
   title: "MPF below statutory minimum",
   explanation: "Declared MPF is the uncapped ad valorem amount.",
   lineNumber: null,
-  evidence: [{ source: "entry", documentId: null, field: "mpfAmount", quote: "10.18" }],
+  fields: [{ field: "MPF", filed: "$10.18", expected: "$33.58" }],
+  evidence: [
+    {
+      source: "entry",
+      documentId: null,
+      field: "mpfAmount",
+      quote: "10.18",
+      statement: "The entry declares MPF of $10.18.",
+    },
+  ],
   suggestedAction: "File a PSC for the difference.",
   confidence: 0.95,
   relatedAlertKeys: [],
@@ -32,7 +41,16 @@ const existing = (over: Partial<ExistingFindingRow> = {}): ExistingFindingRow =>
   suggestedAction: "File a PSC for the difference.",
   confidence: "0.950",
   lineItemId: null,
-  evidence: [{ source: "entry", documentId: null, field: "mpfAmount", quote: "10.18" }],
+  fields: [{ field: "MPF", filed: "$10.18", expected: "$33.58" }],
+  evidence: [
+    {
+      source: "entry",
+      documentId: null,
+      field: "mpfAmount",
+      quote: "10.18",
+      statement: "The entry declares MPF of $10.18.",
+    },
+  ],
   relatedAlertKeys: [],
   ...over,
 });
@@ -99,6 +117,7 @@ describe("planFindingReconcile", () => {
 
   it("ignores jsonb key order when comparing evidence", () => {
     const reordered = {
+      statement: "The entry declares MPF of $10.18.",
       quote: "10.18",
       field: "mpfAmount",
       documentId: null,

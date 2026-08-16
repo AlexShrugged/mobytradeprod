@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { VarianceQueueRow } from "@/lib/db/queries/variance";
+import { fieldIssue } from "@/lib/variance/field-issue";
 import type { VarianceGroup } from "@/lib/variance/grouping";
 import { LIQUIDATION_WINDOW_DAYS } from "@/lib/variance/window";
 import {
@@ -170,9 +171,22 @@ function ExpectedVsFiled({ row }: { row: VarianceQueueRow }) {
     case "invoice_comparison_skipped":
       return <Muted>{str("currency") ?? "non-USD"} invoice, skipped</Muted>;
     default:
-      // AI findings carry a claim, not a two-sided diff — show the claim
+      // AI findings: their first filed-vs-expected row renders like any
+      // rule diff; a pure observation (no fields) falls back to the claim
       // with its confidence.
       if (row.alertType.startsWith("ai_")) {
+        const issue = fieldIssue({ alertType: row.alertType, details: d });
+        if (issue) {
+          return (
+            <span className="inline-flex items-center gap-2">
+              <span className="tabular-nums">{issue.expected}</span>
+              <Arrow />
+              <span className="tabular-nums text-amber-700 dark:text-amber-400">
+                {issue.filed}
+              </span>
+            </span>
+          );
+        }
         const confidence = numV("confidence");
         return (
           <span className="inline-flex max-w-md items-baseline gap-2">
