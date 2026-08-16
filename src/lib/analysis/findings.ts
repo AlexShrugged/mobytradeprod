@@ -39,11 +39,12 @@ export type FindingEvidence = z.infer<typeof evidenceSchema>;
 export const findingFieldSchema = z.object({
   /** Short field label, e.g. "AD deposit", "Case number", "MPF". */
   field: z.string(),
-  /** The value as declared, in short human form ("$10.18", "not declared",
+  /** The value as declared, as a bare value ("$10.18", "not declared",
    *  "A-570-133"); null when nothing was filed for this field. */
   filed: z.string().nullable(),
-  /** The value the finding expects, same form; dollar figures must come
-   *  from tool outputs. Null when no expectation is expressible. */
+  /** The value the finding expects, same bare form — no parentheticals or
+   *  conditions (enforced by prompt); dollar figures must come from tool
+   *  outputs. Null when no expectation is expressible. */
   expected: z.string().nullable(),
 });
 export type FindingField = z.infer<typeof findingFieldSchema>;
@@ -52,6 +53,8 @@ export const findingSchema = z.object({
   category: findingCategorySchema,
   severity: z.enum(["error", "warning", "info"]),
   title: z.string(),
+  /** 2-4 sentences of reasoning; specifics live in fields/evidence
+   *  (brevity enforced by prompt, not schema). */
   explanation: z.string(),
   /** null = entry-level finding. */
   lineNumber: z.number().nullable(),

@@ -8,6 +8,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -105,13 +106,18 @@ export function EditableCell({
       }}
       title="Click to edit"
       className={cn(
-        "cursor-pointer rounded px-1 py-0.5 hover:bg-muted/60",
+        "group flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 hover:bg-muted/60",
         saving && "opacity-50",
         empty && "text-muted-foreground italic",
         className,
       )}
     >
-      {empty ? placeholder : (display ?? value)}
+      <span className="min-w-0">{empty ? placeholder : (display ?? value)}</span>
+      {/* The editability signal — always faintly present, full on hover. */}
+      <Pencil
+        aria-hidden
+        className="size-3 shrink-0 text-muted-foreground opacity-50 transition-opacity group-hover:opacity-100"
+      />
     </div>
   );
 }

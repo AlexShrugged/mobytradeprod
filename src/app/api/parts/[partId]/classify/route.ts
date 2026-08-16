@@ -4,7 +4,11 @@ import { classifyPart } from "@/lib/classification/service";
 import { db } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 
-// Run the classifier for one part and (re)queue its review item.
+// Run the classifier for one part and (re)queue its review item. The
+// Claude classifier can take up to its 120s deadline; keep the function
+// alive well past it (same allowance as the entry analyze route).
+export const maxDuration = 800;
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ partId: string }> },

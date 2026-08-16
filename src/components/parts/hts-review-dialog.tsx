@@ -20,7 +20,7 @@ import type { ReauditSummary } from "@/lib/audit/auditor";
 import type { HtsReviewQueueItem } from "@/lib/db/queries/parts";
 import { cn } from "@/lib/utils";
 
-function reauditToast(reaudit: ReauditSummary | null | undefined): string {
+export function reauditToast(reaudit: ReauditSummary | null | undefined): string {
   if (!reaudit || reaudit.entries === 0) return "";
   const parts = [`re-audited ${reaudit.entries} entr${reaudit.entries === 1 ? "y" : "ies"}`];
   if (reaudit.cleared > 0) parts.push(`${reaudit.cleared} finding${reaudit.cleared === 1 ? "" : "s"} cleared`);
@@ -35,31 +35,54 @@ export function HtsReviewDialog({
   queue,
   openIndex,
   onOpenChange,
+  preselect = null,
 }: {
   queue: HtsReviewQueueItem[];
   openIndex: number | null;
   onOpenChange: (index: number | null) => void;
+  /** Candidate to open selected — set when a suggestion card on the part
+   *  expansion launched the dialog. Scoped by part id so walking to the
+   *  next queue item never inherits another part's preselect. */
+  preselect?: { partId: string; code: string } | null;
 }) {
   const item = openIndex === null ? null : (queue[openIndex] ?? null);
 
-  if (item === null || openIndex === null) {
-    return (
-      <Dialog open={false} onOpenChange={() => onOpenChange(null)}>
-        <DialogContent />
-      </Dialog>
-    );
-  }
-
-  // Keyed by item id: navigating to another item remounts the body with
-  // fresh selection/notes state — no reset effects.
+  // ONE persistent Dialog across the whole walk: only the inner body is
+  // keyed by item id, so stepping between queue items swaps content in
+  // place — no overlay fade or panel pop between items, and the arrows
+  // stay under the cursor. Opening and closing still animate normally.
   return (
-    <ReviewDialogBody
-      key={item.item.id}
-      queueItem={item}
-      queueLength={queue.length}
-      openIndex={openIndex}
-      onOpenChange={onOpenChange}
-    />
+    <Dialog
+      open={item !== null}
+      onOpenChange={(open) => {
+        if (!open) onOpenChange(null);
+      }}
+    >
+      <DialogContent className="p-0 sm:max-w-2xl">
+        {item !== null && openIndex !== null ? (
+          <>
+            {/* Keyed scroll wrapper: fresh selection/notes state AND a
+                reset scroll position per item. */}
+            <div
+              key={item.item.id}
+              className="grid max-h-[94vh] gap-3 overflow-y-auto rounded-lg p-6"
+            >
+              <ReviewDialogBody
+                queueItem={item}
+                queueLength={queue.length}
+                openIndex={openIndex}
+                onOpenChange={onOpenChange}
+                initialSelectedCode={
+                  preselect !== null && preselect.partId === item.part.id
+                    ? preselect.code
+                    : null
+                }
+              />
+            </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -68,18 +91,20 @@ function ReviewDialogBody({
   queueLength,
   openIndex,
   onOpenChange,
+  initialSelectedCode = null,
 }: {
   queueItem: HtsReviewQueueItem;
   queueLength: number;
   openIndex: number;
   onOpenChange: (index: number | null) => void;
+  initialSelectedCode?: string | null;
 }) {
   const router = useRouter();
   const { proposal, part, classification, declaredCodes } = queueItem;
   const isConfirmation = proposal.kind === "confirmation";
 
   const [selectedCode, setSelectedCode] = React.useState<string | null>(
-    proposal.suggestedCode,
+    initialSelectedCode ?? proposal.suggestedCode,
   );
   const [manualCode, setManualCode] = React.useState("");
   const [notes, setNotes] = React.useState("");
@@ -115,50 +140,41 @@ function ReviewDialogBody({
   }
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onOpenChange(null);
-      }}
-    >
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <div className="flex items-center justify-between gap-3 pr-6">
-            <DialogTitle className="text-base">
-              {part.sku} · {part.name}
-            </DialogTitle>
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                disabled={openIndex === 0}
-                onClick={() => onOpenChange(openIndex - 1)}
-                aria-label="Previous item"
-              >
-                <ChevronLeft />
-              </Button>
-              <span className="whitespace-nowrap">
-                {openIndex + 1} of {queueLength}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                disabled={openIndex >= queueLength - 1}
-                onClick={() => onOpenChange(openIndex + 1)}
-                aria-label="Next item (skip)"
-              >
-                <ChevronRight />
-              </Button>
-            </div>
-          </div>
-          <DialogDescription>
-            {isConfirmation
-              ? "The classifier confirms the committed code. Acknowledge or override."
-              : "Choose the code for the catalog. Entry lines stay as filed."}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader className="gap-1">
+        {/* Queue pager, top-left on the close button's row. */}
+        <div className="flex items-center gap-1 text-sm text-muted-foreground">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            disabled={openIndex === 0}
+            onClick={() => onOpenChange(openIndex - 1)}
+            aria-label="Previous item"
+          >
+            <ChevronLeft />
+          </Button>
+          <span className="whitespace-nowrap tabular-nums">
+            {openIndex + 1} of {queueLength}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            disabled={openIndex >= queueLength - 1}
+            onClick={() => onOpenChange(openIndex + 1)}
+            aria-label="Next item (skip)"
+          >
+            <ChevronRight />
+          </Button>
+        </div>
+        <DialogTitle className="text-base">
+          {part.sku} · {part.name}
+        </DialogTitle>
+        <DialogDescription className="sr-only">
+          Review the HTS classification for {part.sku}.
+        </DialogDescription>
+      </DialogHeader>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-md border p-3">
@@ -174,8 +190,7 @@ function ReviewDialogBody({
           </div>
           <div className="rounded-md border p-3">
             <div className="text-xs text-muted-foreground">
-              Classifier {isConfirmation ? "confirmation" : "suggestion"} ·{" "}
-              {proposal.outcome}
+              Suggested catalog code
             </div>
             <div className="mt-1 font-medium tabular-nums">
               {proposal.suggestedCode ?? "—"}
@@ -211,13 +226,16 @@ function ReviewDialogBody({
               <button
                 key={c.id}
                 type="button"
-                disabled={busy || isConfirmation}
+                disabled={busy}
                 onClick={() => setSelectedCode(c.code)}
                 className={cn(
-                  "rounded-md border p-3 text-left transition-colors",
+                  // Same treatment as the expansion card's option stack:
+                  // the nav-card muted-fill + ring when selected, the
+                  // outline-button solid hover on the rest.
+                  "cursor-pointer rounded-md border p-3 text-left transition-colors",
                   selectedCode === c.code
-                    ? "border-primary ring-1 ring-primary"
-                    : "hover:bg-muted/50",
+                    ? "border-ring bg-muted ring-1 ring-ring/40"
+                    : "hover:bg-accent",
                 )}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -308,14 +326,32 @@ function ReviewDialogBody({
               Apply manual code
             </Button>
           ) : isConfirmation ? (
-            <Button
-              disabled={busy}
-              onClick={() =>
-                act({ action: "acknowledge" }, `${part.sku} confirmed.`)
-              }
-            >
-              Acknowledge
-            </Button>
+            // Confirmations have nothing to accept — unless the reviewer
+            // picks a candidate OTHER than the confirmed code, which is an
+            // override and commits through the manual action (the state
+            // machine reserves "accept" for suggestions).
+            selectedCode !== null && selectedCode !== proposal.currentCode ? (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  act(
+                    { action: "manual", code: selectedCode },
+                    `${selectedCode} committed to ${part.sku}.`,
+                  )
+                }
+              >
+                Accept {selectedCode}
+              </Button>
+            ) : (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  act({ action: "acknowledge" }, `${part.sku} confirmed.`)
+                }
+              >
+                Accept
+              </Button>
+            )
           ) : (
             <>
               <Button
@@ -341,7 +377,6 @@ function ReviewDialogBody({
             </>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }

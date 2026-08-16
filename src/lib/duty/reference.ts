@@ -238,33 +238,43 @@ export async function loadReferenceDataScoped(
 
 /** The org's HTS digit universe: every code its data can ask the reference
  *  about. Declared entry-line digits, the parts catalog's current
- *  projections, and every classification window (audits and variance
- *  counterfactuals resolve historical windows too). Deliberately org-wide
- *  rather than per-entry: one shape serves entries, variance, parts, sweeps,
- *  and projections alike, and the union is a few hundred values. */
+ *  projections, every classification window (audits and variance
+ *  counterfactuals resolve historical windows too), and classifier
+ *  candidates (the Parts page prices suggested codes against the current
+ *  one). Deliberately org-wide rather than per-entry: one shape serves
+ *  entries, variance, parts, sweeps, and projections alike, and the union
+ *  is a few hundred values. */
 export async function loadOrgHtsDigits(
   db: DbClient,
   orgId: string,
 ): Promise<string[]> {
-  const [lineDigits, partCodes, classificationCodes] = await Promise.all([
-    db
-      .selectDistinct({ digits: schema.entryLineItems.htsCodeDigits })
-      .from(schema.entryLineItems)
-      .where(eq(schema.entryLineItems.orgId, orgId)),
-    db
-      .selectDistinct({ code: schema.parts.htsCode })
-      .from(schema.parts)
-      .where(and(eq(schema.parts.orgId, orgId), isNotNull(schema.parts.htsCode))),
-    db
-      .selectDistinct({ code: schema.partClassifications.htsCode })
-      .from(schema.partClassifications)
-      .where(eq(schema.partClassifications.orgId, orgId)),
-  ]);
+  const [lineDigits, partCodes, classificationCodes, candidateDigits] =
+    await Promise.all([
+      db
+        .selectDistinct({ digits: schema.entryLineItems.htsCodeDigits })
+        .from(schema.entryLineItems)
+        .where(eq(schema.entryLineItems.orgId, orgId)),
+      db
+        .selectDistinct({ code: schema.parts.htsCode })
+        .from(schema.parts)
+        .where(and(eq(schema.parts.orgId, orgId), isNotNull(schema.parts.htsCode))),
+      db
+        .selectDistinct({ code: schema.partClassifications.htsCode })
+        .from(schema.partClassifications)
+        .where(eq(schema.partClassifications.orgId, orgId)),
+      db
+        .selectDistinct({
+          digits: schema.htsClassificationCandidates.codeDigits,
+        })
+        .from(schema.htsClassificationCandidates)
+        .where(eq(schema.htsClassificationCandidates.orgId, orgId)),
+    ]);
 
   const digits = new Set<string>();
   for (const r of lineDigits) digits.add(r.digits);
   for (const r of partCodes) if (r.code) digits.add(normalizeHts(r.code));
   for (const r of classificationCodes) digits.add(normalizeHts(r.code));
+  for (const r of candidateDigits) digits.add(r.digits);
   return [...digits];
 }
 

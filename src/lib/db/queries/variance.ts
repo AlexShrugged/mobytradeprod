@@ -485,47 +485,7 @@ export async function getVarianceDetail(
     ? buildLineSiblings(detail, alert.lineItemId, snapshot, ctx)
     : [];
 
-  // The duty stack under the catalog code: the as-of code for a
-  // discrepancy, the current window's code for a reclassified line (what
-  // the entry WOULD owe under today's classification). Computed for the
-  // LINE's HTS issue — current alert or a sibling, any status — since the
-  // diff table renders every issue's rows at once.
-  let catalogExpected: VarianceCatalogExpected | null = null;
-  const htsIssueType =
-    [alert.alertType, ...siblings.map((s) => s.alertType)].find(
-      (t) => t === "hts_discrepancy" || t === "hts_reclassified",
-    ) ?? null;
-  const wantsCatalogExpected =
-    htsIssueType === "hts_discrepancy" ||
-    (htsIssueType === "hts_reclassified" && snapshot?.catalogHtsDigitsCurrent);
-  if (wantsCatalogExpected && snapshot) {
-    const expected =
-      htsIssueType === "hts_reclassified"
-        ? computeCatalogExpected(
-            snapshot,
-            ctx,
-            snapshot.catalogHtsDigitsCurrent!,
-          )
-        : computeCatalogExpected(snapshot, ctx);
-    if (expected) {
-      catalogExpected = {
-        baseDuty: expected.baseDuty
-          ? {
-              rate: expected.baseDuty.rate,
-              amountCents: expected.baseDuty.amountCents,
-            }
-          : null,
-        measures: expected.measures.map((m) => ({
-          name: m.name,
-          ch99Code: m.ch99Code,
-          rate: m.rate,
-          amountCents: m.amountCents,
-        })),
-        totalCents: expectedTotalCents(expected),
-        declaredDutyCents: snapshot.declaredDutyCents,
-      };
-    }
-  }
+  const catalogExpected = computeLineCatalogExpected(siblings, snapshot, ctx);
 
   // CI-vs-entry alerts name their evidence invoices in details.
   const invoiceNumbers = [
@@ -604,6 +564,48 @@ export async function getVarianceDetail(
 
 // -------------------------------------------------------------- AI detail
 
+/** The duty stack under the catalog code: the as-of code for a
+ *  discrepancy, the current window's code for a reclassified line (what
+ *  the entry WOULD owe under today's classification). Computed for the
+ *  LINE's HTS issue — any sibling, any status — since the diff table
+ *  renders every issue's rows at once. Shared by both detail queries so
+ *  the rule and AI pages show the same ledger. */
+function computeLineCatalogExpected(
+  siblings: VarianceSiblingAlert[],
+  snapshot: ImpactLineSnapshot | null,
+  ctx: ImpactContext,
+): VarianceCatalogExpected | null {
+  const htsIssueType =
+    siblings
+      .map((s) => s.alertType)
+      .find((t) => t === "hts_discrepancy" || t === "hts_reclassified") ?? null;
+  const wantsCatalogExpected =
+    htsIssueType === "hts_discrepancy" ||
+    (htsIssueType === "hts_reclassified" && snapshot?.catalogHtsDigitsCurrent);
+  if (!wantsCatalogExpected || !snapshot) return null;
+  const expected =
+    htsIssueType === "hts_reclassified"
+      ? computeCatalogExpected(snapshot, ctx, snapshot.catalogHtsDigitsCurrent!)
+      : computeCatalogExpected(snapshot, ctx);
+  if (!expected) return null;
+  return {
+    baseDuty: expected.baseDuty
+      ? {
+          rate: expected.baseDuty.rate,
+          amountCents: expected.baseDuty.amountCents,
+        }
+      : null,
+    measures: expected.measures.map((m) => ({
+      name: m.name,
+      ch99Code: m.ch99Code,
+      rate: m.rate,
+      amountCents: m.amountCents,
+    })),
+    totalCents: expectedTotalCents(expected),
+    declaredDutyCents: snapshot.declaredDutyCents,
+  };
+}
+
 /** Every issue on one line — rule alerts AND novel AI findings — as
  *  navigator-card items in compareSiblingAlerts order, so both detail pages
  *  show one complete line reconciliation. Corroborating AI findings stay
@@ -676,6 +678,9 @@ export type AiVarianceDetail = {
   /** The flagged 7501 line with its full read-side expectations; null for
    *  entry-level findings or re-ingested-away lines. */
   line: LineItemDetail | null;
+  /** Same as VarianceDetail's — the shared ledger renders the line's HTS
+   *  issue's counterfactual duty stack whichever page shows it. */
+  catalogExpected: VarianceCatalogExpected | null;
   documents: EntryDocument[];
   siblings: VarianceSiblingAlert[];
 };
@@ -745,6 +750,7 @@ export async function getAiVarianceDetail(
     },
     window: liquidationWindow(detail.entryDate, detail.status, todayIso()),
     line,
+    catalogExpected: computeLineCatalogExpected(siblings, snapshot, ctx),
     documents: detail.documents,
     siblings,
   };

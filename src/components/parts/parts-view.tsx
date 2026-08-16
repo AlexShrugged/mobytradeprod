@@ -40,6 +40,12 @@ export function PartsView({
     const i = queue.findIndex((q) => q.part.id === initialReviewPartId);
     return i >= 0 ? i : null;
   });
+  // Set when a suggestion card launched the review — the dialog opens with
+  // that candidate selected instead of the classifier's top pick.
+  const [reviewPreselect, setReviewPreselect] = React.useState<{
+    partId: string;
+    code: string;
+  } | null>(null);
   const [skuDialog, setSkuDialog] = React.useState<SkuDialogState | null>(null);
 
   const filtered = React.useMemo(() => {
@@ -77,9 +83,12 @@ export function PartsView({
         parts={filtered}
         totalCount={parts.length}
         initialExpandedPartId={initialExpandedPartId}
-        onReview={(partId) => {
+        onReview={(partId, code) => {
           const i = queue.findIndex((q) => q.part.id === partId);
-          if (i >= 0) setReviewIndex(i);
+          if (i >= 0) {
+            setReviewPreselect(code ? { partId, code } : null);
+            setReviewIndex(i);
+          }
         }}
         onAddQuote={(part) => setSkuDialog({ presetSku: part.sku })}
       />
@@ -88,6 +97,7 @@ export function PartsView({
         queue={queue}
         openIndex={reviewIndex}
         onOpenChange={setReviewIndex}
+        preselect={reviewPreselect}
       />
       {/* Keyed by preset so "Add quote" for another SKU remounts fresh. */}
       {skuDialog !== null ? (

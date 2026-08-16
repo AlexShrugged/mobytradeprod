@@ -5,6 +5,7 @@ import {
   asc,
   count,
   countDistinct,
+  desc,
   eq,
   inArray,
   isNotNull,
@@ -21,6 +22,7 @@ import type {
   ReviewItem,
 } from "@/lib/db/schema";
 import { normalizeHts } from "@/lib/duty/calculator";
+import { candidateDutySavingRate } from "@/lib/duty/candidate-delta";
 import { getReferenceDataForOrg } from "./reference";
 import { computeEstimatedLandedCost } from "@/lib/landed-cost/estimate";
 import { rollupBySku, type RollupLine } from "@/lib/landed-cost/rollup";
@@ -121,6 +123,34 @@ export type PartSourceRow = {
   usage: PartVendorUsage;
 };
 
+/** One suggested alternative code from the part's latest classifier run.
+ *  The saving rate is derived duty math (never stored): the guaranteed
+ *  duty-rate drop vs the current code under today's measures across every
+ *  sourced origin, null when not strictly cheaper or undecidable. */
+export type PartHtsSuggestion = {
+  code: string;
+  codeDigits: string;
+  description: string | null;
+  confidence: number | null;
+  reason: string | null;
+  savingRate: number | null;
+};
+
+/** The part's latest completed classifier run, shaped for the expansion
+ *  card. Suggestions keep rank order and exclude the current code (a
+ *  provisional auto-select equals candidate 0, so it renders as Current
+ *  and drops out here). */
+export type PartClassificationInfo = {
+  classifiedAt: string;
+  classifier: string;
+  outcome: "certain" | "ambiguous" | "none";
+  /** Confidence of the run's candidate matching the current code — the
+   *  classifier's independent agreement with the catalog. Null when the
+   *  run proposed no such candidate. */
+  currentConfidence: number | null;
+  suggestions: PartHtsSuggestion[];
+};
+
 export type PartRow = Part & {
   /** The part's vendor sources, vendor-name order. For draft parts these
    *  carry quote-claimed data — display-only; the UI labels draft rows. */
@@ -140,6 +170,10 @@ export type PartRow = Part & {
   actualLatestEntryDate: string | null;
   /** Pending review-queue item for this part, if any. */
   openReviewItemId: string | null;
+  /** The pending item's proposal kind — decides which review action the
+   *  expansion card's Accept/Dismiss map to (accept/reject for
+   *  suggestions, manual/acknowledge for confirmations). */
+  openReviewKind: "suggestion" | "confirmation" | null;
   quoteCounts: PartQuoteCounts;
   /** Derived (never stored): an approved quote awaits its confirming PO. */
   pendingChanges: boolean;
@@ -151,13 +185,23 @@ export type PartRow = Part & {
    *  part in ONE org-bounded query — simpler than lazy per-row loads for the
    *  single-page expansion model, and quote volume is small. */
   quotes: PartQuoteRow[];
+  /** Latest completed classifier run; null = never classified. */
+  classification: PartClassificationInfo | null;
 };
 
 export async function getParts(): Promise<PartRow[]> {
   const orgId = await getCurrentOrgId();
 
-  const [parts, ref, quoteLines, partSources, actualLines, openItems, usage] =
-    await Promise.all([
+  const [
+    parts,
+    ref,
+    quoteLines,
+    partSources,
+    actualLines,
+    openItems,
+    usage,
+    classificationRuns,
+  ] = await Promise.all([
       db.query.parts.findMany({
         where: eq(schema.parts.orgId, orgId),
         orderBy: asc(schema.parts.sku),
@@ -193,17 +237,47 @@ export async function getParts(): Promise<PartRow[]> {
           eq(schema.reviewItems.itemType, "hts_classification"),
           eq(schema.reviewItems.status, "pending"),
         ),
-        columns: { id: true, subjectId: true },
+        columns: { id: true, subjectId: true, proposal: true },
       }),
       fetchVendorUsage(orgId),
+      // Completed runs newest-first (uuidv7 ids order by time); the first
+      // row seen per part below is its latest — the same latest-by-id
+      // contract the review flow uses. Runs are user-triggered and few.
+      db.query.htsClassifications.findMany({
+        where: and(
+          eq(schema.htsClassifications.orgId, orgId),
+          eq(schema.htsClassifications.status, "completed"),
+        ),
+        orderBy: desc(schema.htsClassifications.id),
+        with: {
+          candidates: {
+            orderBy: asc(schema.htsClassificationCandidates.position),
+          },
+        },
+      }),
     ]);
+
+  const latestClassificationByPartId = new Map<
+    string,
+    (typeof classificationRuns)[number]
+  >();
+  for (const run of classificationRuns) {
+    if (!latestClassificationByPartId.has(run.partId)) {
+      latestClassificationByPartId.set(run.partId, run);
+    }
+  }
 
   const latestByPartId = new Map(
     rollupBySku(actualLines)
       .filter((r) => r.partId !== null)
       .map((r) => [r.partId as string, r.latest]),
   );
-  const openItemByPartId = new Map(openItems.map((i) => [i.subjectId, i.id]));
+  const openItemByPartId = new Map(
+    openItems.map((i) => [
+      i.subjectId,
+      { id: i.id, kind: (i.proposal as ReviewProposal).kind },
+    ]),
+  );
 
   const linesByPartId = new Map<string, typeof quoteLines>();
   for (const line of quoteLines) {
@@ -356,6 +430,42 @@ export async function getParts(): Promise<PartRow[]> {
     const latest = latestByPartId.get(part.id);
     const pendingChanges = counts.approved > 0;
 
+    const run = latestClassificationByPartId.get(part.id) ?? null;
+    const classification: PartClassificationInfo | null =
+      run === null
+        ? null
+        : {
+            classifiedAt: run.createdAt.toISOString().slice(0, 10),
+            classifier: run.classifier,
+            outcome: run.outcome ?? "none",
+            currentConfidence: (() => {
+              const match = run.candidates.find(
+                (c) => c.codeDigits === partHtsDigits,
+              );
+              return match?.confidence == null
+                ? null
+                : Number(match.confidence);
+            })(),
+            suggestions: run.candidates
+              .filter((c) => c.codeDigits !== partHtsDigits)
+              .map((c) => ({
+                code: c.code,
+                codeDigits: c.codeDigits,
+                description: c.description,
+                confidence: c.confidence === null ? null : Number(c.confidence),
+                reason: c.reason,
+                savingRate: candidateDutySavingRate(
+                  {
+                    candidateDigits: c.codeDigits,
+                    currentDigits: partHtsDigits,
+                    origins: sourceRows.map((s) => s.countryOfOrigin),
+                    asOf,
+                  },
+                  ref,
+                ),
+              })),
+          };
+
     return {
       ...part,
       sources,
@@ -367,7 +477,8 @@ export async function getParts(): Promise<PartRow[]> {
       actualLatestPerUnitCents: latest?.perUnitCents ?? null,
       actualLatestEntryNumber: latest?.entryNumber ?? null,
       actualLatestEntryDate: latest?.entryDate ?? null,
-      openReviewItemId: openItemByPartId.get(part.id) ?? null,
+      openReviewItemId: openItemByPartId.get(part.id)?.id ?? null,
+      openReviewKind: openItemByPartId.get(part.id)?.kind ?? null,
       quoteCounts: counts,
       pendingChanges,
       hasUnapproved: counts.received > 0,
@@ -376,6 +487,7 @@ export async function getParts(): Promise<PartRow[]> {
           ? "pending_changes"
           : part.status,
       quotes,
+      classification,
     };
   });
 }

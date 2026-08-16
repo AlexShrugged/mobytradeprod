@@ -116,6 +116,13 @@
   * {
     @apply border-border;
   }
+  html {
+    /* Always render the scrollbar track so centered content doesn't shift
+       between pages that scroll and pages that don't. scrollbar-gutter is
+       not enough: with macOS overlay scrollbars Chrome reserves a 0-width
+       gutter, while the custom-styled scrollbar below still takes 6px. */
+    overflow-y: scroll;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans), sans-serif;

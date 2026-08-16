@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { DocumentRail } from "@/components/document-rail";
 import { StatusBadge } from "@/components/status-badge";
 import { AlertActions } from "@/components/variance/alert-actions";
+import { LineLedger } from "@/components/variance/line-ledger";
 import { VarianceNavCard } from "@/components/variance/variance-nav-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,14 +15,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import type { AiVarianceDetail } from "@/lib/db/queries/variance";
 import { formatDate } from "@/lib/format";
 import {
@@ -30,7 +23,6 @@ import {
   unitIds,
   unitStatus,
 } from "@/lib/variance/grouping";
-import { cn } from "@/lib/utils";
 
 // The reconciliation page's AI variant. Same shape as a rule variance: the
 // field-level Filed/Expected/Corrected table leads (finding.fields), the
@@ -45,7 +37,8 @@ export function AiVarianceDetailView({
   detail: AiVarianceDetail;
   fromEntry: boolean;
 }) {
-  const { finding, entry, window, line, documents, siblings } = detail;
+  const { finding, entry, window, line, catalogExpected, documents, siblings } =
+    detail;
 
   // Same unit math as the rule page. AI findings never pair, but the line's
   // rule units keep their twins, so advance/undo counts stay correct on
@@ -91,12 +84,8 @@ export function AiVarianceDetailView({
     }
   };
 
-  const muted = (text: string) => (
-    <span className="text-muted-foreground">{text}</span>
-  );
   const isOpen = finding.status === "open";
   const accepted = finding.status === "resolved";
-  const dismissed = finding.status === "dismissed";
 
   return (
     <div className="flex flex-col gap-4">
@@ -142,69 +131,15 @@ export function AiVarianceDetailView({
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
-          {finding.fields.length > 0 ? (
-            <div className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
-              <Table className="[&_td]:py-3.5">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-36">Field</TableHead>
-                    <TableHead className="border-l">Filed</TableHead>
-                    <TableHead className="border-l">Expected</TableHead>
-                    <TableHead className="border-l">Corrected</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {finding.fields.map((f, i) => (
-                    <TableRow
-                      key={i}
-                      className={cn(
-                        isOpen && "bg-amber-50/50 dark:bg-amber-950/20",
-                        accepted && "bg-emerald-50/50 dark:bg-emerald-950/20",
-                        dismissed && "bg-muted",
-                      )}
-                    >
-                      <TableCell className="text-muted-foreground">
-                        {f.field}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "border-l font-medium tabular-nums",
-                          accepted && "line-through",
-                          f.filed === null && "font-normal",
-                        )}
-                      >
-                        {f.filed ?? muted("—")}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "border-l font-medium",
-                          dismissed && "line-through",
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="tabular-nums">
-                            {f.expected ?? muted("—")}
-                          </span>
-                          {i === 0 ? (
-                            <span className="shrink-0 whitespace-nowrap text-xs font-normal text-muted-foreground">
-                              Source: AI analyst
-                            </span>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className="border-l font-medium tabular-nums">
-                        {accepted
-                          ? (f.expected ?? muted("—"))
-                          : dismissed
-                            ? (f.filed ?? muted("—"))
-                            : muted("—")}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : null}
+          <LineLedger
+            currentId={finding.id}
+            currentDetails={{}}
+            line={line}
+            catalogExpected={catalogExpected}
+            documents={documents}
+            siblings={siblings}
+            fromEntry={fromEntry}
+          />
 
           <Card>
             <CardHeader>
@@ -282,6 +217,23 @@ export function AiVarianceDetailView({
             siblings={siblings}
             currentId={finding.id}
             fromEntry={fromEntry}
+            actions={
+              <AlertActions
+                compact
+                alertId={finding.id}
+                status={finding.status}
+                alertType={finding.alertType}
+                partId={finding.partId}
+                entryId={entry.id}
+                fromEntry={fromEntry}
+                decideIds={[finding.id]}
+                nextOpenAlertId={nextOpenAlertId}
+                lineUnits={unitRows.map((u) => ({
+                  ids: u.ids,
+                  status: u.status,
+                }))}
+              />
+            }
           />
 
           <Card>

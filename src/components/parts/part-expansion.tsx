@@ -16,6 +16,7 @@ import { toast } from "sonner";
 
 import { EditableCell } from "@/components/inline-edit";
 import { eventMeta } from "@/components/events/event-meta";
+import { ClassificationCard } from "@/components/parts/classification-card";
 import { Money } from "@/components/money";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -35,21 +36,25 @@ import {
 } from "@/lib/vendors/part-vendor-groups";
 import { cn } from "@/lib/utils";
 
-// The row expansion: one unified vendors panel on the left (~5/12) — vendors
-// with real activity first, an expandable archive of offer-only vendors
-// under them — and SKU history on the right (~7/12), stacked on narrow
-// screens. Same muted panel treatment as the entries expansion.
+// The row expansion: vendors and classification stacked on the left
+// (~5/12) — vendors with real activity first, an expandable archive of
+// offer-only vendors under them, then the part's HTS classification — and
+// SKU history on the right (~7/12), stacked on narrow screens. Same muted
+// panel treatment as the entries expansion.
 export function PartExpansion({
   part,
   onAddQuote,
+  onReview,
 }: {
   part: PartRow;
   onAddQuote: (part: PartRow) => void;
+  onReview: (partId: string, code?: string) => void;
 }) {
   return (
     <div className="grid gap-4 bg-muted/30 px-12 py-4 lg:grid-cols-12">
       <div className="flex flex-col gap-4 lg:col-span-5">
         <VendorsCard part={part} onAddQuote={onAddQuote} />
+        <ClassificationCard part={part} onReview={onReview} />
       </div>
       <div className="lg:col-span-7">
         <HistoryCard part={part} />

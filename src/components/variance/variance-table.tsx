@@ -419,7 +419,12 @@ export function VarianceTable({
               <TableRow
                 key={row.id}
                 className={cn(
-                  "cursor-pointer",
+                  // TableRow's default hover wash (muted/50) sits at parity
+                  // with the page background in light mode; a foreground
+                  // alpha registers on any surface, so the row reads as
+                  // clickable. 2% matches the wash the variance ledger's
+                  // linked rows get over the card — keep them in step.
+                  "cursor-pointer hover:bg-foreground/2",
                   // Decided history reads as background, not work to do.
                   isArchived(row.original) && "opacity-60",
                 )}

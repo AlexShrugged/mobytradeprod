@@ -51,7 +51,10 @@ const outputSchema = z.object({
 export interface ClassifierClient {
   beta: {
     messages: {
-      parse(params: Record<string, unknown>): Promise<{
+      parse(
+        params: Record<string, unknown>,
+        opts?: { signal?: AbortSignal },
+      ): Promise<{
         parsed_output: unknown;
         stop_reason: string | null;
       }>;
@@ -171,8 +174,10 @@ export class ClaudeClassifier implements Classifier {
           },
         ],
         output_config: { format: betaZodOutputFormat(outputSchema) },
-        signal: AbortSignal.timeout(this.deadlineMs),
-      });
+        // Request OPTION, not a body param — inside the params object the
+        // SDK serializes it and the API 400s ("signal: Extra inputs are
+        // not permitted").
+      }, { signal: AbortSignal.timeout(this.deadlineMs) });
       if (response.stop_reason === "refusal" || !response.parsed_output) {
         throw new Error("classifier call declined or returned nothing");
       }

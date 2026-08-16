@@ -25,7 +25,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { CentsRange, PartRow } from "@/lib/db/queries/parts";
-import type { PartHtsReviewStatusValue } from "@/lib/db/schema";
 import { formatCents } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -35,36 +34,6 @@ function formatCentsRange(range: CentsRange): string {
     ? formatCents(range.min)
     : `${formatCents(range.min)}–${formatCents(range.max)}`;
 }
-
-const reviewStatusMeta: Record<
-  PartHtsReviewStatusValue,
-  { label: string; className: string }
-> = {
-  pending: {
-    label: "needs review",
-    className:
-      "border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-400",
-  },
-  confirmed: {
-    label: "confirmed",
-    className:
-      "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400",
-  },
-  accepted: {
-    label: "accepted",
-    className:
-      "border-green-300 text-green-700 dark:border-green-800 dark:text-green-400",
-  },
-  acknowledged: {
-    label: "acknowledged",
-    className:
-      "border-green-300 text-green-700 dark:border-green-800 dark:text-green-400",
-  },
-  rejected: {
-    label: "rejected",
-    className: "text-muted-foreground",
-  },
-};
 
 const ESTIMATE_TITLE =
   "Unit cost + today's duty stack + nominal MPF/HMF. Freight, insurance & brokerage not included.";
@@ -83,7 +52,7 @@ export function PartsTable({
   parts: PartRow[];
   totalCount: number;
   initialExpandedPartId: string | null;
-  onReview: (partId: string) => void;
+  onReview: (partId: string, code?: string) => void;
   onAddQuote: (part: PartRow) => void;
 }) {
   const [expanded, setExpanded] = React.useState<ExpandedState>(() =>
@@ -201,50 +170,13 @@ export function PartsTable({
         },
       },
       {
+        // Just the code — review state and actions live in the expansion's
+        // Classification card, not as table pills.
         id: "hts",
         header: "HTS",
-        cell: ({ row }) => {
-          const part = row.original;
-          return (
-            <div className="flex flex-col gap-0.5">
-              <span className="tabular-nums">{part.htsCode ?? "—"}</span>
-              <div className="flex items-center gap-1.5">
-                {part.htsCodeProvisional ? (
-                  <Badge
-                    variant="outline"
-                    className="font-normal text-muted-foreground"
-                    title="Auto-selected by the classifier; not yet human-committed. Ignored by audits."
-                  >
-                    provisional
-                  </Badge>
-                ) : null}
-                {part.htsReviewStatus ? (
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "font-normal",
-                      reviewStatusMeta[part.htsReviewStatus].className,
-                    )}
-                  >
-                    {reviewStatusMeta[part.htsReviewStatus].label}
-                  </Badge>
-                ) : null}
-                {part.openReviewItemId ? (
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onReview(part.id);
-                    }}
-                  >
-                    Review
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          );
-        },
+        cell: ({ row }) => (
+          <span className="tabular-nums">{row.original.htsCode ?? "—"}</span>
+        ),
       },
       {
         id: "quotes",
@@ -316,7 +248,7 @@ export function PartsTable({
         },
       },
     ],
-    [onReview],
+    [],
   );
 
   const table = useReactTable({
@@ -367,7 +299,12 @@ export function PartsTable({
                 <React.Fragment key={row.id}>
                   <TableRow
                     data-state={row.getIsExpanded() ? "selected" : undefined}
-                    className="cursor-pointer"
+                    // TableRow's default hover wash (muted/50) sits at parity
+                    // with the page background in light mode; a foreground
+                    // alpha registers on any surface, so the row reads as
+                    // clickable. 2% matches the wash the variance ledger's
+                    // linked rows get over the card — keep them in step.
+                    className="cursor-pointer hover:bg-foreground/2"
                     onClick={row.getToggleExpandedHandler()}
                   >
                     {row.getVisibleCells().map((cell) => (
@@ -385,6 +322,7 @@ export function PartsTable({
                         <PartExpansion
                           part={row.original}
                           onAddQuote={onAddQuote}
+                          onReview={onReview}
                         />
                       </TableCell>
                     </TableRow>

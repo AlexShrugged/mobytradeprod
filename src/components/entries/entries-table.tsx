@@ -421,11 +421,17 @@ export function EntriesTable({ rows }: { rows: EntriesTableRow[] }) {
                 <TableRow
                   data-state={row.getIsExpanded() ? "selected" : undefined}
                   className={cn(
-                    "cursor-pointer",
+                    // TableRow's default hover wash (muted/50) sits at parity
+                    // with the page background in light mode; a foreground
+                    // alpha registers on any surface, so the row reads as
+                    // clickable. 2% matches the wash the variance ledger's
+                    // linked rows get over the card — keep them in step.
+                    "cursor-pointer hover:bg-foreground/2",
                     // Projection rows: amber tint + dashed amber left edge,
-                    // so estimated rows never read as filed entries.
+                    // so estimated rows never read as filed entries. Hover
+                    // deepens the tint (same cue, kept in the row's color).
                     row.original.kind === "future" &&
-                      "bg-amber-500/5 border-l-2 border-l-amber-500/60 [border-left-style:dashed]",
+                      "bg-amber-500/5 hover:bg-amber-500/10 border-l-2 border-l-amber-500/60 [border-left-style:dashed]",
                   )}
                   onClick={row.getToggleExpandedHandler()}
                 >

@@ -22,7 +22,9 @@ import { cn } from "@/lib/utils";
 // dollars — never separately decidable), everything else stands alone. Each
 // item is a plain link to its primary's page — the selected issue is the
 // URL — so Accept/Dismiss re-renders carry the accepted (green, dimmed) and
-// dismissed (struck, dimmed) states with no client state. Class order
+// dismissed (struck, dimmed) states with no client state. The CURRENT item
+// renders as a div, not a link (it IS the page, and it hosts the `actions`
+// buttons — interactive content can't nest inside an anchor). Class order
 // matters below: cn() is twMerge-based, so the status backgrounds listed
 // after the current-item classes win when both apply (an accepted item you
 // navigate back to stays green, keeps the ring). Links REPLACE history —
@@ -33,10 +35,14 @@ export function VarianceNavCard({
   siblings,
   currentId,
   fromEntry = false,
+  actions = null,
 }: {
   siblings: VarianceSiblingAlert[];
   currentId: string;
   fromEntry?: boolean;
+  /** Decision buttons rendered inside the current item — a second home for
+   *  Accept/Dismiss, always in view beside long diff tables. */
+  actions?: React.ReactNode;
 }) {
   const units = pairSiblingAlerts(siblings);
   const position =
@@ -61,27 +67,20 @@ export function VarianceNavCard({
             u.primary.impactCents !== null
               ? u.primary.direction
               : (u.consequence?.direction ?? null);
-          return (
-            <Link
-              key={u.primary.id}
-              href={`/variance/${u.primary.id}${fromEntry ? "?from=entry" : ""}`}
-              replace
-              // Full prefetch: the page is force-dynamic, so the default
-              // only prefetches the loading skeleton — this fetches each
-              // sibling's whole payload once visible, making hops between
-              // a line's issues instant. Decisions router.refresh(), which
-              // re-fetches, so prefetched siblings never show stale states.
-              prefetch={true}
-              aria-current={current ? "page" : undefined}
-              className={cn(
-                "block rounded-md border p-3 transition-colors",
-                status === "open" && !current && "hover:bg-muted/50",
-                current && "border-ring bg-muted ring-1 ring-ring/40",
-                status === "resolved" &&
-                  "bg-emerald-50/50 opacity-60 dark:bg-emerald-950/20",
-                status === "dismissed" && "opacity-60",
-              )}
-            >
+          // Decided items dim — but on the CURRENT item the dimming moves
+          // off the container onto the body wrapper below, so the hosted
+          // action buttons (Reopen) stay full-strength: a child can never
+          // exceed its parent's opacity.
+          const itemClassName = cn(
+            "block rounded-md border p-3 transition-colors",
+            status === "open" && !current && "hover:bg-muted/50",
+            current && "border-ring bg-muted ring-1 ring-ring/40",
+            status === "resolved" &&
+              "bg-emerald-50/50 dark:bg-emerald-950/20",
+            status !== "open" && !current && "opacity-60",
+          );
+          const body = (
+            <>
               <div className="flex items-center justify-between gap-2">
                 <StatusBadge status={u.primary.alertType} />
                 {impactCents !== null ? (
@@ -127,6 +126,36 @@ export function VarianceNavCard({
                   </p>
                 </div>
               ) : null}
+            </>
+          );
+          if (current) {
+            return (
+              <div
+                key={u.primary.id}
+                aria-current="page"
+                className={itemClassName}
+              >
+                <div className={cn(status !== "open" && "opacity-60")}>
+                  {body}
+                </div>
+                {actions ? <div className="mt-3">{actions}</div> : null}
+              </div>
+            );
+          }
+          return (
+            <Link
+              key={u.primary.id}
+              href={`/variance/${u.primary.id}${fromEntry ? "?from=entry" : ""}`}
+              replace
+              // Full prefetch: the page is force-dynamic, so the default
+              // only prefetches the loading skeleton — this fetches each
+              // sibling's whole payload once visible, making hops between
+              // a line's issues instant. Decisions router.refresh(), which
+              // re-fetches, so prefetched siblings never show stale states.
+              prefetch={true}
+              className={itemClassName}
+            >
+              {body}
             </Link>
           );
         })}

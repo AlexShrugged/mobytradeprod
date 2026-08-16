@@ -45,6 +45,7 @@ export function AlertActions({
   nextOpenAlertId = null,
   lineUnits = [],
   undoPrevious = null,
+  compact = false,
 }: {
   alertId: string;
   status: AlertStatus;
@@ -65,6 +66,11 @@ export function AlertActions({
   /** The decided unit directly above this one in card order — shows an
    *  inline Undo that reopens it and steps back to it. */
   undoPrevious?: { ids: string[]; backTo: string } | null;
+  /** Core decision buttons only (Accept/Dismiss, or Reopen once decided) —
+   *  the nav card's selected item carries this second copy so long diff
+   *  tables never scroll the decision out of reach. Undo and Reclassify
+   *  stay with the full set under the table. */
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
@@ -181,7 +187,7 @@ export function AlertActions({
       >
         Dismiss
       </Button>
-      {undoPrevious ? (
+      {!compact && undoPrevious ? (
         <Button
           variant="outline"
           size="sm"
@@ -199,7 +205,8 @@ export function AlertActions({
           <Undo2 /> Undo
         </Button>
       ) : null}
-      {(alertType === "hts_discrepancy" ||
+      {!compact &&
+      (alertType === "hts_discrepancy" ||
         alertType === "hts_reclassified" ||
         alertType === "ai_classification_mismatch") &&
       partId ? (
