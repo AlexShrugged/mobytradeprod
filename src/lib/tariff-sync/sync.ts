@@ -19,7 +19,11 @@ import { runBaseEtl } from "./base-etl";
 import { diffRelease } from "./differ";
 import { getMeasureExtractor } from "./extractor";
 import { mergeExtraction } from "./extractor/merge";
-import { fetchRecentNotices, shiftDays } from "./federal-register";
+import {
+  fetchRecentNotices,
+  hydrateNoticeTexts,
+  shiftDays,
+} from "./federal-register";
 import { partitionRevisions, type RevisionGroupKey } from "./grouping";
 import {
   loadCurrentBaseWindows,
@@ -103,12 +107,16 @@ export async function runUsitcSync(
     .filter((i) => i >= 0);
   if (createIdx.length > 0) {
     const extractor = getMeasureExtractor();
+    // Notice bodies hydrate lazily, only when extraction will actually run
+    // — the operative entry-date language lives in FR body text, and the
+    // extractor clips per-chunk excerpts around the codes it is dating.
+    const notices = await hydrateNoticeTexts(deps.notices ?? []);
     const extractions = await extractor.extract(
       createIdx.map((i) => ({
         ch99Code: toStage[i].ch99Code,
         authority: toStage[i].authority,
         evidence: toStage[i].evidence,
-        relatedNotices: deps.notices ?? [],
+        relatedNotices: notices,
       })),
     );
     for (const [k, i] of createIdx.entries()) {

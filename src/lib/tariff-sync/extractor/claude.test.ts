@@ -22,6 +22,7 @@ const input = (ch99Code: string): MeasureExtractionInput => ({
       publicationDate: "2026-07-01",
       abstract: "Effective August 1, 2026 …",
       agencies: ["Office of the United States Trade Representative"],
+      rawTextUrl: null,
     },
   ],
 });

@@ -51,6 +51,7 @@ export async function fetchRecentNotices(opts: {
       "publication_date",
       "abstract",
       "agencies",
+      "raw_text_url",
     ]) {
       params.append("fields[]", f);
     }
@@ -86,6 +87,8 @@ export async function fetchRecentNotices(opts: {
               )
               .filter(Boolean)
           : [],
+        rawTextUrl:
+          typeof row.raw_text_url === "string" ? row.raw_text_url : null,
       };
       if (passesKeywordGuard(notice)) notices.push(notice);
     }
@@ -94,6 +97,43 @@ export async function fetchRecentNotices(opts: {
   }
 
   return { notices, raw: pages };
+}
+
+const TEXT_CONCURRENCY = 5;
+// A proclamation body with annex tables can run to megabytes; the clipper
+// only ever excerpts around code mentions, but cap what we hold in memory.
+const MAX_TEXT_CHARS = 400_000;
+
+/** Fetch plain-text bodies for notices that have one. Best-effort by
+ *  contract: a failed body fetch leaves that notice abstract-only —
+ *  degraded extraction context must never fail the sync. Returns new
+ *  notice objects; the input array is not mutated. */
+export async function hydrateNoticeTexts(
+  notices: FrNotice[],
+): Promise<FrNotice[]> {
+  const out = [...notices];
+  let next = 0;
+  const worker = async () => {
+    while (next < out.length) {
+      const i = next++;
+      const n = out[i];
+      if (!n.rawTextUrl || n.fullText !== undefined) continue;
+      try {
+        const res = await fetch(n.rawTextUrl, {
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        if (!res.ok) continue;
+        const text = await res.text();
+        out[i] = { ...n, fullText: text.slice(0, MAX_TEXT_CHARS) };
+      } catch {
+        // Abstract-only beats failing the sync.
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(TEXT_CONCURRENCY, out.length) }, worker),
+  );
+  return out;
 }
 
 export function shiftDays(isoDate: string, days: number): string {

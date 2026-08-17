@@ -11,6 +11,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 
+import { clipNoticeForCodes } from "./notice-clip";
 import { StubMeasureExtractor } from "./stub";
 import type {
   ExtractedField,
@@ -21,8 +22,12 @@ import type {
 
 const DEFAULT_MODEL = "claude-opus-5";
 const CHUNK_SIZE = 15;
-const CONCURRENCY = 2;
+// Env-tunable for large backfills (a full-queue re-stage runs 40+ chunks);
+// the default stays conservative for the daily cron's incremental staging.
+const CONCURRENCY = Math.max(1, Number(process.env.EXTRACTOR_CONCURRENCY) || 2);
 const DEFAULT_DEADLINE_MS = 120_000;
+/** Notices with a body excerpt matching the chunk's codes, per prompt. */
+const MAX_EXCERPTED_NOTICES = 10;
 
 const fieldSchema = <T extends z.ZodType>(value: T) =>
   z.object({
@@ -58,6 +63,7 @@ For each Chapter 99 line, fill:
 
 Rules:
 - Every non-null value MUST be backed by a VERBATIM evidence snippet copied from the provided text. No snippet, no value.
+- A notice's relevantExcerpt is verbatim body text around mentions of the input codes — the operative "entered for consumption on or after ..." language usually lives there. Prefer it over the abstract, and match each line to the excerpt language that covers its code (an excerpt may cover some of the input lines and not others).
 - confidence is 0..1: 1.0 = the text states it outright; below 0.5 = you are inferring. When the text does not say, use value null, confidence 0, evidence null.
 - Dates must come from the provided text (line prose or a related notice) — never from world knowledge.
 - Return one extraction object per input line, keyed by its ch99Code, in the same order as the input.`;
@@ -164,12 +170,24 @@ function buildUserContent(chunk: MeasureExtractionInput[]): string {
     additionalDuties: input.evidence.additionalDuties,
     footnotes: input.evidence.footnotes,
   }));
-  const notices = dedupeNotices(chunk).map((n) => ({
-    documentNumber: n.documentNumber,
-    title: n.title,
-    publicationDate: n.publicationDate,
-    abstract: n.abstract,
-  }));
+  const codes = chunk.map((input) => input.ch99Code);
+  let excerpted = 0;
+  const notices = dedupeNotices(chunk).map((n) => {
+    const excerpt =
+      n.fullText && excerpted < MAX_EXCERPTED_NOTICES
+        ? clipNoticeForCodes(n.fullText, codes)
+        : null;
+    if (excerpt) excerpted += 1;
+    return {
+      documentNumber: n.documentNumber,
+      title: n.title,
+      publicationDate: n.publicationDate,
+      abstract: n.abstract,
+      // Verbatim body text around this chunk's codes — where the operative
+      // entry-date language lives; null when the notice never mentions them.
+      relevantExcerpt: excerpt,
+    };
+  });
   return JSON.stringify({ lines, relatedFederalRegisterNotices: notices });
 }
 

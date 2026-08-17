@@ -30,6 +30,11 @@ export type FrNotice = {
   publicationDate: string; // ISO
   abstract: string | null;
   agencies: string[];
+  /** Plain-text body URL from the FR API (raw_text_url). */
+  rawTextUrl: string | null;
+  /** Hydrated body text (hydrateNoticeTexts) — the operative "entered for
+   *  consumption on or after D" dates live here, never in the abstract. */
+  fullText?: string;
 };
 
 export type ParsedRate =
