@@ -96,7 +96,11 @@ export class ClaudeMeasureExtractor implements MeasureExtractor {
     // The structural ParseClient narrows the SDK surface to what we call —
     // the real client satisfies it at runtime; the cast bridges the SDK's
     // generic parse() signature.
-    this.client = opts.client ?? (new Anthropic() as unknown as ParseClient);
+    // Backfill re-stages run 40+ concurrent-ish chunks; lean on the SDK's
+    // 429/529 backoff instead of degrading a rate-limited chunk to the stub.
+    this.client =
+      opts.client ??
+      (new Anthropic({ maxRetries: 5 }) as unknown as ParseClient);
     this.model =
       opts.model ?? process.env.TARIFF_EXTRACTOR_MODEL ?? DEFAULT_MODEL;
     this.deadlineMs =
@@ -152,9 +156,14 @@ export class ClaudeMeasureExtractor implements MeasureExtractor {
       return reconcileChunk(chunk, response.parsed_output, this.model, (input) =>
         this.stub.extractOne(input),
       );
-    } catch {
+    } catch (err) {
       // RateLimitError, APIConnectionError, schema mismatch, anything —
-      // extraction is best-effort by contract.
+      // extraction is best-effort by contract. Loudly best-effort: a whole
+      // sync silently staging stub-quality proposals is undebuggable.
+      console.error(
+        `[extractor] chunk of ${chunk.length} degraded to stub:`,
+        err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      );
       return this.stub.extractChunk(chunk);
     }
   }
