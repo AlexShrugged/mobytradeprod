@@ -47,7 +47,13 @@ item type); classification review stays org-scoped. Staged create_measure propos
 dates/countries proposed by `tariff-sync/extractor/` (Claude via `ANTHROPIC_API_KEY` +
 optional `TARIFF_EXTRACTOR_MODEL`, deterministic stub otherwise; merge rules in
 `extractor/merge.ts` — deterministic values win, sub-threshold confidence stays
-evidence-only). `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
+evidence-only). Create_measure applies are gated three ways (`apply.ts` + `programs.ts`): null
+countries need the reviewer's explicit worldwide confirmation; a same-program
+overlap (same country tier + product scope + window) fails closed until the
+reviewer picks supersede (closes the old windows at eff−1, links
+`predecessor_id` across codes) or stack; and programs are proposed by
+`inferProgram` (deterministic, null when unsure), reviewer-editable on the
+cards. `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
 `--apply` to stage) bootstraps the queue from `../moby`'s hand-curated measures. Base
 windows still stamped release `"SEED"` are demo approximations — the first certified
 release corrects them in place instead of tiling them into history. Reference reads go
@@ -109,8 +115,23 @@ classifier behind `classification/index.ts` is Claude-backed the same way
   (pairing-invariant), never per-line-paired.
 - **Pure calculators**: integer cents, decimal-fraction rates, no IO; db handle passed as
   a parameter (`DbClient`). Tests colocated (`*.test.ts`).
+- **One charge per program.** `trade_measures.program` is the stable legal-program
+  identity ("ieepa-reciprocal") and the calculator's exclusivity key: at most one
+  measure per program applies to a line (country-specific headings beat the worldwide
+  baseline, then costlier rate; losers surface as suppressed). Distinct programs stack
+  even under one statute (CBP filed 301 + IEEPA fentanyl + IEEPA reciprocal on ONE
+  line), so `authority` is a display bucket, never the exclusivity key. Null program =
+  lineage unknown: never deduped — sync-created measures stay null until a human
+  assigns the program.
 - **MPF/HMF are ingested facts** on entries — never computed (CBP per-entry mins/caps).
   Nominal rates appear only in estimates, labeled as such.
+- **Catalog import overwrites, for now.** The Parts page CSV/XLSX import
+  (`parts/import-service.ts`; upload filed as a processed `part_catalog` document on
+  the Data page) last-write-wins over existing SKUs — right for the launch use case of
+  seeding an empty catalog, wrong once catalogs are live and a difference means "which
+  one is correct?". Future: SKU-level conflict resolution that stages differences for
+  human review instead of overwriting. Every overwrite records `field_changes` with
+  source `catalog_import`, so the history to build that on already exists.
 
 ## Database
 

@@ -44,6 +44,7 @@ export async function loadTariffSyncState(db: DbClient): Promise<TariffSyncState
       ch99Digits: h.codeDigits,
       name: m.name,
       authority: m.authority,
+      program: m.program ?? null,
       scope: m.scope,
       countries: m.countries,
       countriesExcluded: m.countriesExcluded ?? null,

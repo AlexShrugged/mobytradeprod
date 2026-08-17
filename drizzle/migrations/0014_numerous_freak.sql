@@ -1,0 +1,1 @@
+ALTER TABLE "trade_measures" ADD COLUMN "program" text;

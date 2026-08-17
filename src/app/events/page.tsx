@@ -4,6 +4,7 @@ import { CalendarClock, Ship } from "lucide-react";
 import { EventRow } from "@/components/events/event-row";
 import { Money } from "@/components/money";
 import { PageHeader } from "@/components/page-header";
+import { UrlPaginationControls } from "@/components/pagination-controls";
 import { SailBasisBadge } from "@/components/sail-basis";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,7 @@ import {
   type EventFilterGroup,
 } from "@/lib/events/types";
 import { formatDate } from "@/lib/format";
+import { DEFAULT_PER_PAGE, parsePageParams } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +45,12 @@ function dayLabel(day: string, today: string, yesterday: string): string {
 export default async function EventsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string; sku?: string }>;
+  searchParams: Promise<{
+    type?: string;
+    sku?: string;
+    page?: string;
+    per?: string;
+  }>;
 }) {
   const params = await searchParams;
   const group =
@@ -51,12 +58,18 @@ export default async function EventsPage({
       ? (params.type as EventFilterGroup)
       : null;
   const partId = params.sku;
+  const { page, per } = parsePageParams(params);
 
-  const [events, futureEntries] = await Promise.all([
-    getEvents({ types: typesForGroup(group), partId }),
-    // Upcoming only on the unfiltered/entries views — projections are not
-    // events and stay out of scoped or narrow feeds.
-    !partId && (group === null || group === "entries")
+  const [{ events, hasMore }, futureEntries] = await Promise.all([
+    getEvents({
+      types: typesForGroup(group),
+      partId,
+      limit: per,
+      offset: (page - 1) * per,
+    }),
+    // Upcoming only on page 1 of the unfiltered/entries views —
+    // projections are not events and stay out of scoped or narrow feeds.
+    page === 1 && !partId && (group === null || group === "entries")
       ? getFutureEntries()
       : Promise.resolve([]),
   ]);
@@ -76,11 +89,20 @@ export default async function EventsPage({
       />
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <FilterChip href="/events" active={group === null && !partId}>
+        {/* Chips drop ?page (a new filter starts at its first page) but
+            keep the chosen page size. */}
+        <FilterChip
+          href={per !== DEFAULT_PER_PAGE ? `/events?per=${per}` : "/events"}
+          active={group === null && !partId}
+        >
           All
         </FilterChip>
         {(Object.keys(CHIP_LABELS) as EventFilterGroup[]).map((g) => (
-          <FilterChip key={g} href={`/events?type=${g}`} active={group === g}>
+          <FilterChip
+            key={g}
+            href={`/events?type=${g}${per !== DEFAULT_PER_PAGE ? `&per=${per}` : ""}`}
+            active={group === g}
+          >
             {CHIP_LABELS[g]}
           </FilterChip>
         ))}
@@ -166,6 +188,15 @@ export default async function EventsPage({
           ))}
         </div>
       )}
+
+      {/* The feed is a merge of derived sources — no cheap total exists, so
+          Next drives off whether anything lies past this window. */}
+      <UrlPaginationControls
+        page={page}
+        pageCount={null}
+        hasNext={hasMore}
+        per={per}
+      />
     </div>
   );
 }

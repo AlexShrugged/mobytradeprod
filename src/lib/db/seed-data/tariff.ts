@@ -77,6 +77,10 @@ export const HTS_SEED: HtsSeed[] = [
 export type MeasureSeed = {
   name: string;
   authority: MeasureAuthorityValue;
+  // Legal-program identity — the calculator's one-charge-per-program
+  // exclusivity key (see trade_measures.program in schema.ts). The 301
+  // lists share one program: a product sits on exactly one list.
+  program: string | null;
   scope: MeasureScopeValue;
   countries: string[] | null;
   effectiveDate: string;
@@ -147,6 +151,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "Section 301 List 1 — China",
       authority: "section_301",
+      program: "section-301-china",
       scope: "hts_list",
       countries: ["CN"],
       effectiveDate: "2018-07-06",
@@ -166,6 +171,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "Section 301 List 3 — China",
       authority: "section_301",
+      program: "section-301-china",
       scope: "hts_list",
       countries: ["CN"],
       effectiveDate: "2018-09-24",
@@ -192,6 +198,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "Section 301 List 4A — China",
       authority: "section_301",
+      program: "section-301-china",
       scope: "hts_list",
       countries: ["CN"],
       effectiveDate: "2020-02-14",
@@ -211,6 +218,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "IEEPA Reciprocal Tariff — baseline",
       authority: "reciprocal",
+      program: "ieepa-reciprocal",
       scope: "all_products",
       countries: null,
       effectiveDate: "2025-04-05",
@@ -230,6 +238,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "Section 232 Aluminum — derivative articles",
       authority: "section_232_aluminum",
+      program: "section-232-aluminum",
       scope: "hts_list",
       countries: null,
       effectiveDate: "2025-03-12",
@@ -260,6 +269,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "Section 122 Import Surcharge",
       authority: "section_122",
+      program: "section-122",
       scope: "all_products",
       countries: null,
       effectiveDate: cutoff,
@@ -273,6 +283,7 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
     {
       name: "Section 122 Import Surcharge — pre-cutoff sailings past grace",
       authority: "section_122",
+      program: "section-122",
       scope: "all_products",
       countries: null,
       effectiveDate: postGrace,
@@ -428,6 +439,7 @@ export function buildSeedReferenceData(day: DayFn): ReferenceData {
         id: measureId,
         name: seed.name,
         authority: seed.authority,
+        program: seed.program,
         scope: seed.scope,
         countries: seed.countries,
         effectiveDate: seed.effectiveDate,

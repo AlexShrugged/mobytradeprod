@@ -415,12 +415,47 @@ export async function applyReviewDecision(
   return { part: updatedPart, item: updatedItem, reaudit };
 }
 
+/** Bulk classification bootstrap for parts CREATED IN THE SAME TRANSACTION
+ *  (catalog import). The caller guarantees the parts are fresh — no windows,
+ *  no pending review items, no entry lines — so the supersede/re-audit
+ *  machinery updatePartHts runs per part has nothing to do, and one open
+ *  window per part lands in chunked inserts (a whole-catalog import is tens
+ *  of thousands of parts; per-part statement volume overwhelms PGlite dev
+ *  runs). The parts rows carry the hts_code projection from their insert;
+ *  this records the effective-dated truth behind it. */
+export async function seedClassificationsForNewParts(
+  db: DbClient,
+  orgId: string,
+  rows: { partId: string; htsCode: string }[],
+  meta: { source: string; actor?: string | null; note?: string | null },
+): Promise<void> {
+  for (const row of rows) assertValidCommitCode(row.htsCode);
+  for (let i = 0; i < rows.length; i += 500) {
+    await db.insert(schema.partClassifications).values(
+      rows.slice(i, i + 500).map((r) => ({
+        orgId,
+        partId: r.partId,
+        htsCode: r.htsCode,
+        source: meta.source,
+        actor: meta.actor ?? null,
+        note: meta.note ?? null,
+      })),
+    );
+  }
+}
+
 export async function updatePartHts(
   db: DbClient,
   orgId: string,
   partId: string,
   code: string,
-  opts: { actor?: string; note?: string; effectiveDate?: string | null } = {},
+  opts: {
+    actor?: string;
+    note?: string;
+    effectiveDate?: string | null;
+    /** field_changes/window provenance; defaults to a direct human edit. */
+    source?: string;
+  } = {},
 ): Promise<{ part: schema.Part; reaudit: ReauditSummary | null } | null> {
   assertValidCommitCode(code);
 
@@ -436,7 +471,7 @@ export async function updatePartHts(
     partId,
     code,
     opts.effectiveDate ?? null,
-    { source: "manual_edit", actor: opts.actor, note: opts.note },
+    { source: opts.source ?? "manual_edit", actor: opts.actor, note: opts.note },
   );
 
   const [updatedPart] = await db
@@ -472,7 +507,7 @@ export async function updatePartHts(
       field: "hts_code",
       oldValue: part.htsCode,
       newValue: code,
-      source: "manual_edit",
+      source: opts.source ?? "manual_edit",
       actor: opts.actor ?? null,
       note: opts.note ?? null,
     });

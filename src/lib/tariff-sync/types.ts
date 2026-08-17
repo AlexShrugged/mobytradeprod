@@ -64,6 +64,24 @@ export type SailClauseCandidate = {
 export type ProposedMeasureChange = {
   name: string;
   authority: MeasureAuthorityValue;
+  /** Legal-program identity (trade_measures.program) — the calculator's
+   *  one-charge-per-program exclusivity key and the apply-time conflict
+   *  key. Proposed by inferProgram (programs.ts), reviewer-editable.
+   *  Optional — absent on proposals staged before the field existed;
+   *  absent/null = lineage unknown (never deduped, never conflict-checked,
+   *  and change revisions preserve the live measure's program). */
+  program?: string | null;
+  /** Reviewer's explicit confirmation that countries: null means "every
+   *  country of origin". Apply refuses a non-exemption create_measure with
+   *  null countries without it — the fail-open that minted worldwide
+   *  measures out of unparsed per-country headings. */
+  worldwide?: boolean;
+  /** Reviewer's resolution when this create_measure overlaps live
+   *  same-program measures (same country tier + product scope + window):
+   *  "supersede" closes their windows at effective − 1 and links lineage;
+   *  "stack" inserts alongside (both really owe — e.g. a sail-partitioned
+   *  pair). Absent + conflicts = apply fails closed. */
+  onConflict?: "supersede" | "stack" | null;
   scope: MeasureScopeValue;
   countries: string[] | null;
   /** Annex-style carve-outs ("all countries except…"). Optional — absent on
@@ -109,6 +127,8 @@ export type LiveMeasureSnapshot = {
   ch99Digits: string;
   name: string;
   authority: MeasureAuthorityValue;
+  /** Optional — absent on snapshots taken before the field existed. */
+  program?: string | null;
   scope: MeasureScopeValue;
   countries: string[] | null;
   countriesExcluded?: string[] | null;

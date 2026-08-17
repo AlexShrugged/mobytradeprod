@@ -9,7 +9,7 @@ import {
   type ColumnDef,
   type ExpandedState,
 } from "@tanstack/react-table";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Upload } from "lucide-react";
 
 import { EditableCell } from "@/components/inline-edit";
 import { PartExpansion } from "@/components/parts/part-expansion";
@@ -45,15 +45,25 @@ const ESTIMATE_TITLE =
 export function PartsTable({
   parts,
   totalCount,
+  filteredCount,
+  pageStart,
   initialExpandedPartId,
   onReview,
   onAddQuote,
+  onImport,
 }: {
+  /** The current page of rows only — filtering and paging are server-side. */
   parts: PartRow[];
+  /** Org-wide SKU count — decides the getting-started empty state. */
   totalCount: number;
+  /** SKUs matching the search across all pages. */
+  filteredCount: number;
+  /** Zero-based offset of the first row on this page. */
+  pageStart: number;
   initialExpandedPartId: string | null;
   onReview: (partId: string, code?: string) => void;
   onAddQuote: (part: PartRow) => void;
+  onImport: () => void;
 }) {
   const [expanded, setExpanded] = React.useState<ExpandedState>(() =>
     initialExpandedPartId ? { [initialExpandedPartId]: true } : {},
@@ -284,15 +294,25 @@ export function PartsTable({
           </TableHeader>
           <TableBody>
             {table.getRowModel().rows.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className="h-24 text-center text-muted-foreground"
-                >
-                  {totalCount === 0
-                    ? "No SKUs yet. Create one with New SKU, or ingest a quote sheet."
-                    : "No parts match the filter."}
-                </TableCell>
+              <TableRow className="hover:bg-transparent">
+                {totalCount === 0 ? (
+                  // The getting-started empty state: most catalogs arrive as
+                  // a whole SKU list, so importing leads.
+                  <TableCell colSpan={columns.length} className="h-48">
+                    <div className="flex justify-center">
+                      <Button variant="outline" onClick={onImport}>
+                        <Upload /> Import Parts
+                      </Button>
+                    </div>
+                  </TableCell>
+                ) : (
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-24 text-center text-muted-foreground"
+                  >
+                    No parts match the filter.
+                  </TableCell>
+                )}
               </TableRow>
             ) : (
               table.getRowModel().rows.map((row) => (
@@ -334,8 +354,9 @@ export function PartsTable({
         </Table>
       </div>
       <p className="text-xs text-muted-foreground">
-        {parts.length} of {totalCount} SKUs · landed/unit is duty-inclusive
-        (no freight, insurance, or brokerage)
+        {parts.length === 0
+          ? `0 of ${filteredCount} SKUs`
+          : `${pageStart + 1}–${pageStart + parts.length} of ${filteredCount} SKUs`}
       </p>
     </div>
   );

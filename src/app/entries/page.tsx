@@ -1,6 +1,7 @@
 import { EntriesTable } from "@/components/entries/entries-table";
 import { Money } from "@/components/money";
 import { PageHeader } from "@/components/page-header";
+import { UrlPaginationControls } from "@/components/pagination-controls";
 import { StatTile } from "@/components/stat-tile";
 import {
   getEntries,
@@ -8,14 +9,21 @@ import {
   getFutureEntries,
 } from "@/lib/db/queries/entries";
 import { formatCents } from "@/lib/format";
+import { pageCountFor, parsePageParams } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
 
-export default async function EntriesPage() {
-  const [entries, futureEntries] = await Promise.all([
-    getEntries(),
-    getFutureEntries(),
-  ]);
+export default async function EntriesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string; per?: string }>;
+}) {
+  const { page: requestedPage, per } = parsePageParams(await searchParams);
+  const [{ rows: entries, totalCount, page }, futureEntries] =
+    await Promise.all([
+      getEntries({ page: requestedPage, per }),
+      getFutureEntries(),
+    ]);
   // Reuses the future entries above so the projection runs once.
   const stats = await getEntrySummaryStats(futureEntries);
 
@@ -53,8 +61,17 @@ export default async function EntriesPage() {
       </div>
 
       {/* Future entries first: the money that is still avoidable belongs
-          above the money already owed. */}
-      <EntriesTable rows={[...futureEntries, ...entries]} />
+          above the money already owed. Projections ride page 1 only — they
+          are a band above the list, not part of the paged history. */}
+      <EntriesTable
+        rows={[...(page === 1 ? futureEntries : []), ...entries]}
+      />
+
+      <UrlPaginationControls
+        page={page}
+        pageCount={pageCountFor(totalCount, per)}
+        per={per}
+      />
     </div>
   );
 }

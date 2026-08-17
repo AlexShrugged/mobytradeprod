@@ -18,10 +18,19 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { OpenRevision } from "@/lib/db/queries/tariffs";
 import { formatDate } from "@/lib/format";
+import { inferProgram } from "@/lib/tariff-sync/programs";
 import {
   coverageLabel,
   diffRevisionFields,
@@ -113,6 +122,22 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
   const [excludedText, setExcludedText] = React.useState(
     proposed.countriesExcluded?.join(", ") ?? "",
   );
+  // Revisions staged before program inference existed (absent field, not
+  // an explicit null) default to the same inference staging now runs, so
+  // the reviewer sees and confirms a concrete value either way.
+  const [programText, setProgramText] = React.useState(
+    proposed.program !== undefined
+      ? (proposed.program ?? "")
+      : (inferProgram(
+          proposed.authority,
+          revision.ch99Code ?? "",
+          revision.evidence.description ?? "",
+        ) ?? ""),
+  );
+  const [worldwide, setWorldwide] = React.useState(proposed.worldwide ?? false);
+  const [onConflict, setOnConflict] = React.useState<"supersede" | "stack" | "">(
+    proposed.onConflict ?? "",
+  );
 
   async function decide(payload: Record<string, unknown>, pending: string) {
     setBusy(true);
@@ -163,6 +188,16 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
         ...draft,
         countries: parseCountriesInput(countriesText),
         countriesExcluded: parseCountriesInput(excludedText),
+        // Only create_measure carries the program-gate decisions: sending
+        // them on change revisions would clear the live measure's program
+        // when the staged proposal predates the field.
+        ...(revision.changeType === "create_measure"
+          ? {
+              program: programText.trim() === "" ? null : programText.trim(),
+              worldwide,
+              onConflict: onConflict === "" ? null : onConflict,
+            }
+          : {}),
       },
       "Applying measure windows and re-auditing…",
     );
@@ -367,6 +402,52 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
             />
           </div>
         </div>
+
+        {revision.changeType === "create_measure" ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Program</Label>
+              <Input
+                value={programText}
+                placeholder="e.g. ieepa-reciprocal"
+                disabled={busy}
+                onChange={(e) => setProgramText(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">On overlap with a live measure</Label>
+              <Select
+                value={onConflict === "" ? undefined : onConflict}
+                disabled={busy}
+                onValueChange={(v) =>
+                  setOnConflict(v as "supersede" | "stack")
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Block apply" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="supersede">Supersede</SelectItem>
+                  <SelectItem value="stack">Stack</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 sm:mt-5">
+              <Checkbox
+                id={`worldwide-${revision.revisionId}`}
+                checked={worldwide}
+                disabled={busy}
+                onCheckedChange={(v) => setWorldwide(v === true)}
+              />
+              <Label
+                htmlFor={`worldwide-${revision.revisionId}`}
+                className="text-xs"
+              >
+                Applies to every country
+              </Label>
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {(Object.keys(DATE_FIELD_LABEL) as DateField[]).map((field) => (

@@ -200,6 +200,59 @@ export function resolveExpectedMeasures(
     }
   }
 
+  // Program exclusivity: one legal program ("the reciprocal tariff", "the
+  // fentanyl IEEPA order") is published as several Chapter 99 headings that
+  // partition a line's fate — a worldwide baseline vs country-specific
+  // rates, pre/post-escalation windows — and exactly one applies (each
+  // heading's article description carves out the others; country rates
+  // apply "in lieu of" the baseline). Distinct programs still stack, even
+  // under one statute (a China line carried 301 + IEEPA fentanyl + IEEPA
+  // reciprocal at once, per CBP's line-sequencing guidance), so the key is
+  // trade_measures.program, never authority. Null program = lineage
+  // unknown: never deduped. Country-specific headings beat the baseline;
+  // remaining ties keep the costlier rate (duty owed), marked as a sail
+  // assumption when a sail condition is what left the tie undecided.
+  const byProgram = new Map<string, MeasureRef[]>();
+  for (const m of deduped) {
+    if (!m.program) continue;
+    const group = byProgram.get(m.program) ?? [];
+    group.push(m);
+    byProgram.set(m.program, group);
+  }
+  const programSuppressed: SuppressedMeasure[] = [];
+  const shadowed = new Set<MeasureRef>();
+  for (const group of byProgram.values()) {
+    if (group.length < 2) continue;
+    const specific = group.filter((m) => m.countries !== null);
+    const tier = specific.length > 0 ? specific : group;
+    if (
+      tier.length > 1 &&
+      tier.some((m) => m.sailedOnOrAfter !== null || m.sailedOnOrBefore !== null)
+    ) {
+      sailAssumed = true;
+    }
+    const winner = tier.reduce((w, m) => {
+      const wr = w.rate ?? -1;
+      const mr = m.rate ?? -1;
+      if (mr > wr) return m;
+      if (mr === wr && m.effectiveDate > w.effectiveDate) return m;
+      return w;
+    });
+    for (const m of group) {
+      if (m === winner) continue;
+      shadowed.add(m);
+      programSuppressed.push({
+        ...m,
+        suppressedBy: {
+          winnerAuthority: winner.authority,
+          reason: `${winner.name} (${winner.ch99Code}) applies to this line in its place — one charge per tariff program.`,
+        },
+      });
+    }
+  }
+  const survivors =
+    shadowed.size === 0 ? deduped : deduped.filter((m) => !shadowed.has(m));
+
   const sailBasis: SailBasis = !sailEvaluated
     ? null
     : sailAssumed
@@ -208,8 +261,10 @@ export function resolveExpectedMeasures(
         ? "estimated"
         : "exact";
 
+  const stacked = applyStacking(survivors, ref.stackingRules, input.entryDate);
   return {
-    ...applyStacking(deduped, ref.stackingRules, input.entryDate),
+    applicable: stacked.applicable,
+    suppressed: [...programSuppressed, ...stacked.suppressed],
     sailBasis,
   };
 }

@@ -316,6 +316,162 @@ describe("exclusionPrefixes carve-outs", () => {
   });
 });
 
+describe("program exclusivity", () => {
+  // The reciprocal-tariff shape: one program published as a worldwide
+  // baseline heading plus country-specific headings that apply in lieu of
+  // it. Same program key, different Chapter 99 codes.
+  const baseline = measure({
+    id: "rec-base",
+    name: "IEEPA Reciprocal — baseline",
+    authority: "reciprocal",
+    program: "ieepa-reciprocal",
+    scope: "all_products",
+    prefixes: [],
+    countries: null,
+    ch99Code: "9903.01.25",
+    ch99Digits: "99030125",
+    rate: 0.1,
+  });
+  const cnRate = measure({
+    id: "rec-cn",
+    name: "IEEPA Reciprocal — China",
+    authority: "reciprocal",
+    program: "ieepa-reciprocal",
+    scope: "all_products",
+    prefixes: [],
+    countries: ["CN"],
+    ch99Code: "9903.01.63",
+    ch99Digits: "99030163",
+    rate: 0.34,
+    effectiveDate: "2025-04-09",
+  });
+
+  it("country-specific heading applies in lieu of the same program's baseline", () => {
+    const synthetic: ReferenceData = {
+      htsByDigits: ref.htsByDigits,
+      measures: [baseline, cnRate],
+      stackingRules: [],
+    };
+
+    const cn = resolveExpectedMeasures(line("8501.31.4000", "CN"), synthetic);
+    expect(cn.applicable.map((m) => m.id)).toEqual(["rec-cn"]);
+    expect(cn.suppressed.map((m) => m.id)).toEqual(["rec-base"]);
+    expect(cn.suppressed[0].suppressedBy.winnerAuthority).toBe("reciprocal");
+    expect(cn.suppressed[0].suppressedBy.reason).toContain("9903.01.63");
+
+    // A country outside the specific heading still owes the baseline.
+    const vn = resolveExpectedMeasures(line("8501.31.4000", "VN"), synthetic);
+    expect(vn.applicable.map((m) => m.id)).toEqual(["rec-base"]);
+    expect(vn.suppressed).toEqual([]);
+  });
+
+  it("distinct programs under one statute still stack on the same line", () => {
+    // CBP's own line sequencing: IEEPA fentanyl + IEEPA reciprocal were
+    // separate programs reported together on one China line.
+    const fentanyl = measure({
+      id: "fent-cn",
+      name: "IEEPA Fentanyl — China",
+      authority: "ieepa",
+      program: "ieepa-fentanyl",
+      scope: "all_products",
+      prefixes: [],
+      countries: ["CN"],
+      ch99Code: "9903.01.24",
+      ch99Digits: "99030124",
+      rate: 0.2,
+    });
+    const synthetic: ReferenceData = {
+      htsByDigits: ref.htsByDigits,
+      measures: [fentanyl, cnRate],
+      stackingRules: [],
+    };
+
+    const result = resolveExpectedMeasures(line("8501.31.4000", "CN"), synthetic);
+    expect(result.applicable.map((m) => m.id).sort()).toEqual([
+      "fent-cn",
+      "rec-cn",
+    ]);
+    expect(result.suppressed).toEqual([]);
+  });
+
+  it("null-program measures are never deduped against each other", () => {
+    const a = measure({ id: "a", program: null, ch99Code: "9903.77.01", ch99Digits: "99037701" });
+    const b = measure({ id: "b", program: null, ch99Code: "9903.77.02", ch99Digits: "99037702", rate: 0.2 });
+    const synthetic: ReferenceData = {
+      htsByDigits: ref.htsByDigits,
+      measures: [a, b],
+      stackingRules: [],
+    };
+
+    const result = resolveExpectedMeasures(line("8501.31.4000", "CN"), synthetic);
+    expect(result.applicable.map((m) => m.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("undecidable sail partition within a program keeps the costlier side, assumed", () => {
+    // Sail-tiled same-program pair (the on-the-water shape) with no sail
+    // dates on the entry: neither side can be ruled out, so the costlier
+    // wins and the basis is an assumption — same doctrine as the
+    // same-code sail dedupe.
+    const post = measure({
+      id: "post-cutoff",
+      program: "s122-like",
+      countries: ["CN"],
+      ch99Code: "9903.77.03",
+      ch99Digits: "99037703",
+      rate: 0.15,
+      sailedOnOrAfter: "2026-05-01",
+    });
+    const pre = measure({
+      id: "pre-cutoff",
+      program: "s122-like",
+      countries: ["CN"],
+      ch99Code: "9903.77.04",
+      ch99Digits: "99037704",
+      rate: 0.1,
+      sailedOnOrBefore: "2026-04-30",
+    });
+    const synthetic: ReferenceData = {
+      htsByDigits: ref.htsByDigits,
+      measures: [post, pre],
+      stackingRules: [],
+    };
+
+    const result = resolveExpectedMeasures(line("8501.31.4000", "CN"), synthetic);
+    expect(result.applicable.map((m) => m.id)).toEqual(["post-cutoff"]);
+    expect(result.suppressed.map((m) => m.id)).toEqual(["pre-cutoff"]);
+    expect(result.sailBasis).toBe("assumed");
+  });
+
+  it("equal specificity and rate falls back to the latest effective window", () => {
+    const older = measure({
+      id: "older",
+      program: "p",
+      countries: ["CN"],
+      ch99Code: "9903.77.05",
+      ch99Digits: "99037705",
+      rate: 0.1,
+      effectiveDate: "2025-01-01",
+    });
+    const newer = measure({
+      id: "newer",
+      program: "p",
+      countries: ["CN"],
+      ch99Code: "9903.77.06",
+      ch99Digits: "99037706",
+      rate: 0.1,
+      effectiveDate: "2026-01-01",
+    });
+    const synthetic: ReferenceData = {
+      htsByDigits: ref.htsByDigits,
+      measures: [older, newer],
+      stackingRules: [],
+    };
+
+    const result = resolveExpectedMeasures(line("8501.31.4000", "CN"), synthetic);
+    expect(result.applicable.map((m) => m.id)).toEqual(["newer"]);
+  });
+});
+
 describe("applyStacking", () => {
   const rules: StackingRuleRef[] = [
     {

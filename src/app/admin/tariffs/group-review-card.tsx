@@ -19,6 +19,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { OpenMeasureGroup } from "@/lib/db/queries/tariffs";
 import { formatRate } from "@/lib/format";
 
@@ -49,6 +56,10 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
   const [excluded, setExcluded] = React.useState<Set<string>>(new Set());
   const [defaultEffectiveDate, setDefaultEffectiveDate] = React.useState("");
   const [defaultEndDate, setDefaultEndDate] = React.useState("");
+  const [confirmWorldwide, setConfirmWorldwide] = React.useState(false);
+  const [defaultOnConflict, setDefaultOnConflict] = React.useState<
+    "supersede" | "stack" | ""
+  >("");
   // Per-member effective dates — the one field the feed never carries, and
   // the one that legitimately differs across a family's members. Prefilled
   // from the proposal (extraction can settle it); the default fills blanks.
@@ -129,6 +140,8 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
         action: "approve",
         defaultEffectiveDate: defaultEffectiveDate || null,
         defaultEndDate: defaultEndDate || null,
+        confirmWorldwide,
+        ...(defaultOnConflict ? { defaultOnConflict } : {}),
         memberEffectiveDates: Object.fromEntries(
           group.members
             .filter(
@@ -286,6 +299,35 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
               onChange={(e) => setDefaultEndDate(e.target.value)}
               className="w-44"
             />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">On overlap with live measures</Label>
+            <Select
+              value={defaultOnConflict === "" ? undefined : defaultOnConflict}
+              disabled={busy}
+              onValueChange={(v) =>
+                setDefaultOnConflict(v as "supersede" | "stack")
+              }
+            >
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Block apply" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="supersede">Supersede</SelectItem>
+                <SelectItem value="stack">Stack</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2 pb-2.5">
+            <Checkbox
+              id={`worldwide-${group.groupId}`}
+              checked={confirmWorldwide}
+              disabled={busy}
+              onCheckedChange={(v) => setConfirmWorldwide(v === true)}
+            />
+            <Label htmlFor={`worldwide-${group.groupId}`} className="text-xs">
+              Codes without countries apply to every country
+            </Label>
           </div>
         </div>
 

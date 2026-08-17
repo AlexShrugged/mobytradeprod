@@ -8,10 +8,11 @@ import type { SplitCategory } from "reductoai/resources/split";
 // specifics.
 
 // entry_packet has no extract schema — packets are split into children, and
-// the children extract under their own docType.
+// the children extract under their own docType. part_catalog never reaches
+// the pipeline at all: catalog imports apply on the Parts page at upload.
 export type ExtractableDocType = Exclude<
   DocumentTypeValue,
-  "other" | "entry_packet"
+  "other" | "entry_packet" | "part_catalog"
 >;
 
 const date = (what: string) => ({

@@ -157,6 +157,7 @@ async function main() {
       .values({
         name: m.name,
         authority: m.authority,
+        program: m.program,
         scope: m.scope,
         countries: m.countries,
         effectiveDate: m.effectiveDate,

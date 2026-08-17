@@ -148,31 +148,61 @@ export type EntryRow = {
   purchaseOrders: EntryPurchaseOrderRow[];
 };
 
-export async function getEntries(): Promise<EntryRow[]> {
+export type EntriesPageResult = {
+  rows: EntryRow[];
+  totalCount: number;
+  /** Effective page after clamping to the last page. */
+  page: number;
+};
+
+export async function getEntries(opts: {
+  page: number;
+  per: number;
+}): Promise<EntriesPageResult> {
   const orgId = await getCurrentOrgId();
 
-  const [rows, lineCounts, alertCounts, findingCounts, linkedClaims, sailWindows] =
-    await Promise.all([
-      db.query.entries.findMany({
-        where: eq(schema.entries.orgId, orgId),
-        orderBy: desc(schema.entries.entryDate),
+  const totalCount = await db.$count(
+    schema.entries,
+    eq(schema.entries.orgId, orgId),
+  );
+  const page = Math.min(
+    Math.max(1, opts.page),
+    Math.max(1, Math.ceil(totalCount / opts.per)),
+  );
+
+  const rows = await db.query.entries.findMany({
+    where: eq(schema.entries.orgId, orgId),
+    orderBy: desc(schema.entries.entryDate),
+    limit: opts.per,
+    offset: (page - 1) * opts.per,
+    with: {
+      entryShipments: {
         with: {
-          entryShipments: {
+          shipment: {
             with: {
-              shipment: {
-                with: {
-                  shipmentPurchaseOrders: { with: { purchaseOrder: true } },
-                },
-              },
+              shipmentPurchaseOrders: { with: { purchaseOrder: true } },
             },
           },
-          entryPurchaseOrders: { with: { purchaseOrder: true } },
         },
-      }),
+      },
+      entryPurchaseOrders: { with: { purchaseOrder: true } },
+    },
+  });
+  if (rows.length === 0) return { rows: [], totalCount, page };
+  // Per-entry aggregates scoped to this page's entries only.
+  const entryIds = rows.map((e) => e.id);
+
+  const [lineCounts, alertCounts, findingCounts, linkedClaims, sailWindows] =
+    await Promise.all([
       db
         .select({ entryId: schema.entryLineItems.entryId, value: count() })
         .from(schema.entryLineItems)
-        .where(eq(schema.entryLineItems.orgId, orgId))
+        .where(
+          and(
+            eq(schema.entryLineItems.orgId, orgId),
+            inArray(schema.entryLineItems.entryId, entryIds),
+          ),
+        )
         .groupBy(schema.entryLineItems.entryId),
       db
         .select({
@@ -185,6 +215,7 @@ export async function getEntries(): Promise<EntryRow[]> {
           and(
             eq(schema.auditAlerts.orgId, orgId),
             eq(schema.auditAlerts.status, "open"),
+            inArray(schema.auditAlerts.entryId, entryIds),
           ),
         )
         .groupBy(schema.auditAlerts.entryId, schema.auditAlerts.severity),
@@ -201,6 +232,7 @@ export async function getEntries(): Promise<EntryRow[]> {
           and(
             eq(schema.analysisFindings.orgId, orgId),
             eq(schema.analysisFindings.status, "open"),
+            inArray(schema.analysisFindings.entryId, entryIds),
             sql`${schema.analysisFindings.relatedAlertKeys} = '[]'::jsonb`,
           ),
         )
@@ -211,7 +243,7 @@ export async function getEntries(): Promise<EntryRow[]> {
       db.query.refundClaims.findMany({
         where: and(
           eq(schema.refundClaims.orgId, orgId),
-          isNotNull(schema.refundClaims.entryId),
+          inArray(schema.refundClaims.entryId, entryIds),
         ),
         columns: {
           entryId: true,
@@ -258,7 +290,7 @@ export async function getEntries(): Promise<EntryRow[]> {
     }
   }
 
-  return rows.map((entry) => ({
+  const entryRows: EntryRow[] = rows.map((entry) => ({
     kind: "entry" as const,
     id: entry.id,
     entryNumber: entry.entryNumber,
@@ -309,6 +341,8 @@ export async function getEntries(): Promise<EntryRow[]> {
       totalAmount: purchaseOrder.totalAmount,
     })),
   }));
+
+  return { rows: entryRows, totalCount, page };
 }
 
 // ----------------------------------------------------------- future entries

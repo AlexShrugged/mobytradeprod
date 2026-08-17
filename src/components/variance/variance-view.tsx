@@ -3,6 +3,7 @@
 import * as React from "react";
 import { ChevronDown, Download, Search } from "lucide-react";
 
+import { PaginationControls } from "@/components/pagination-controls";
 import { VarianceTable } from "@/components/variance/variance-table";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import type { VarianceQueueRow } from "@/lib/db/queries/variance";
+import { DEFAULT_PER_PAGE, pageCountFor } from "@/lib/pagination";
 import { varianceCsv } from "@/lib/variance/export";
 import type { VarianceGroup } from "@/lib/variance/grouping";
 import type { EntryPhase } from "@/lib/variance/window";
@@ -73,6 +75,12 @@ export function VarianceView({
   const [checkedPhases, setCheckedPhases] = React.useState<Set<EntryPhase>>(
     () => new Set(["unsubmitted", "submitted"]),
   );
+  // Client-side pagination: unlike Parts/Events, every filter here is
+  // client state over the already-loaded queue, so paging only bounds what
+  // renders. Clamping (not resetting) keeps the page stable when a filter
+  // change shrinks the list.
+  const [page, setPage] = React.useState(1);
+  const [per, setPer] = React.useState<number>(DEFAULT_PER_PAGE);
 
   const inTypes = (types: string[]) => (g: QueueGroup) =>
     g.members.some((r) => types.includes(r.alertType));
@@ -133,6 +141,7 @@ export function VarianceView({
   const visible = statusBase.filter(
     (g) => phaseOk(g) && typeOk(g) && matchesQuery(g),
   );
+  const safePage = Math.min(page, pageCountFor(visible.length, per));
   // Pre-search count for the active view — picks the table's empty message
   // ("no matches" only when the search emptied it, not the other filters).
   const visibleTotal = statusBase.filter(
@@ -317,7 +326,21 @@ export function VarianceView({
         </Button>
       </div>
 
-      <VarianceTable groups={visible} totalCount={visibleTotal} />
+      <VarianceTable
+        groups={visible.slice((safePage - 1) * per, safePage * per)}
+        totalCount={visibleTotal}
+      />
+
+      <PaginationControls
+        page={safePage}
+        pageCount={pageCountFor(visible.length, per)}
+        per={per}
+        onPageChange={setPage}
+        onPerChange={(p) => {
+          setPer(p);
+          setPage(1);
+        }}
+      />
     </div>
   );
 }

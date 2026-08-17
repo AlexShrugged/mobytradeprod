@@ -144,6 +144,12 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
           docType: "entry_packet",
           fields: mapSplitToManifest(split.result.splits),
         };
+      } else if (docType === "part_catalog") {
+        // Unreachable: catalog imports are born processed and the process
+        // route refuses them; classification can never return this type.
+        throw new ProcessingError(
+          "Part catalog imports apply on the Parts page, not through the document pipeline.",
+        );
       } else if (docType === "other") {
         extraction = {
           docType: "other",

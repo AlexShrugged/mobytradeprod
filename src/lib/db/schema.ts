@@ -66,6 +66,10 @@ export const documentType = pgEnum("document_type", [
   // supporting docs in one PDF). Processing splits it into child documents;
   // the parent's extracted_data is the split manifest.
   "entry_packet",
+  // A SKU list imported on the Parts page (CSV/XLSX). Applied by the parts
+  // importer at upload time — these rows are born "processed" and never go
+  // through the document pipeline (no Reducto/stub processor for them).
+  "part_catalog",
   "other",
 ]);
 // Role of a child document inside an entry packet — the split classifier's
@@ -865,6 +869,17 @@ export const tradeMeasures = pgTable(
     id: id(),
     name: text("name").notNull(),
     authority: measureAuthority("authority").notNull(),
+    // Stable identity of the legal program this measure belongs to
+    // ("ieepa-reciprocal", "section-301-china") — the calculator's
+    // exclusivity key: at most ONE measure per program applies to a line
+    // (CBP partitions a program across Chapter 99 headings — baseline vs
+    // country-specific rates, pre/post-escalation windows — whose article
+    // descriptions carve each other out). Distinct programs under the same
+    // statute still stack (IEEPA fentanyl + IEEPA reciprocal shared one
+    // entry line), so authority is a display bucket, never this key. The
+    // instrument (EO/FR number) belongs in notes — orders get amended;
+    // the program persists. Null = lineage unknown: never deduped.
+    program: text("program"),
     scope: measureScope("scope").notNull().default("hts_list"),
     // Countries of origin the measure applies to; null = every country.
     countries: varchar("countries", { length: 2 }).array(),

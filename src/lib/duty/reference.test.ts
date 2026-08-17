@@ -49,6 +49,7 @@ function measureRow(
   return {
     id: nextId(),
     authority: "section_301",
+    program: null,
     scope: "hts_list",
     countries: ["CN"],
     countriesExcluded: null,

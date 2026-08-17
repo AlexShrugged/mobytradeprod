@@ -150,13 +150,29 @@ function docProvenance(
 
 // ---------------------------------------------------------------- sources
 
+export type EventsPageResult = {
+  events: BusinessEvent[];
+  /** More events exist past this window — drives the Next button. */
+  hasMore: boolean;
+};
+
 export async function getEvents(opts?: {
   types?: readonly EventType[] | null;
   partId?: string;
   limit?: number;
-}): Promise<BusinessEvent[]> {
+  offset?: number;
+}): Promise<EventsPageResult> {
   const orgId = await getCurrentOrgId();
   const scope = await resolveScope(orgId, opts?.partId);
+  const offset = opts?.offset ?? 0;
+
+  // The k-way-merge bound: the first offset+limit merged events can only
+  // come from each source's newest offset+limit rows, so the two sources
+  // that scale with catalog size (parts, field changes — 26k+ rows after a
+  // catalog import) are fetched newest-first with this cap instead of
+  // wholesale. +1 keeps a sentinel row so hasMore is exact. The remaining
+  // sources are human-scale (entries, shipments, POs…) and stay unbounded.
+  const bound = opts?.limit === undefined ? undefined : offset + opts.limit + 1;
 
   // A scoped source with an empty id set contributes nothing (drizzle's
   // inArray rejects empty arrays, so guard before querying).
@@ -251,6 +267,9 @@ export async function getEvents(opts?: {
         ...(scope.partId ? [eq(schema.parts.id, scope.partId)] : []),
       ),
       columns: { id: true, sku: true, status: true, createdAt: true },
+      // Newest-first matches part_created's occurredOn, so the bound holds.
+      orderBy: desc(schema.parts.createdAt),
+      ...(bound !== undefined ? { limit: bound } : {}),
     }),
     db.query.fieldChanges.findMany({
       where: and(
@@ -259,6 +278,7 @@ export async function getEvents(opts?: {
         ...(scope.partId ? [eq(schema.fieldChanges.entityId, scope.partId)] : []),
       ),
       orderBy: desc(schema.fieldChanges.createdAt),
+      ...(bound !== undefined ? { limit: bound } : {}),
     }),
     // Tariff rate changes are global; hidden in part scope (a per-part
     // relevance filter is a later refinement).
@@ -276,7 +296,23 @@ export async function getEvents(opts?: {
       )
     : quoteSheetRows;
 
-  const partById = new Map(partRows.map((p) => [p.id, p]));
+  // Bounded partRows can miss parts that bounded field changes reference —
+  // resolve their SKUs separately so change titles never degrade.
+  const skuByPartId = new Map(partRows.map((p) => [p.id, p.sku]));
+  const missingPartIds = [
+    ...new Set(
+      fieldChangeRows
+        .map((fc) => fc.entityId)
+        .filter((id) => !skuByPartId.has(id)),
+    ),
+  ];
+  if (missingPartIds.length > 0) {
+    const extra = await db.query.parts.findMany({
+      where: inArray(schema.parts.id, missingPartIds),
+      columns: { id: true, sku: true },
+    });
+    for (const p of extra) skuByPartId.set(p.id, p.sku);
+  }
 
   // Batch document provenance for everything that may carry documents.
   const wanted = new Map<LinkedEntityType, Set<string>>([
@@ -557,8 +593,7 @@ export async function getEvents(opts?: {
   for (const fc of fieldChangeRows) {
     const isHts = fc.field === "hts_code" || fc.field === "htsCode";
     if (!isHts && !COST_FIELDS.has(fc.field)) continue;
-    const part = partById.get(fc.entityId);
-    const sku = part?.sku ?? "unknown SKU";
+    const sku = skuByPartId.get(fc.entityId) ?? "unknown SKU";
     const vendorSuffix =
       fc.vendorId && vendorNameById.has(fc.vendorId)
         ? ` — ${vendorNameById.get(fc.vendorId)}`
@@ -610,7 +645,7 @@ export async function getEvents(opts?: {
     ];
   });
 
-  return assembleEvents(
+  const assembled = assembleEvents(
     [
       entryEvents,
       shipmentEvents,
@@ -623,6 +658,14 @@ export async function getEvents(opts?: {
       fieldChangeEvents,
       tariffEvents,
     ],
-    { types: opts?.types ?? null, limit: opts?.limit },
+    { types: opts?.types ?? null, limit: bound },
   );
+
+  if (opts?.limit === undefined) {
+    return { events: assembled, hasMore: false };
+  }
+  return {
+    events: assembled.slice(offset, offset + opts.limit),
+    hasMore: assembled.length > offset + opts.limit,
+  };
 }

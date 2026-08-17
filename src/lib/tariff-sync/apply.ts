@@ -14,9 +14,16 @@ import * as schema from "../db/schema";
 import { normalizeHts } from "../duty/calculator";
 import { dayBefore } from "../effective-dating";
 import type { DbClient } from "../duty/reference";
+import {
+  findProgramConflicts,
+  inferProgram,
+  planProgramResolution,
+  type LiveProgramMeasure,
+} from "./programs";
 import type {
   LiveMeasureSnapshot,
   ProposedMeasureChange,
+  RevisionEvidence,
   RevisionProposalDisplay,
 } from "./types";
 
@@ -51,6 +58,20 @@ export function planRevisionApply(
     ) {
       throw new ApplyValidationError(
         "A new non-exemption measure needs a rate before it can be applied.",
+      );
+    }
+    // Null countries means EVERY country of origin — too big a blast radius
+    // to fail open on (unparsed per-country headings used to mint worldwide
+    // measures this way). The reviewer either sets countries or explicitly
+    // confirms worldwide scope.
+    if (
+      !proposed.exemption &&
+      proposed.countries === null &&
+      proposed.worldwide !== true
+    ) {
+      throw new ApplyValidationError(
+        "Confirm the country scope: set countries of origin, or explicitly " +
+          "mark the measure as applying to every country.",
       );
     }
     return { action: "insert_new" };
@@ -315,6 +336,16 @@ export async function applyRevisionGroup(
      *  members of a family legitimately differ (later bilateral deals,
      *  amendments). Overrides the proposal; the default fills what's left. */
     memberEffectiveDates?: Record<string, string>;
+    /** Per-member program overrides (revision id → slug or null to clear)
+     *  — corrections to the differ's inference. */
+    memberPrograms?: Record<string, string | null>;
+    /** Reviewer's blanket confirmation that members with null countries
+     *  really apply to every country of origin (the family-level answer to
+     *  the per-measure worldwide gate). */
+    confirmWorldwide?: boolean;
+    /** Folded into members that carry no conflict resolution of their own
+     *  — one supersede/stack answer for the whole family. */
+    defaultOnConflict?: "supersede" | "stack";
     /** Unchecked members — rejected as part of this approval. */
     skipRevisionIds?: string[];
     /** Actor recorded on the per-member rejection items. */
@@ -413,6 +444,36 @@ export async function applyRevisionGroup(
       proposed.endDate = opts.defaultEndDate;
       folded = true;
     }
+    const memberProgram = opts.memberPrograms?.[rev.id];
+    if (memberProgram !== undefined && memberProgram !== proposed.program) {
+      proposed.program = memberProgram;
+      folded = true;
+    }
+    // Members staged before program inference existed (absent field, not an
+    // explicit null): derive the program exactly as staging now does, so
+    // pre-feature queues get the same conflict gates. Persisted like the
+    // date folds — what applied is recorded — and memberPrograms above
+    // still overrides.
+    if (proposed.program === undefined && rev.changeType === "create_measure") {
+      proposed.program = inferProgram(
+        proposed.authority,
+        rev.ch99Code ?? "",
+        (rev.evidence as RevisionEvidence | null)?.description ?? "",
+      );
+      folded = true;
+    }
+    if (
+      opts.confirmWorldwide &&
+      proposed.countries === null &&
+      proposed.worldwide !== true
+    ) {
+      proposed.worldwide = true;
+      folded = true;
+    }
+    if (proposed.onConflict == null && opts.defaultOnConflict) {
+      proposed.onConflict = opts.defaultOnConflict;
+      folded = true;
+    }
     if (folded) {
       await db
         .update(schema.measureRevisions)
@@ -479,6 +540,12 @@ async function applyOne(
   const measureValues = {
     name: proposed.name,
     authority: proposed.authority,
+    // Proposals staged before the program field existed must not wipe a
+    // live measure's program on tile/update — absent inherits, null clears.
+    program:
+      proposed.program === undefined
+        ? (live?.program ?? null)
+        : proposed.program,
     scope: proposed.scope,
     countries: proposed.countries,
     countriesExcluded: proposed.countriesExcluded ?? null,
@@ -492,9 +559,40 @@ async function applyOne(
 
   switch (plan.action) {
     case "insert_new": {
+      // Same-program collision gate (fail closed): a new heading claiming
+      // the same countries, products, and window as a live measure of its
+      // program needs the reviewer's explicit supersede-or-stack call.
+      // Members of one group apply sequentially in the same transaction, so
+      // within-batch collisions are caught here too. Null program = lineage
+      // unknown: no gate (and the calculator never dedupes it either).
+      let predecessorId: string | null = null;
+      if (!proposed.exemption && proposed.program) {
+        const conflicts = findProgramConflicts(
+          proposed,
+          await loadProgramMeasures(db, proposed.program),
+        );
+        const resolution = planProgramResolution(proposed, conflicts);
+        if (resolution.kind === "error") {
+          throw new ApplyValidationError(resolution.message);
+        }
+        if (resolution.kind === "supersede") {
+          // Every conflict overlaps the successor window, so each is open
+          // past the close point — closing always shortens, never extends.
+          await db
+            .update(schema.tradeMeasures)
+            .set({
+              endDate: dayBefore(proposed.effectiveDate!),
+              updatedAt: new Date(),
+            })
+            .where(
+              inArray(schema.tradeMeasures.id, resolution.closeMeasureIds),
+            );
+          predecessorId = resolution.predecessorId;
+        }
+      }
       const [measure] = await db
         .insert(schema.tradeMeasures)
-        .values(measureValues)
+        .values({ ...measureValues, predecessorId })
         .returning();
       await insertCh99Row(db, rev.ch99Code!, proposed, measure.id);
       await insertPrefixes(db, measure.id, proposed.prefixes);
@@ -570,6 +668,53 @@ async function applyOne(
       return { measureId: live!.id };
     }
   }
+}
+
+/** Live measures of one program, shaped for the pure conflict check. Unlike
+ *  same-code tiling, a cross-code supersede does NOT copy the predecessor's
+ *  exemption rows — a new heading defines its own carve-outs in its notice,
+ *  and inheriting the old code's exclusions could wrongly excuse charges. */
+async function loadProgramMeasures(
+  db: DbClient,
+  program: string,
+): Promise<LiveProgramMeasure[]> {
+  const measures = await db.query.tradeMeasures.findMany({
+    where: eq(schema.tradeMeasures.program, program),
+  });
+  if (measures.length === 0) return [];
+  const ids = measures.map((m) => m.id);
+  const [ch99Rows, prefixRows] = await Promise.all([
+    db.query.htsCodes.findMany({
+      where: inArray(schema.htsCodes.tradeMeasureId, ids),
+    }),
+    db.query.tradeMeasureHts.findMany({
+      where: inArray(schema.tradeMeasureHts.tradeMeasureId, ids),
+    }),
+  ]);
+  const codeByMeasure = new Map<string, string>();
+  for (const h of ch99Rows) {
+    if (h.exemption || !h.tradeMeasureId) continue;
+    if (!codeByMeasure.has(h.tradeMeasureId)) {
+      codeByMeasure.set(h.tradeMeasureId, h.code);
+    }
+  }
+  const prefixesByMeasure = new Map<string, string[]>();
+  for (const p of prefixRows) {
+    const list = prefixesByMeasure.get(p.tradeMeasureId) ?? [];
+    list.push(p.htsPrefix);
+    prefixesByMeasure.set(p.tradeMeasureId, list);
+  }
+  return measures.map((m) => ({
+    id: m.id,
+    name: m.name,
+    ch99Code: codeByMeasure.get(m.id) ?? "—",
+    program: m.program,
+    countries: m.countries,
+    effectiveDate: m.effectiveDate,
+    endDate: m.endDate,
+    scope: m.scope,
+    prefixes: prefixesByMeasure.get(m.id) ?? [],
+  }));
 }
 
 async function insertCh99Row(

@@ -23,6 +23,6 @@ export async function GET(
     return NextResponse.json({ error: "Part not found." }, { status: 404 });
   }
 
-  const events = await getEvents({ partId, limit: 8 });
+  const { events } = await getEvents({ partId, limit: 8 });
   return NextResponse.json({ events });
 }

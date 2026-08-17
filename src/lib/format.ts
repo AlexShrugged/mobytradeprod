@@ -72,6 +72,7 @@ const docTypeLabels: Record<string, string> = {
   quote_sheet: "Quote sheet",
   refund_report: "Refund report",
   entry_packet: "Entry packet",
+  part_catalog: "Part catalog",
   other: "Other",
 };
 

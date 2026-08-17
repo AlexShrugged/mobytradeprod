@@ -137,6 +137,7 @@ export function buildReferenceData(
       id: m.id,
       name: m.name,
       authority: m.authority,
+      program: m.program ?? null,
       scope: m.scope,
       countries: m.countries,
       countriesExcluded: m.countriesExcluded ?? null,

@@ -35,6 +35,15 @@ export async function POST(
   if (!doc) {
     return NextResponse.json({ error: "Document not found." }, { status: 404 });
   }
+  // Catalog imports are applied by the Parts page importer at upload time —
+  // there is no document processor for them, and a reprocess would clobber
+  // the import summary in extracted_data. Re-import the file instead.
+  if (doc.docType === "part_catalog") {
+    return NextResponse.json(
+      { error: "Part catalog imports re-apply from the Parts page, not here." },
+      { status: 409 },
+    );
+  }
 
   const outcome = await processDocumentRow(doc);
   if (!outcome.claimed) {

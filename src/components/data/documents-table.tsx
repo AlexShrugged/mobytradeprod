@@ -249,17 +249,25 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          {doc.status === "pending" && (
-                            <DropdownMenuItem onClick={() => processDocument(doc)}>
-                              <Play /> Process now
-                            </DropdownMenuItem>
-                          )}
+                          {/* Catalog imports have no pipeline processor —
+                              they apply on the Parts page at upload time. */}
+                          {doc.status === "pending" &&
+                            doc.docType !== "part_catalog" && (
+                              <DropdownMenuItem
+                                onClick={() => processDocument(doc)}
+                              >
+                                <Play /> Process now
+                              </DropdownMenuItem>
+                            )}
                           {(doc.status === "failed" ||
-                            doc.status === "processed") && (
-                            <DropdownMenuItem onClick={() => processDocument(doc)}>
-                              <RefreshCw /> Reprocess
-                            </DropdownMenuItem>
-                          )}
+                            doc.status === "processed") &&
+                            doc.docType !== "part_catalog" && (
+                              <DropdownMenuItem
+                                onClick={() => processDocument(doc)}
+                              >
+                                <RefreshCw /> Reprocess
+                              </DropdownMenuItem>
+                            )}
                           {doc.extractedData != null && (
                             <DropdownMenuItem onClick={() => setViewing(doc)}>
                               <FileJson /> View extracted data

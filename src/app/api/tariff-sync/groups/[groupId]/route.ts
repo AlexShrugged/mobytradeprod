@@ -42,6 +42,16 @@ const bodySchema = z.discriminatedUnion("action", [
     /** Per-member reviewer-confirmed effective dates (revision id → date);
      *  members of one family legitimately carry different dates. */
     memberEffectiveDates: z.record(z.string(), isoDate).optional(),
+    /** Per-member program overrides (revision id → slug, null clears the
+     *  differ's inference). */
+    memberPrograms: z
+      .record(z.string(), z.string().trim().min(1).max(80).nullable())
+      .optional(),
+    /** Family-level confirmation that null-country members really apply to
+     *  every country of origin (the worldwide gate's bulk answer). */
+    confirmWorldwide: z.boolean().optional(),
+    /** One supersede/stack answer folded into members that carry none. */
+    defaultOnConflict: z.enum(["supersede", "stack"]).optional(),
     /** Unchecked members — rejected, finalized by this same approval. */
     skipRevisionIds: z.array(z.string()).optional(),
     notes: z.string().nullish(),
@@ -137,6 +147,9 @@ export async function PATCH(
         defaultEffectiveDate: body.defaultEffectiveDate ?? undefined,
         defaultEndDate: body.defaultEndDate ?? undefined,
         memberEffectiveDates: body.memberEffectiveDates,
+        memberPrograms: body.memberPrograms,
+        confirmWorldwide: body.confirmWorldwide,
+        defaultOnConflict: body.defaultOnConflict,
         skipRevisionIds: body.skipRevisionIds,
         decidedBy: actor,
       });

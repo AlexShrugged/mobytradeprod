@@ -111,6 +111,37 @@ describe("diffRelease classification", () => {
     expect(revisions[0].proposed.endDate).toBeNull(); // reviewer sets it
   });
 
+  it("create_measure proposals carry the inferred program", () => {
+    const reciprocal = row({
+      htsno: "9903.02.05",
+      description: "Articles the product of Brazil (reciprocal tariff, 10%)",
+      general: "The duty provided in the applicable subheading + 10%",
+    });
+    const unknown = row({
+      htsno: "9903.99.11",
+      description: "Articles subject to additional duties",
+    });
+    const { revisions } = diffRelease([reciprocal, unknown], stateWith(), []);
+    const byCode = new Map(revisions.map((r) => [r.ch99Code, r]));
+    expect(byCode.get("9903.02.05")?.proposed.program).toBe("ieepa-reciprocal");
+    // Not confident -> explicit null, never a guess.
+    expect(byCode.get("9903.99.11")?.proposed.program).toBeNull();
+  });
+
+  it("change and end revisions carry the live measure's program forward", () => {
+    const tracked = live({ program: "section-301-china" });
+    const rateBump = row({
+      htsno: "9903.88.01",
+      description: "Articles of China subject to Section 301 List 1 (25%)",
+      general: "The duty provided in the applicable subheading + 30%",
+    });
+    const changed = diffRelease([rateBump], stateWith(tracked), []);
+    expect(changed.revisions[0].proposed.program).toBe("section-301-china");
+
+    const ended = diffRelease([], stateWith(tracked), []);
+    expect(ended.revisions[0].proposed.program).toBe("section-301-china");
+  });
+
   it("statistical suffixes and non-9903 rows are ignored", () => {
     const rows = parseCh99Rows([
       { htsno: "9903.88.01.15", description: "stat line", general: "" },

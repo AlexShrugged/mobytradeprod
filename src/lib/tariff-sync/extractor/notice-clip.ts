@@ -39,7 +39,7 @@ export function clipNoticeForCodes(
   codes: string[],
   opts: { exactOnly?: boolean } = {},
 ): string | null {
-  let ranges: [number, number][] = [];
+  const ranges: [number, number][] = [];
   for (const code of codes) ranges.push(...anchorRanges(text, code));
   if (ranges.length === 0 && !opts.exactOnly) {
     const prefixes = [...new Set(codes.map((c) => c.slice(0, 7)))];

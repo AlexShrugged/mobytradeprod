@@ -7,9 +7,15 @@ import {
   countDistinct,
   desc,
   eq,
+  exists,
+  ilike,
   inArray,
   isNotNull,
   isNull,
+  lt,
+  or,
+  sql,
+  type SQL,
 } from "drizzle-orm";
 
 import type { ReviewProposal } from "@/lib/classification/service";
@@ -189,11 +195,106 @@ export type PartRow = Part & {
   classification: PartClassificationInfo | null;
 };
 
-export async function getParts(): Promise<PartRow[]> {
+/** The server-side counterpart of the old client filter: SKU, name, HTS,
+ *  or a current vendor's name. Undefined when there is no query. */
+function partsSearchWhere(q: string | null | undefined): SQL | undefined {
+  const trimmed = q?.trim();
+  if (!trimmed) return undefined;
+  const pattern = `%${trimmed}%`;
+  return or(
+    ilike(schema.parts.sku, pattern),
+    ilike(schema.parts.name, pattern),
+    ilike(schema.parts.htsCode, pattern),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(schema.partSources)
+        .innerJoin(
+          schema.vendors,
+          eq(schema.partSources.vendorId, schema.vendors.id),
+        )
+        .where(
+          and(
+            eq(schema.partSources.partId, schema.parts.id),
+            isNull(schema.partSources.validTo),
+            ilike(schema.vendors.name, pattern),
+          ),
+        ),
+    ),
+  );
+}
+
+/** Which page (at `per` rows, under `q`) a given part lands on — deep links
+ *  (?expand=, ?review=) must open on the page that shows the part. */
+export async function getPartPageIndex(
+  partId: string,
+  per: number,
+  q?: string | null,
+): Promise<number> {
   const orgId = await getCurrentOrgId();
+  const part = await db.query.parts.findFirst({
+    where: and(eq(schema.parts.id, partId), eq(schema.parts.orgId, orgId)),
+    columns: { sku: true },
+  });
+  if (!part) return 1;
+  const before = await db.$count(
+    schema.parts,
+    and(
+      eq(schema.parts.orgId, orgId),
+      partsSearchWhere(q),
+      lt(schema.parts.sku, part.sku),
+    ),
+  );
+  return Math.floor(before / per) + 1;
+}
+
+export type PartsPageResult = {
+  rows: PartRow[];
+  /** Parts in the org, unfiltered — drives the getting-started empty state. */
+  totalCount: number;
+  /** Parts matching the search — drives the page count and footer. */
+  filteredCount: number;
+  /** Effective page after clamping to the last page. */
+  page: number;
+};
+
+export async function getParts(opts: {
+  page: number;
+  per: number;
+  q?: string | null;
+}): Promise<PartsPageResult> {
+  const orgId = await getCurrentOrgId();
+  const searchWhere = partsSearchWhere(opts.q);
+  const where = and(eq(schema.parts.orgId, orgId), searchWhere);
+
+  const [totalCount, filteredCount] = await Promise.all([
+    db.$count(schema.parts, eq(schema.parts.orgId, orgId)),
+    searchWhere
+      ? db.$count(schema.parts, where)
+      : Promise.resolve(-1), // filled from totalCount below
+  ]);
+  const filtered = filteredCount === -1 ? totalCount : filteredCount;
+
+  const page = Math.min(
+    Math.max(1, opts.page),
+    Math.max(1, Math.ceil(filtered / opts.per)),
+  );
+
+  const parts = await db.query.parts.findMany({
+    where,
+    orderBy: asc(schema.parts.sku),
+    limit: opts.per,
+    offset: (page - 1) * opts.per,
+  });
+  if (parts.length === 0) {
+    return { rows: [], totalCount, filteredCount: filtered, page };
+  }
+  // Every per-concern query below is scoped to this page's parts — the
+  // whole point of paginating: a 26k-SKU catalog must never be assembled
+  // wholesale for one screen.
+  const partIds = parts.map((p) => p.id);
 
   const [
-    parts,
     ref,
     quoteLines,
     partSources,
@@ -202,13 +303,12 @@ export async function getParts(): Promise<PartRow[]> {
     usage,
     classificationRuns,
   ] = await Promise.all([
-      db.query.parts.findMany({
-        where: eq(schema.parts.orgId, orgId),
-        orderBy: asc(schema.parts.sku),
-      }),
       getReferenceDataForOrg(),
       db.query.quoteLines.findMany({
-        where: eq(schema.quoteLines.orgId, orgId),
+        where: and(
+          eq(schema.quoteLines.orgId, orgId),
+          inArray(schema.quoteLines.partId, partIds),
+        ),
         with: {
           quoteSheet: {
             columns: {
@@ -226,20 +326,22 @@ export async function getParts(): Promise<PartRow[]> {
         // The parts page shows today's sourcing facts: current windows only.
         where: and(
           eq(schema.partSources.orgId, orgId),
+          inArray(schema.partSources.partId, partIds),
           isNull(schema.partSources.validTo),
         ),
         with: { vendor: { columns: { name: true } } },
       }),
-      fetchActualRollupLines(orgId),
+      fetchActualRollupLines(orgId, partIds),
       db.query.reviewItems.findMany({
         where: and(
           eq(schema.reviewItems.orgId, orgId),
           eq(schema.reviewItems.itemType, "hts_classification"),
           eq(schema.reviewItems.status, "pending"),
+          inArray(schema.reviewItems.subjectId, partIds),
         ),
         columns: { id: true, subjectId: true, proposal: true },
       }),
-      fetchVendorUsage(orgId),
+      fetchVendorUsage(orgId, partIds),
       // Completed runs newest-first (uuidv7 ids order by time); the first
       // row seen per part below is its latest — the same latest-by-id
       // contract the review flow uses. Runs are user-triggered and few.
@@ -247,6 +349,7 @@ export async function getParts(): Promise<PartRow[]> {
         where: and(
           eq(schema.htsClassifications.orgId, orgId),
           eq(schema.htsClassifications.status, "completed"),
+          inArray(schema.htsClassifications.partId, partIds),
         ),
         orderBy: desc(schema.htsClassifications.id),
         with: {
@@ -300,7 +403,7 @@ export async function getParts(): Promise<PartRow[]> {
     return { min: Math.min(...present), max: Math.max(...present) };
   };
 
-  return parts.map((part) => {
+  const rows: PartRow[] = parts.map((part) => {
     const partLines = linesByPartId.get(part.id) ?? [];
     // Newest sheet first (quote date, falling back to when we recorded the
     // sheet), newest line as the tiebreaker.
@@ -490,6 +593,8 @@ export async function getParts(): Promise<PartRow[]> {
       classification,
     };
   });
+
+  return { rows, totalCount, filteredCount: filtered, page };
 }
 
 /** Per-(part, vendor) activity counts, keyed `${partId}:${vendorId}`.
@@ -497,6 +602,7 @@ export async function getParts(): Promise<PartRow[]> {
  *  so distinct entry ids are merged in code rather than summed per path. */
 async function fetchVendorUsage(
   orgId: string,
+  partIds: string[],
 ): Promise<Map<string, PartVendorUsage>> {
   const [poRows, invoiceRows, entryViaInvoice, entryViaPo] = await Promise.all([
     db
@@ -513,7 +619,7 @@ async function fetchVendorUsage(
       .where(
         and(
           eq(schema.purchaseOrderLines.orgId, orgId),
-          isNotNull(schema.purchaseOrderLines.partId),
+          inArray(schema.purchaseOrderLines.partId, partIds),
           isNotNull(schema.purchaseOrders.vendorId),
         ),
       )
@@ -532,7 +638,7 @@ async function fetchVendorUsage(
       .where(
         and(
           eq(schema.invoiceLineItems.orgId, orgId),
-          isNotNull(schema.invoiceLineItems.partId),
+          inArray(schema.invoiceLineItems.partId, partIds),
           isNotNull(schema.invoices.vendorId),
         ),
       )
@@ -555,7 +661,7 @@ async function fetchVendorUsage(
       .where(
         and(
           eq(schema.entryInvoices.orgId, orgId),
-          isNotNull(schema.invoiceLineItems.partId),
+          inArray(schema.invoiceLineItems.partId, partIds),
           isNotNull(schema.invoices.vendorId),
         ),
       ),
@@ -577,7 +683,7 @@ async function fetchVendorUsage(
       .where(
         and(
           eq(schema.entryPurchaseOrders.orgId, orgId),
-          isNotNull(schema.purchaseOrderLines.partId),
+          inArray(schema.purchaseOrderLines.partId, partIds),
           isNotNull(schema.purchaseOrders.vendorId),
         ),
       ),
@@ -615,9 +721,15 @@ async function fetchVendorUsage(
 }
 
 /** Entry lines (with charges) from filed entries, shaped for rollupBySku. */
-async function fetchActualRollupLines(orgId: string): Promise<RollupLine[]> {
+async function fetchActualRollupLines(
+  orgId: string,
+  partIds: string[],
+): Promise<RollupLine[]> {
   const rows = await db.query.entryLineItems.findMany({
-    where: eq(schema.entryLineItems.orgId, orgId),
+    where: and(
+      eq(schema.entryLineItems.orgId, orgId),
+      inArray(schema.entryLineItems.partId, partIds),
+    ),
     with: {
       charges: true,
       entry: {

@@ -29,6 +29,10 @@ export type MeasureRef = {
   id: string;
   name: string;
   authority: MeasureAuthorityValue;
+  // Stable legal-program identity (trade_measures.program) — the
+  // exclusivity key: at most one measure per program applies to a line.
+  // Absent/null = lineage unknown, never deduped. See schema.ts.
+  program?: string | null;
   scope: MeasureScopeValue;
   countries: string[] | null; // null = every country of origin
   // Annex-style carve-outs: COO in this list → measure does not apply.

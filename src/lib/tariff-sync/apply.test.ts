@@ -50,9 +50,14 @@ describe("planRevisionApply", () => {
   });
 
   it("create_measure needs an effective date and (unless exempt) a rate", () => {
-    expect(planRevisionApply("create_measure", proposed(), null, null)).toEqual({
-      action: "insert_new",
-    });
+    expect(
+      planRevisionApply(
+        "create_measure",
+        proposed({ worldwide: true }),
+        null,
+        null,
+      ),
+    ).toEqual({ action: "insert_new" });
     expect(() =>
       planRevisionApply("create_measure", proposed({ effectiveDate: null }), null, null),
     ).toThrow(ApplyValidationError);
@@ -64,6 +69,32 @@ describe("planRevisionApply", () => {
       planRevisionApply(
         "create_measure",
         proposed({ rate: null, exemption: true }),
+        null,
+        null,
+      ),
+    ).toEqual({ action: "insert_new" });
+  });
+
+  it("create_measure with null countries needs the explicit worldwide confirmation", () => {
+    // The fail-open that minted worldwide measures from unparsed
+    // per-country headings: null countries, no confirmation → refuse.
+    expect(() =>
+      planRevisionApply("create_measure", proposed(), null, null),
+    ).toThrow(/country scope/);
+    // Explicit country list needs no confirmation …
+    expect(
+      planRevisionApply(
+        "create_measure",
+        proposed({ countries: ["CN"] }),
+        null,
+        null,
+      ),
+    ).toEqual({ action: "insert_new" });
+    // … and exemption rows are carve-outs, not liabilities: no gate.
+    expect(
+      planRevisionApply(
+        "create_measure",
+        proposed({ exemption: true, rate: 0 }),
         null,
         null,
       ),
