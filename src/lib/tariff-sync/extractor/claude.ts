@@ -183,23 +183,29 @@ function buildUserContent(chunk: MeasureExtractionInput[]): string {
     footnotes: input.evidence.footnotes,
   }));
   const codes = chunk.map((input) => input.ch99Code);
-  let excerpted = 0;
-  const mapped = dedupeNotices(chunk).map((n) => {
-    const excerpt =
-      n.fullText && excerpted < MAX_EXCERPTED_NOTICES
-        ? clipNoticeForCodes(n.fullText, codes)
-        : null;
-    if (excerpt) excerpted += 1;
-    return {
-      documentNumber: n.documentNumber,
-      title: n.title,
-      publicationDate: n.publicationDate,
-      abstract: n.abstract,
-      // Verbatim body text around this chunk's codes — where the operative
-      // entry-date language lives; null when the notice never mentions them.
-      relevantExcerpt: excerpt,
-    };
-  });
+  // Two ranked passes so the excerpt budget goes to the best evidence: a
+  // notice that PRINTS one of the chunk's codes beats a prefix-only match
+  // (reciprocal-tariff annexes list hundreds of headings and would
+  // otherwise crowd out the founding documents with junk windows).
+  const deduped = dedupeNotices(chunk);
+  const excerptByDocument = new Map<string, string>();
+  for (const exactOnly of [true, false]) {
+    for (const n of deduped) {
+      if (excerptByDocument.size >= MAX_EXCERPTED_NOTICES) break;
+      if (!n.fullText || excerptByDocument.has(n.documentNumber)) continue;
+      const excerpt = clipNoticeForCodes(n.fullText, codes, { exactOnly });
+      if (excerpt) excerptByDocument.set(n.documentNumber, excerpt);
+    }
+  }
+  const mapped = deduped.map((n) => ({
+    documentNumber: n.documentNumber,
+    title: n.title,
+    publicationDate: n.publicationDate,
+    abstract: n.abstract,
+    // Verbatim body text around this chunk's codes — where the operative
+    // entry-date language lives; null when the notice never mentions them.
+    relevantExcerpt: excerptByDocument.get(n.documentNumber) ?? null,
+  }));
   const notices = [
     ...mapped.filter((n) => n.relevantExcerpt !== null),
     ...mapped

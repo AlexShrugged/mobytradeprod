@@ -37,6 +37,14 @@ describe("clipNoticeForCodes", () => {
     expect(clipNoticeForCodes("nothing relevant here", ["9903.01.20"])).toBeNull();
   });
 
+  it("exactOnly suppresses the prefix fallback", () => {
+    const text = `${pad(100)} subheadings 9903.01.01 through 9903.01.15 apply ${pad(100)}`;
+    expect(
+      clipNoticeForCodes(text, ["9903.01.05"], { exactOnly: true }),
+    ).toBeNull();
+    expect(clipNoticeForCodes(text, ["9903.01.05"])).toContain("through");
+  });
+
   it("caps total excerpt length", () => {
     const mention = " 9903.01.20 ";
     const text = Array.from({ length: 30 }, () => pad(4000) + mention).join("");

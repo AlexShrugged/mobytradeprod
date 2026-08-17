@@ -28,16 +28,20 @@ function anchorRanges(text: string, anchor: string): [number, number][] {
 }
 
 /** Merged windows of body text around mentions of the given dotted Ch99
- *  codes (falling back to their 6-digit dotted prefixes), joined with " … "
- *  and capped at MAX_TOTAL_CHARS. Null when nothing in the text mentions
- *  the codes or their prefixes — the notice is irrelevant to this chunk. */
+ *  codes (falling back to their 6-digit dotted prefixes unless exactOnly),
+ *  joined with " … " and capped at MAX_TOTAL_CHARS. Null when nothing in
+ *  the text mentions the codes (or their prefixes) — the notice is
+ *  irrelevant to this chunk. exactOnly exists so callers can rank: a
+ *  notice that PRINTS a chunk's code is founding-document-grade evidence,
+ *  while a prefix match may be one row of someone else's annex table. */
 export function clipNoticeForCodes(
   text: string,
   codes: string[],
+  opts: { exactOnly?: boolean } = {},
 ): string | null {
   let ranges: [number, number][] = [];
   for (const code of codes) ranges.push(...anchorRanges(text, code));
-  if (ranges.length === 0) {
+  if (ranges.length === 0 && !opts.exactOnly) {
     const prefixes = [...new Set(codes.map((c) => c.slice(0, 7)))];
     for (const p of prefixes) ranges.push(...anchorRanges(text, p));
   }

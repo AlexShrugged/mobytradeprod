@@ -133,10 +133,13 @@ export async function runUsitcSync(
       daysBack: FR_EXTRACTION_DAYS_BACK,
       today,
     });
-    const byDocument = new Map(
-      (deps.notices ?? []).map((n) => [n.documentNumber, n]),
-    );
-    for (const n of targeted) byDocument.set(n.documentNumber, n);
+    // Targeted notices first: excerpt selection walks the corpus in order,
+    // and a code-search hit is founding-document-grade evidence while the
+    // generic corpus is background context.
+    const byDocument = new Map(targeted.map((n) => [n.documentNumber, n]));
+    for (const n of deps.notices ?? []) {
+      if (!byDocument.has(n.documentNumber)) byDocument.set(n.documentNumber, n);
+    }
     const notices = await hydrateNoticeTexts([...byDocument.values()]);
     const extractions = await extractor.extract(
       createIdx.map((i) => ({
