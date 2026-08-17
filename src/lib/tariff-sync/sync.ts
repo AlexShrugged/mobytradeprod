@@ -11,6 +11,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 
 import * as schema from "../db/schema";
+import { normalizeHts } from "../duty/calculator";
 import type { DbClient } from "../duty/reference";
 import { getFileStore } from "../storage";
 import { checkBaseReleaseSanity } from "./base-guard";
@@ -22,6 +23,7 @@ import { mergeExtraction } from "./extractor/merge";
 import {
   fetchRecentNotices,
   hydrateNoticeTexts,
+  searchNoticesForCodes,
   shiftDays,
 } from "./federal-register";
 import { partitionRevisions, type RevisionGroupKey } from "./grouping";
@@ -107,10 +109,35 @@ export async function runUsitcSync(
     .filter((i) => i >= 0);
   if (createIdx.length > 0) {
     const extractor = getMeasureExtractor();
-    // Notice bodies hydrate lazily, only when extraction will actually run
-    // — the operative entry-date language lives in FR body text, and the
-    // extractor clips per-chunk excerpts around the codes it is dating.
-    const notices = await hydrateNoticeTexts(deps.notices ?? []);
+    // Targeted retrieval, then hydration — both lazily, only when
+    // extraction will actually run. The generic FR term query misses most
+    // founding proclamations ("Adjusting Imports of Automobiles…"), but
+    // every founding document PRINTS the codes it creates, so two
+    // representative codes per (6-digit prefix) family retrieve them.
+    // Bodies hydrate afterwards: the operative entry-date language lives
+    // in body text, and the extractor clips per-chunk excerpts around the
+    // codes it is dating.
+    const byPrefix = new Map<string, string[]>();
+    for (const i of createIdx) {
+      const code = toStage[i].ch99Code;
+      const prefix = normalizeHts(code).slice(0, 6);
+      const list = byPrefix.get(prefix) ?? [];
+      list.push(code);
+      byPrefix.set(prefix, list);
+    }
+    const representatives = [...byPrefix.values()].flatMap((codes) => {
+      const sorted = [...codes].sort();
+      return sorted.length > 1 ? [sorted[0], sorted[sorted.length - 1]] : sorted;
+    });
+    const targeted = await searchNoticesForCodes(representatives, {
+      daysBack: FR_EXTRACTION_DAYS_BACK,
+      today,
+    });
+    const byDocument = new Map(
+      (deps.notices ?? []).map((n) => [n.documentNumber, n]),
+    );
+    for (const n of targeted) byDocument.set(n.documentNumber, n);
+    const notices = await hydrateNoticeTexts([...byDocument.values()]);
     const extractions = await extractor.extract(
       createIdx.map((i) => ({
         ch99Code: toStage[i].ch99Code,

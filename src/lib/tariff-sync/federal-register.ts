@@ -44,17 +44,7 @@ export async function fetchRecentNotices(opts: {
     });
     params.append("conditions[type][]", "NOTICE");
     params.append("conditions[type][]", "RULE");
-    for (const f of [
-      "document_number",
-      "title",
-      "html_url",
-      "publication_date",
-      "abstract",
-      "agencies",
-      "raw_text_url",
-    ]) {
-      params.append("fields[]", f);
-    }
+    for (const f of NOTICE_FIELDS) params.append("fields[]", f);
 
     const res = await fetch(`${API}?${params}`, {
       headers: { accept: "application/json" },
@@ -68,35 +58,103 @@ export async function fetchRecentNotices(opts: {
     pages.push(raw);
 
     for (const r of raw.results ?? []) {
-      if (typeof r !== "object" || r === null) continue;
-      const row = r as Record<string, unknown>;
-      if (typeof row.document_number !== "string") continue;
-      const notice: FrNotice = {
-        documentNumber: row.document_number,
-        title: typeof row.title === "string" ? row.title : row.document_number,
-        htmlUrl: typeof row.html_url === "string" ? row.html_url : "",
-        publicationDate:
-          typeof row.publication_date === "string" ? row.publication_date : "",
-        abstract: typeof row.abstract === "string" ? row.abstract : null,
-        agencies: Array.isArray(row.agencies)
-          ? row.agencies
-              .map((a) =>
-                typeof a === "object" && a !== null && "name" in a
-                  ? String((a as { name: unknown }).name)
-                  : "",
-              )
-              .filter(Boolean)
-          : [],
-        rawTextUrl:
-          typeof row.raw_text_url === "string" ? row.raw_text_url : null,
-      };
-      if (passesKeywordGuard(notice)) notices.push(notice);
+      const notice = mapNoticeRow(r);
+      if (notice && passesKeywordGuard(notice)) notices.push(notice);
     }
 
     if (!raw.next_page_url || (raw.results?.length ?? 0) < PER_PAGE) break;
   }
 
   return { notices, raw: pages };
+}
+
+function mapNoticeRow(r: unknown): FrNotice | null {
+  if (typeof r !== "object" || r === null) return null;
+  const row = r as Record<string, unknown>;
+  if (typeof row.document_number !== "string") return null;
+  return {
+    documentNumber: row.document_number,
+    title: typeof row.title === "string" ? row.title : row.document_number,
+    htmlUrl: typeof row.html_url === "string" ? row.html_url : "",
+    publicationDate:
+      typeof row.publication_date === "string" ? row.publication_date : "",
+    abstract: typeof row.abstract === "string" ? row.abstract : null,
+    agencies: Array.isArray(row.agencies)
+      ? row.agencies
+          .map((a) =>
+            typeof a === "object" && a !== null && "name" in a
+              ? String((a as { name: unknown }).name)
+              : "",
+          )
+          .filter(Boolean)
+      : [],
+    rawTextUrl: typeof row.raw_text_url === "string" ? row.raw_text_url : null,
+  };
+}
+
+const NOTICE_FIELDS = [
+  "document_number",
+  "title",
+  "html_url",
+  "publication_date",
+  "abstract",
+  "agencies",
+  "raw_text_url",
+];
+const SEARCH_CONCURRENCY = 3;
+
+/** Targeted retrieval: FR full-text search for documents that PRINT a
+ *  given Chapter 99 code. The founding proclamations for 232/IEEPA
+ *  families rarely match the generic term query ("Adjusting Imports of
+ *  Automobiles…" says neither "harmonized tariff schedule" nor
+ *  "additional duties" in searchable text), but they enumerate the codes
+ *  they create — so the code itself is the only reliable search key. The
+ *  FR tokenizer treats a dotted code as one token: exact quoted codes
+ *  match, prefixes and OR-batches do not, hence one query per code. Codes
+ *  are searched individually and best-effort; failures skip that code.
+ *  No keyword guard — a document printing the code is relevant by
+ *  construction. */
+export async function searchNoticesForCodes(
+  codes: string[],
+  opts: { daysBack: number; today: string },
+): Promise<FrNotice[]> {
+  const gte = shiftDays(opts.today, -opts.daysBack);
+  const byDocument = new Map<string, FrNotice>();
+  const unique = [...new Set(codes)];
+  let next = 0;
+  const worker = async () => {
+    while (next < unique.length) {
+      const code = unique[next++];
+      const params = new URLSearchParams({
+        "conditions[term]": `"${code}"`,
+        "conditions[publication_date][gte]": gte,
+        "conditions[type][]": "PRESDOCU",
+        order: "newest",
+        per_page: "20",
+      });
+      params.append("conditions[type][]", "NOTICE");
+      params.append("conditions[type][]", "RULE");
+      for (const f of NOTICE_FIELDS) params.append("fields[]", f);
+      try {
+        const res = await fetch(`${API}?${params}`, {
+          headers: { accept: "application/json" },
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        if (!res.ok) continue;
+        const raw = (await res.json()) as { results?: unknown[] };
+        for (const r of raw.results ?? []) {
+          const notice = mapNoticeRow(r);
+          if (notice) byDocument.set(notice.documentNumber, notice);
+        }
+      } catch {
+        // Best-effort per code — a failed search degrades context only.
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SEARCH_CONCURRENCY, unique.length) }, worker),
+  );
+  return [...byDocument.values()];
 }
 
 const TEXT_CONCURRENCY = 5;

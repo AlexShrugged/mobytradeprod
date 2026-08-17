@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchRecentNotices,
   passesKeywordGuard,
+  searchNoticesForCodes,
   shiftDays,
 } from "./federal-register";
 
@@ -105,6 +106,37 @@ describe("fetchRecentNotices", () => {
     await expect(
       fetchRecentNotices({ daysBack: 30, today: "2026-08-17" }),
     ).rejects.toThrow("Federal Register 503");
+  });
+});
+
+describe("searchNoticesForCodes", () => {
+  it("queries per exact quoted code and dedupes documents across codes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(page([doc(7)], null));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notices = await searchNoticesForCodes(
+      ["9903.94.01", "9903.94.32", "9903.94.01"],
+      { daysBack: 730, today: "2026-08-17" },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("conditions[term]")).toMatch(/^"9903\.94\./);
+    expect(notices).toHaveLength(1);
+  });
+
+  it("tolerates a failed search for one code", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(page([doc(8)], null));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notices = await searchNoticesForCodes(["9903.01.01", "9903.02.01"], {
+      daysBack: 730,
+      today: "2026-08-17",
+    });
+    expect(notices).toHaveLength(1);
   });
 });
 

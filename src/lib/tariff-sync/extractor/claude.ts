@@ -28,6 +28,9 @@ const CONCURRENCY = Math.max(1, Number(process.env.EXTRACTOR_CONCURRENCY) || 2);
 const DEFAULT_DEADLINE_MS = 120_000;
 /** Notices with a body excerpt matching the chunk's codes, per prompt. */
 const MAX_EXCERPTED_NOTICES = 10;
+/** Abstract-only notices per prompt — targeted retrieval can grow the
+ *  corpus well past what every chunk should carry. */
+const MAX_UNEXCERPTED_NOTICES = 30;
 
 const fieldSchema = <T extends z.ZodType>(value: T) =>
   z.object({
@@ -181,7 +184,7 @@ function buildUserContent(chunk: MeasureExtractionInput[]): string {
   }));
   const codes = chunk.map((input) => input.ch99Code);
   let excerpted = 0;
-  const notices = dedupeNotices(chunk).map((n) => {
+  const mapped = dedupeNotices(chunk).map((n) => {
     const excerpt =
       n.fullText && excerpted < MAX_EXCERPTED_NOTICES
         ? clipNoticeForCodes(n.fullText, codes)
@@ -197,6 +200,13 @@ function buildUserContent(chunk: MeasureExtractionInput[]): string {
       relevantExcerpt: excerpt,
     };
   });
+  const notices = [
+    ...mapped.filter((n) => n.relevantExcerpt !== null),
+    ...mapped
+      .filter((n) => n.relevantExcerpt === null)
+      .sort((a, b) => b.publicationDate.localeCompare(a.publicationDate))
+      .slice(0, MAX_UNEXCERPTED_NOTICES),
+  ];
   return JSON.stringify({ lines, relatedFederalRegisterNotices: notices });
 }
 
