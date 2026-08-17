@@ -7,7 +7,7 @@ import { getCurrentOrgId } from "@/lib/org";
 import type { IntegrationSource } from "@/lib/db/schema";
 
 // The Data page's source cards. Ordered by kind (enum order: manual_upload,
-// sftp, email_inbox, erp) then name, so the cards render in a stable stack.
+// sftp, email_inbox) then name, so the cards render in a stable stack.
 export async function getIntegrationSources(): Promise<IntegrationSource[]> {
   const orgId = await getCurrentOrgId();
   return db.query.integrationSources.findMany({

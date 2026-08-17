@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Check,
   Copy,
-  Database,
   HardDriveDownload,
   Loader2,
   Mail,
@@ -30,8 +29,8 @@ import type { IntegrationSource } from "@/lib/db/schema";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-// Intake-channel cards for the Data page's right column: SFTP, email inbox,
-// ERP (the manual-upload source is the dropzone itself). Config shapes per
+// Intake-channel cards for the Data page's right column: SFTP and the email
+// inbox (the manual-upload source is the dropzone itself). Config shapes per
 // kind are seeded/mocked; the real connectors plug into
 // lib/integrations/getConnector without changing this UI.
 
@@ -132,10 +131,8 @@ function SourceCard({ source }: { source: IntegrationSource }) {
   const icon =
     source.kind === "sftp" ? (
       <HardDriveDownload className="size-4 text-muted-foreground" />
-    ) : source.kind === "email_inbox" ? (
-      <Mail className="size-4 text-muted-foreground" />
     ) : (
-      <Database className="size-4 text-muted-foreground" />
+      <Mail className="size-4 text-muted-foreground" />
     );
 
   return (
@@ -184,15 +181,6 @@ function SourceCard({ source }: { source: IntegrationSource }) {
             />
           </>
         )}
-        {source.kind === "erp" && (
-          <>
-            {str(config.provider) && (
-              <Detail label="Provider" value={str(config.provider)} />
-            )}
-            <Detail label="Last run" value={formatDateTime(source.lastRunAt)} />
-          </>
-        )}
-
         <div className="flex items-center gap-2 pt-2">
           <Tooltip>
             <TooltipTrigger asChild>

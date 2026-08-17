@@ -22,8 +22,11 @@ export default async function DataPage() {
     getIntegrationSources(),
   ]);
   // The manual-upload source IS the dropzone; the cards show the automated
-  // intake seams (SFTP / email inbox / ERP).
-  const channelSources = sources.filter((s) => s.kind !== "manual_upload");
+  // intake seams we support (SFTP / email inbox). Allowlisted, not
+  // denylisted, so retired kinds still present in existing rows never render.
+  const channelSources = sources.filter(
+    (s) => s.kind === "sftp" || s.kind === "email_inbox",
+  );
   const anyInFlight = documents.some(
     (d) => d.status === "pending" || d.status === "processing",
   );
@@ -36,7 +39,7 @@ export default async function DataPage() {
       <div className="space-y-6">
       <PageHeader
         title="Data"
-        info="Document uploads, intake channels, and integrations in one place."
+        info="Document uploads and intake channels in one place."
       />
 
       <div className="grid gap-4 lg:grid-cols-3">
