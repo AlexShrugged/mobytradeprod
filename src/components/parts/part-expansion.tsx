@@ -70,6 +70,8 @@ export function PartExpansion({
 // lines) nested beneath it. Vendors with real activity behind them — POs,
 // invoices, entries — rank first at full detail; everyone else condenses
 // into the expandable quote archive below, cost/unit and est. landed first.
+// With no active vendor at all, everyone shows in the main list instead
+// (the grouping helper returns an empty archive then).
 function VendorsCard({
   part,
   onAddQuote,
@@ -242,6 +244,8 @@ function UsageChips({ usage }: { usage: PartVendorUsage }) {
 // One vendor's block: name + usage, the editable sourcing facts when a
 // (part, vendor) source row exists, and the vendor's offers beneath.
 // Condensed (archive) rows drop the usage chips — archive vendors have none.
+// (Quote-only vendors can render full when they're the part's only vendors;
+// both branches guard on the source row, so nothing breaks.)
 function VendorGroupSection({
   part,
   group,

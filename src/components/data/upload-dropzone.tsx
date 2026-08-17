@@ -34,8 +34,11 @@ function registerUpload(u: {
   });
 }
 
-// full: the Data page hero dropzone. compact: a one-line affordance for
-// embedding in dialogs (e.g. quote upload in New SKU). onComplete fires once
+// full: the Data page hero dropzone — it frees up for the next batch as
+// soon as the current one's bytes are registered; processing progress lives
+// on the table rows below. compact: a one-line affordance for embedding in
+// dialogs (e.g. quote upload in New SKU) — it stays busy until the batch
+// settles, since the dialog has no table to point at. onComplete fires once
 // a batch has fully settled (uploaded + processed), with whether every file
 // made it — dialogs use it to close themselves on success.
 export function UploadDropzone({
@@ -48,28 +51,30 @@ export function UploadDropzone({
   const router = useRouter();
   const status = useUploadStatus();
   const [busy, setBusy] = React.useState<string | null>(null);
+  // Which batch currently owns `busy`: the full variant re-enables mid-flow,
+  // so an earlier batch settling in the background must not clear a later
+  // batch's upload indicator.
+  const busyOwner = React.useRef<string | null>(null);
 
   // Refreshing or closing the tab mid-upload aborts the browser-direct
   // transfers and loses the files entirely — warn first. Scoped to the
-  // upload phase: once rows are registered, processing is server-side and
-  // the sweep finishes anything the tab doesn't.
-  const [uploading, setUploading] = React.useState(false);
+  // upload phase (a counter, since batches can overlap): once rows are
+  // registered, processing is server-side and the sweep finishes anything
+  // the tab doesn't.
+  const [uploadingCount, setUploadingCount] = React.useState(0);
   React.useEffect(() => {
-    if (!uploading) return;
+    if (uploadingCount === 0) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [uploading]);
+  }, [uploadingCount]);
 
   const onDrop = React.useCallback(
     async (accepted: File[]) => {
       if (accepted.length === 0) return;
-      setBusy(
-        `Uploading ${accepted.length} file${accepted.length > 1 ? "s" : ""}…`,
-      );
 
       const batch = `${Date.now()}`;
       const keyOf = (index: number) => `${batch}-${index}`;
@@ -91,8 +96,23 @@ export function UploadDropzone({
       const registered: DocumentListItem[] = [];
       let failed = 0;
 
+      const setBatchBusy = (msg: string) => {
+        busyOwner.current = batch;
+        setBusy(msg);
+      };
+      const clearBatchBusy = () => {
+        if (busyOwner.current !== batch) return;
+        busyOwner.current = null;
+        setBusy(null);
+      };
+
+      // Phase 1: upload + register. The dropzone blocks for this stretch —
+      // dropping more files mid-transfer would contend for the same pool.
+      setBatchBusy(
+        `Uploading ${accepted.length} file${accepted.length > 1 ? "s" : ""}…`,
+      );
+      setUploadingCount((n) => n + 1);
       try {
-        setUploading(true);
         if (BLOB_UPLOADS) {
           // Upload pool of 3; each file's row is created (and shows in the
           // table as pending) as soon as its own bytes land. One bad file
@@ -158,19 +178,34 @@ export function UploadDropzone({
           );
           router.refresh();
         }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Upload failed.");
+        onComplete?.(false);
+        clearBatchBusy();
+        status?.setPending((prev) =>
+          prev.filter((it) => !it.key.startsWith(`${batch}-`)),
+        );
+        router.refresh();
+        return;
+      } finally {
+        setUploadingCount((n) => n - 1);
+      }
 
-        // All bytes are safely in the store; a refresh from here on can no
-        // longer lose anything.
-        setUploading(false);
+      // All bytes are safely in the store; a refresh from here on can no
+      // longer lose anything. The full dropzone hands back "Drop documents
+      // here" now — processing status lives on the table rows — while the
+      // compact one stays busy so its host dialog reads as working.
+      if (variant === "full") clearBatchBusy();
+      else setBatchBusy(`Processing 0 of ${registered.length}…`);
 
-        // Process in a small concurrent pool: real extraction is minutes
-        // per document and independent across documents, so the batch takes
-        // roughly as long as its slowest doc. The cap keeps provider rate
-        // limits and concurrent linker writes at bay. Status from here on
-        // lives on the real table rows (pending → processing → processed).
+      // Phase 2: process in a small concurrent pool: real extraction is
+      // minutes per document and independent across documents, so the batch
+      // takes roughly as long as its slowest doc. The cap keeps provider
+      // rate limits and concurrent linker writes at bay. Status from here on
+      // lives on the real table rows (pending → processing → processed).
+      try {
         const processQueue = [...registered];
         let done = 0;
-        setBusy(`Processing 0 of ${registered.length}…`);
         await Promise.all(
           Array.from({ length: Math.min(3, processQueue.length) }, async () => {
             for (
@@ -185,7 +220,8 @@ export function UploadDropzone({
                 .catch(() => false);
               if (!ok) failed += 1;
               done += 1;
-              setBusy(`Processing ${done} of ${registered.length}…`);
+              if (variant !== "full")
+                setBatchBusy(`Processing ${done} of ${registered.length}…`);
               router.refresh();
             }
           }),
@@ -205,15 +241,14 @@ export function UploadDropzone({
         toast.error(err instanceof Error ? err.message : "Upload failed.");
         onComplete?.(false);
       } finally {
-        setUploading(false);
-        setBusy(null);
+        clearBatchBusy();
         status?.setPending((prev) =>
           prev.filter((it) => !it.key.startsWith(`${batch}-`)),
         );
         router.refresh();
       }
     },
-    [router, status, onComplete],
+    [router, status, onComplete, variant],
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

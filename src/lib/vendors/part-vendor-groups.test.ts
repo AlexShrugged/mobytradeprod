@@ -74,7 +74,11 @@ describe("groupPartVendors", () => {
   it("orders the archive by freshest quote first, quoteless sources after", () => {
     // The quotes array arrives newest-first; v3's offer is fresher than v2's.
     const { archive } = groupPartVendors(
-      [source("v2", "Ningbo"), source("v4", "Idle Co")],
+      [
+        source("v1", "Hangzhou", usage(0, 0, 1)),
+        source("v2", "Ningbo"),
+        source("v4", "Idle Co"),
+      ],
       [quote("v3", "Shenzhen"), quote("v2", "Ningbo")],
     );
     expect(archive.map((g) => g.vendorName)).toEqual([
@@ -87,12 +91,21 @@ describe("groupPartVendors", () => {
   it("collects vendor-less quotes into a trailing unattributed group", () => {
     const anon = quote(null);
     const { archive } = groupPartVendors(
-      [],
-      [anon, quote("v1", "Hangzhou")],
+      [source("v0", "Hangzhou", usage(1))],
+      [anon, quote("v1", "Shenzhen")],
     );
     expect(archive.map((g) => g.key)).toEqual(["v1", "unattributed"]);
     expect(archive[1].vendorId).toBeNull();
     expect(archive[1].quotes).toEqual([anon]);
+  });
+
+  it("promotes every vendor into the main list when none has activity", () => {
+    const { used, archive } = groupPartVendors(
+      [source("v2", "Ningbo")],
+      [quote("v3", "Shenzhen"), quote(null)],
+    );
+    expect(used.map((g) => g.key)).toEqual(["v3", "v2", "unattributed"]);
+    expect(archive).toEqual([]);
   });
 
   it("returns empty groups for a part with no sources or quotes", () => {

@@ -1,8 +1,11 @@
 // Pure view-shaping for the Parts page vendor panel: one part's sources and
 // quote lines partitioned into vendors with real import activity (POs,
-// invoices, entries) and an archive of offer-only vendors. Quotes are offers
-// FROM vendors, so every quote attaches to its vendor's group; a sheet that
-// named no supplier lands in a single trailing "unattributed" group.
+// invoices, entries) and an archive of offer-only vendors. The archive only
+// exists relative to activity: when NO vendor has any, everyone shows in the
+// main list — hiding a part's only vendors behind "quote archive" reads as
+// having none. Quotes are offers FROM vendors, so every quote attaches to
+// its vendor's group; a sheet that named no supplier lands in a single
+// trailing "unattributed" group.
 //
 // Structural generics on purpose — the query layer's row types flow through
 // untouched and this module stays importable from client components and
@@ -38,7 +41,10 @@ export type PartVendorGroup<S, Q> = {
 };
 
 export type PartVendorGroups<S, Q> = {
-  /** Vendors with actual activity behind them, most active first. */
+  /**
+   * Vendors with actual activity behind them, most active first — or, when
+   * no vendor has any, every vendor (nothing hides in the archive then).
+   */
   used: PartVendorGroup<S, Q>[];
   /** Offer-only and idle vendors, freshest offer first; unattributed last. */
   archive: PartVendorGroup<S, Q>[];
@@ -118,5 +124,6 @@ export function groupPartVendors<
     });
   }
 
+  if (used.length === 0) return { used: archive, archive: [] };
   return { used, archive };
 }
