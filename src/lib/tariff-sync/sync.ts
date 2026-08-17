@@ -19,7 +19,7 @@ import { runBaseEtl } from "./base-etl";
 import { diffRelease } from "./differ";
 import { getMeasureExtractor } from "./extractor";
 import { mergeExtraction } from "./extractor/merge";
-import { fetchRecentNotices } from "./federal-register";
+import { fetchRecentNotices, shiftDays } from "./federal-register";
 import { partitionRevisions, type RevisionGroupKey } from "./grouping";
 import {
   loadCurrentBaseWindows,
@@ -557,6 +557,15 @@ export async function runFederalRegisterSync(
   return { fetched: notices.length, created };
 }
 
+/** Extraction context window. A create_measure's effective date lives in
+ *  FR prose that can predate the code's first appearance in the HTS export
+ *  by a year or more — a short window guarantees the extractor never sees
+ *  the founding notice and every family stages dateless. */
+const FR_EXTRACTION_DAYS_BACK = 730;
+/** Announcement feed window: only notices this recent become reviewer-feed
+ *  rows. The wider fetch above feeds extraction only. */
+const FR_ANNOUNCEMENT_DAYS_BACK = 30;
+
 export type TariffSyncSummary = {
   usitc: UsitcSyncResult | { error: string };
   federalRegister: FrSyncResult | { error: string };
@@ -582,11 +591,19 @@ export async function runTariffSync(
 
   // Federal Register first: its notices feed the Chapter 99 extraction
   // (effective dates live in FR prose, never in the structured feed). Its
-  // failure degrades extraction context, never the diff itself.
+  // failure degrades extraction context, never the diff itself. The fetch
+  // window is wide because wholesale-adopted codes surface in the HTS
+  // export long after their founding notice ran (the IEEPA 9903.01.xx
+  // proclamations are the canonical case) — but only recent notices become
+  // reviewer-feed announcements; the older ones exist solely as extraction
+  // context.
   let federalRegister: FrSyncResult | { error: string };
   let notices: FrNotice[] = [];
   try {
-    const fetchedFr = await fetchRecentNotices({ daysBack: 30, today });
+    const fetchedFr = await fetchRecentNotices({
+      daysBack: FR_EXTRACTION_DAYS_BACK,
+      today,
+    });
     notices = fetchedFr.notices;
     let rawStorageKey: string | null = null;
     try {
@@ -598,8 +615,12 @@ export async function runTariffSync(
     } catch {
       // Raw archival is best-effort; staging does not need it.
     }
+    const announcementCutoff = shiftDays(today, -FR_ANNOUNCEMENT_DAYS_BACK);
+    const recentNotices = notices.filter(
+      (n) => n.publicationDate >= announcementCutoff,
+    );
     federalRegister = await db.transaction((tx) =>
-      runFederalRegisterSync(tx, notices, rawStorageKey),
+      runFederalRegisterSync(tx, recentNotices, rawStorageKey),
     );
   } catch (err) {
     federalRegister = {
