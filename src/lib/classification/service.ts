@@ -2,8 +2,10 @@
 // hts_classifications, field_changes, the parts review projection columns,
 // and review_items of type hts_classification (tariff-sync/sync.ts owns
 // the tariff_measure_revision item type the same way), so queue state and
-// projections cannot drift. Every entry point expects to run inside a
-// transaction (routes pass a tx; the seed passes its standalone db).
+// projections cannot drift. applyReviewDecision/updatePartHts expect to run
+// inside a transaction (routes pass a tx; the seed passes its standalone
+// db); classifyPart manages its own — the model call must run OUTSIDE any
+// transaction (see the note on the function).
 //
 // Relative imports on purpose — reachable from the tsx seed script.
 
@@ -110,6 +112,10 @@ export async function classifyPart(
   classification: schema.HtsClassification;
   reviewItem: schema.ReviewItem | null;
 } | null> {
+  // Reads and the model call run on the plain handle — the classifier can
+  // take up to its 120s deadline, and a pooled connection must not sit in
+  // an open transaction for it (same contract as analysis/service.ts: the
+  // model runs OUTSIDE any transaction; only the writes are transactional).
   const part = await db.query.parts.findFirst({
     where: and(eq(schema.parts.id, partId), eq(schema.parts.orgId, orgId)),
     with: {
@@ -123,7 +129,6 @@ export async function classifyPart(
   if (!part) return null;
 
   const ref = await loadReferenceData(db);
-  const committedCode = committedCodeOf(part);
   const input = {
     sku: part.sku,
     name: part.name,
@@ -135,104 +140,115 @@ export async function classifyPart(
           .filter((c): c is string => c !== null),
       ),
     ].sort(),
-    currentHtsCode: committedCode,
+    currentHtsCode: committedCodeOf(part),
   };
   const result = await getClassifier().classify(input, ref);
 
-  const [classification] = await db
-    .insert(schema.htsClassifications)
-    .values({
-      orgId,
-      partId,
-      status: "completed",
-      outcome: result.outcome,
-      classifier: result.classifier,
-      confidence: result.candidates[0]?.confidence.toFixed(4) ?? null,
-      reasoning: result.reasoning,
-      input,
-    })
-    .returning();
-
-  if (result.candidates.length > 0) {
-    await db.insert(schema.htsClassificationCandidates).values(
-      result.candidates.map((c, i) => ({
-        orgId,
-        classificationId: classification.id,
-        code: c.code,
-        codeDigits: c.codeDigits,
-        description: ref.htsByDigits.get(c.codeDigits)?.description ?? null,
-        confidence: c.confidence.toFixed(4),
-        reason: c.reason,
-        position: i,
-      })),
-    );
-  }
-
-  // A newer classification replaces whatever was awaiting review.
-  await db
-    .update(schema.reviewItems)
-    .set({ status: "superseded", updatedAt: new Date() })
-    .where(
-      and(
-        eq(schema.reviewItems.itemType, "hts_classification"),
-        eq(schema.reviewItems.subjectId, partId),
-        eq(schema.reviewItems.status, "pending"),
-      ),
-    );
-
-  const initial = deriveInitialReview(
-    result,
-    committedCode === null ? null : normalizeHts(committedCode),
-  );
-  if (!initial) {
-    return { classification, reviewItem: null };
-  }
-
-  if (initial.autoSelectProvisional) {
-    const code = result.candidates[0].code;
-    await db
-      .update(schema.parts)
-      .set({ htsCode: code, htsCodeProvisional: true, updatedAt: new Date() })
-      .where(eq(schema.parts.id, partId));
-    await db.insert(schema.fieldChanges).values({
-      orgId,
-      entityType: "part",
-      entityId: partId,
-      field: "hts_code",
-      oldValue: part.htsCode,
-      newValue: code,
-      source: "classify:auto_provisional",
+  return db.transaction(async (tx) => {
+    // The part may have moved (or vanished) during the model call — commit
+    // review state against its CURRENT row. `input` stays the pre-call
+    // snapshot: it records what the classifier actually saw.
+    const fresh = await tx.query.parts.findFirst({
+      where: and(eq(schema.parts.id, partId), eq(schema.parts.orgId, orgId)),
     });
-  }
+    if (!fresh) return null;
+    const committedCode = committedCodeOf(fresh);
 
-  const primary = result.candidates[0] ?? null;
-  const proposal: ReviewProposal = {
-    kind: initial.kind,
-    sku: part.sku,
-    partName: part.name,
-    currentCode: committedCode,
-    suggestedCode: primary?.code ?? null,
-    outcome: result.outcome,
-    confidence: primary?.confidence ?? null,
-    candidateCount: result.candidates.length,
-  };
-  const [reviewItem] = await db
-    .insert(schema.reviewItems)
-    .values({
-      orgId,
-      itemType: "hts_classification",
-      subjectId: partId,
-      payloadId: classification.id,
-      proposal,
-    })
-    .returning();
+    const [classification] = await tx
+      .insert(schema.htsClassifications)
+      .values({
+        orgId,
+        partId,
+        status: "completed",
+        outcome: result.outcome,
+        classifier: result.classifier,
+        confidence: result.candidates[0]?.confidence.toFixed(4) ?? null,
+        reasoning: result.reasoning,
+        input,
+      })
+      .returning();
 
-  await db
-    .update(schema.parts)
-    .set({ htsReviewStatus: initial.partStatus, updatedAt: new Date() })
-    .where(eq(schema.parts.id, partId));
+    if (result.candidates.length > 0) {
+      await tx.insert(schema.htsClassificationCandidates).values(
+        result.candidates.map((c, i) => ({
+          orgId,
+          classificationId: classification.id,
+          code: c.code,
+          codeDigits: c.codeDigits,
+          description: ref.htsByDigits.get(c.codeDigits)?.description ?? null,
+          confidence: c.confidence.toFixed(4),
+          reason: c.reason,
+          position: i,
+        })),
+      );
+    }
 
-  return { classification, reviewItem };
+    // A newer classification replaces whatever was awaiting review.
+    await tx
+      .update(schema.reviewItems)
+      .set({ status: "superseded", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.reviewItems.itemType, "hts_classification"),
+          eq(schema.reviewItems.subjectId, partId),
+          eq(schema.reviewItems.status, "pending"),
+        ),
+      );
+
+    const initial = deriveInitialReview(
+      result,
+      committedCode === null ? null : normalizeHts(committedCode),
+    );
+    if (!initial) {
+      return { classification, reviewItem: null };
+    }
+
+    if (initial.autoSelectProvisional) {
+      const code = result.candidates[0].code;
+      await tx
+        .update(schema.parts)
+        .set({ htsCode: code, htsCodeProvisional: true, updatedAt: new Date() })
+        .where(eq(schema.parts.id, partId));
+      await tx.insert(schema.fieldChanges).values({
+        orgId,
+        entityType: "part",
+        entityId: partId,
+        field: "hts_code",
+        oldValue: fresh.htsCode,
+        newValue: code,
+        source: "classify:auto_provisional",
+      });
+    }
+
+    const primary = result.candidates[0] ?? null;
+    const proposal: ReviewProposal = {
+      kind: initial.kind,
+      sku: fresh.sku,
+      partName: fresh.name,
+      currentCode: committedCode,
+      suggestedCode: primary?.code ?? null,
+      outcome: result.outcome,
+      confidence: primary?.confidence ?? null,
+      candidateCount: result.candidates.length,
+    };
+    const [reviewItem] = await tx
+      .insert(schema.reviewItems)
+      .values({
+        orgId,
+        itemType: "hts_classification",
+        subjectId: partId,
+        payloadId: classification.id,
+        proposal,
+      })
+      .returning();
+
+    await tx
+      .update(schema.parts)
+      .set({ htsReviewStatus: initial.partStatus, updatedAt: new Date() })
+      .where(eq(schema.parts.id, partId));
+
+    return { classification, reviewItem };
+  });
 }
 
 export type ReviewDecisionResult = {

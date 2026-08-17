@@ -335,30 +335,78 @@ export async function queueReanalysesAllOrgs(db: DbClient): Promise<number> {
     })
     .from(schema.analysisRuns)
     .where(eq(schema.analysisRuns.status, "succeeded"));
+  return queueForAnalyzed(db, analyzed);
+}
+
+/**
+ * Scoped variant: enqueue re-analysis only for the entries a tariff change
+ * actually touches (still filtered to entries the analyst has cleanly
+ * analyzed — analysis stays opt-in per entry). The apply routes compute the
+ * touched set from the changed codes and pass it here inside the apply
+ * transaction.
+ */
+export async function queueReanalysesForEntries(
+  db: DbClient,
+  entryIds: string[],
+): Promise<number> {
+  const ids = [...new Set(entryIds)];
+  const analyzed: { entryId: string; orgId: string }[] = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const batch = ids.slice(i, i + 500);
+    analyzed.push(
+      ...(await db
+        .selectDistinct({
+          entryId: schema.analysisRuns.entryId,
+          orgId: schema.analysisRuns.orgId,
+        })
+        .from(schema.analysisRuns)
+        .where(
+          and(
+            eq(schema.analysisRuns.status, "succeeded"),
+            inArray(schema.analysisRuns.entryId, batch),
+          ),
+        )),
+    );
+  }
+  return queueForAnalyzed(db, analyzed);
+}
+
+/** Shared tail: drop entries already pending, insert the rest. Chunked —
+ *  the analyzed set can span the whole book. */
+async function queueForAnalyzed(
+  db: DbClient,
+  analyzed: { entryId: string; orgId: string }[],
+): Promise<number> {
   if (analyzed.length === 0) return 0;
 
-  const alreadyQueued = await db.query.analysisRuns.findMany({
-    where: and(
-      eq(schema.analysisRuns.status, "pending"),
-      inArray(
-        schema.analysisRuns.entryId,
-        analyzed.map((a) => a.entryId),
+  const queuedIds = new Set<string>();
+  for (let i = 0; i < analyzed.length; i += 500) {
+    const batch = analyzed.slice(i, i + 500);
+    const rows = await db.query.analysisRuns.findMany({
+      where: and(
+        eq(schema.analysisRuns.status, "pending"),
+        inArray(
+          schema.analysisRuns.entryId,
+          batch.map((a) => a.entryId),
+        ),
       ),
-    ),
-    columns: { entryId: true },
-  });
-  const queuedIds = new Set(alreadyQueued.map((r) => r.entryId));
+      columns: { entryId: true },
+    });
+    for (const r of rows) queuedIds.add(r.entryId);
+  }
   const toQueue = analyzed.filter((a) => !queuedIds.has(a.entryId));
   if (toQueue.length === 0) return 0;
 
-  await db.insert(schema.analysisRuns).values(
-    toQueue.map((a) => ({
-      orgId: a.orgId,
-      entryId: a.entryId,
-      status: "pending" as const,
-      trigger: "tariff_apply" as const,
-    })),
-  );
+  for (let i = 0; i < toQueue.length; i += 500) {
+    await db.insert(schema.analysisRuns).values(
+      toQueue.slice(i, i + 500).map((a) => ({
+        orgId: a.orgId,
+        entryId: a.entryId,
+        status: "pending" as const,
+        trigger: "tariff_apply" as const,
+      })),
+    );
+  }
   return toQueue.length;
 }
 

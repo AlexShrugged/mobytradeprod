@@ -7,8 +7,14 @@ import { getSuperAdminActorName, requireSuperAdmin } from "@/lib/admin";
 import {
   processPendingAnalyses,
   queueReanalysesAllOrgs,
+  queueReanalysesForEntries,
 } from "@/lib/analysis/service";
-import { sweepAuditsAllOrgs } from "@/lib/audit/auditor";
+import {
+  findEntriesForMeasures,
+  sweepAuditsAllOrgs,
+  sweepAuditsForEntries,
+  type ReauditSummary,
+} from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import {
   applyRevisionGroup,
@@ -138,19 +144,38 @@ export async function PATCH(
         return { status: 404 as const, error: "Adoption group not found." };
       }
 
-      // Measure windows changed globally — re-derive persisted audit
-      // findings for every org.
-      const audit = await sweepAuditsAllOrgs(tx);
+      // The blast radius: entries under the changed measures' prefixes.
+      // Member target measures ride along as a superset (tiles keep the
+      // predecessor's entries in scope). null = an all_products measure.
+      const members = await tx.query.measureRevisions.findMany({
+        where: eq(schema.measureRevisions.groupId, groupId),
+        columns: { targetMeasureId: true },
+      });
+      const targets =
+        applied.changedMeasureIds.length === 0
+          ? []
+          : await findEntriesForMeasures(tx, [
+              ...applied.changedMeasureIds,
+              ...members
+                .map((m) => m.targetMeasureId)
+                .filter((id): id is string => id !== null),
+            ]);
 
       // Queue AI re-analyses transactionally; process after the response.
-      const analysesQueued = await queueReanalysesAllOrgs(tx);
+      const analysesQueued =
+        targets === null
+          ? await queueReanalysesAllOrgs(tx)
+          : await queueReanalysesForEntries(
+              tx,
+              targets.map((t) => t.entryId),
+            );
 
       return {
         status: 200 as const,
         action: "applied" as const,
         applied: applied.applied,
         rejected: applied.rejected,
-        audit,
+        targets,
         analysesQueued,
       };
     });
@@ -158,14 +183,33 @@ export async function PATCH(
     if (result.status !== 200) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
-    if (result.action === "applied" && result.analysesQueued > 0) {
+    if (result.action !== "applied") {
+      return NextResponse.json(result);
+    }
+
+    // Scoped re-audit AFTER commit — idempotent by alert_key, so a failed
+    // sweep never rolls back an approved apply and heals on the next one.
+    let audit: ReauditSummary | null = null;
+    let auditError: string | null = null;
+    try {
+      audit =
+        result.targets === null
+          ? await sweepAuditsAllOrgs(db)
+          : await sweepAuditsForEntries(db, result.targets);
+    } catch (err) {
+      auditError = err instanceof Error ? err.message : String(err);
+      console.error("re-audit after tariff apply failed:", err);
+    }
+
+    if (result.analysesQueued > 0) {
       after(async () => {
         await processPendingAnalyses(db).catch((err) => {
           console.error("re-analysis after tariff apply failed:", err);
         });
       });
     }
-    return NextResponse.json(result);
+    // targets: undefined drops the (possibly huge) id list from the JSON.
+    return NextResponse.json({ ...result, targets: undefined, audit, auditError });
   } catch (err) {
     if (err instanceof ApplyValidationError) {
       // Thrown inside the transaction, so the approval rolled back too.

@@ -7,8 +7,14 @@ import { getSuperAdminActorName, requireSuperAdmin } from "@/lib/admin";
 import {
   processPendingAnalyses,
   queueReanalysesAllOrgs,
+  queueReanalysesForEntries,
 } from "@/lib/analysis/service";
-import { sweepAuditsAllOrgs } from "@/lib/audit/auditor";
+import {
+  findEntriesForMeasures,
+  sweepAuditsAllOrgs,
+  sweepAuditsForEntries,
+  type ReauditSummary,
+} from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import {
   applyRevision,
@@ -17,8 +23,9 @@ import {
 } from "@/lib/tariff-sync/apply";
 import type { ProposedMeasureChange } from "@/lib/tariff-sync/types";
 
-// Approval applies the revision and re-audits every org in one transaction —
-// well past the platform's default function duration.
+// Approval applies the revision and queues re-analyses in one transaction;
+// the scoped re-audit (entries whose lines the measure's prefixes touch)
+// runs right after commit — well past the platform's default duration.
 export const maxDuration = 800;
 
 const isoDate = z
@@ -183,20 +190,36 @@ export async function PATCH(
         return { status: 404 as const, error: "Revision not found." };
       }
 
-      // Measure windows changed — re-derive persisted audit findings for
-      // EVERY org (expected charges self-heal on read; alerts do not, and
-      // the reference change is global).
-      const audit = await sweepAuditsAllOrgs(tx);
+      // The blast radius: entries whose declared digits fall under the
+      // measure's prefixes (applied + target measure covers tiles and
+      // narrowed scopes; the proposal's own prefixes are a safety superset).
+      // null = an all_products measure — only then sweep everything.
+      const targets =
+        applied.measureId === null
+          ? null
+          : await findEntriesForMeasures(
+              tx,
+              [applied.measureId, revision.targetMeasureId].filter(
+                (id): id is string => id !== null,
+              ),
+              proposed.prefixes ?? [],
+            );
 
       // AI findings persist too, but re-deriving them costs real model runs
       // — queue them here (transactional) and process after the response.
-      const analysesQueued = await queueReanalysesAllOrgs(tx);
+      const analysesQueued =
+        targets === null
+          ? await queueReanalysesAllOrgs(tx)
+          : await queueReanalysesForEntries(
+              tx,
+              targets.map((t) => t.entryId),
+            );
 
       return {
         status: 200 as const,
         action: "applied" as const,
         measureId: applied.measureId,
-        audit,
+        targets,
         analysesQueued,
       };
     });
@@ -204,14 +227,36 @@ export async function PATCH(
     if (result.status !== 200) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
-    if (result.action === "applied" && result.analysesQueued > 0) {
+    if (result.action !== "applied") {
+      return NextResponse.json(result);
+    }
+
+    // Measure windows changed — re-derive persisted audit findings for the
+    // touched entries (expected charges self-heal on read; alerts do not).
+    // AFTER commit: the auditor reconciles idempotently, so a failed sweep
+    // leaves the applied reference intact and heals on the next sweep,
+    // instead of rolling an approved apply back.
+    let audit: ReauditSummary | null = null;
+    let auditError: string | null = null;
+    try {
+      audit =
+        result.targets === null
+          ? await sweepAuditsAllOrgs(db)
+          : await sweepAuditsForEntries(db, result.targets);
+    } catch (err) {
+      auditError = err instanceof Error ? err.message : String(err);
+      console.error("re-audit after tariff apply failed:", err);
+    }
+
+    if (result.analysesQueued > 0) {
       after(async () => {
         await processPendingAnalyses(db).catch((err) => {
           console.error("re-analysis after tariff apply failed:", err);
         });
       });
     }
-    return NextResponse.json(result);
+    // targets: undefined drops the (possibly huge) id list from the JSON.
+    return NextResponse.json({ ...result, targets: undefined, audit, auditError });
   } catch (err) {
     if (err instanceof ApplyValidationError) {
       // Thrown inside the transaction, so the approval rolled back too.

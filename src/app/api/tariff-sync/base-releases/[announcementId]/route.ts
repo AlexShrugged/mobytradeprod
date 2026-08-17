@@ -6,15 +6,20 @@ import { z } from "zod";
 import { getSuperAdminActorName, requireSuperAdmin } from "@/lib/admin";
 import {
   processPendingAnalyses,
-  queueReanalysesAllOrgs,
+  queueReanalysesForEntries,
 } from "@/lib/analysis/service";
+import {
+  findEntriesForHtsDigits,
+  sweepAuditsForEntries,
+  type ReauditSummary,
+} from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import { ApplyValidationError } from "@/lib/tariff-sync/apply";
 import { applyBaseRelease } from "@/lib/tariff-sync/base-apply";
 
-// Approval re-reads the archived base payload, runs the full ETL, and
-// re-audits touched entries across every org in one transaction — the
-// heaviest request in the app.
+// Approval re-reads the archived base payload and runs the full ETL in one
+// transaction; the re-audit of entries declaring a touched code runs right
+// after commit — still the heaviest request in the app.
 export const maxDuration = 800;
 
 const isoDate = z
@@ -118,14 +123,22 @@ export async function PATCH(
         force: body.force,
       });
 
-      // Base windows changed globally — queue AI re-analyses transactionally
-      // alongside the re-audit applyBaseRelease already ran.
-      const analysesQueued = await queueReanalysesAllOrgs(tx);
+      // The blast radius: entries declaring a changed/removed code.
+      const { touchedDigits, ...stats } = applied;
+      const targets = await findEntriesForHtsDigits(tx, touchedDigits);
+
+      // Base windows changed — queue AI re-analyses for touched entries
+      // transactionally; process after the response.
+      const analysesQueued = await queueReanalysesForEntries(
+        tx,
+        targets.map((t) => t.entryId),
+      );
 
       return {
         status: 200 as const,
         action: "applied" as const,
-        ...applied,
+        ...stats,
+        targets,
         analysesQueued,
       };
     });
@@ -133,14 +146,33 @@ export async function PATCH(
     if (result.status !== 200) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
-    if (result.action === "applied" && result.analysesQueued > 0) {
+    if (result.action !== "applied") {
+      return NextResponse.json(result);
+    }
+
+    // Scoped re-audit AFTER commit — idempotent by alert_key, so a failed
+    // sweep never rolls back an approved apply and heals on the next one.
+    let audit: ReauditSummary | null = null;
+    let auditError: string | null = null;
+    try {
+      audit =
+        result.targets.length > 0
+          ? await sweepAuditsForEntries(db, result.targets)
+          : null;
+    } catch (err) {
+      auditError = err instanceof Error ? err.message : String(err);
+      console.error("re-audit after base apply failed:", err);
+    }
+
+    if (result.analysesQueued > 0) {
       after(async () => {
         await processPendingAnalyses(db).catch((err) => {
           console.error("re-analysis after base apply failed:", err);
         });
       });
     }
-    return NextResponse.json(result);
+    // targets: undefined drops the (possibly huge) id list from the JSON.
+    return NextResponse.json({ ...result, targets: undefined, audit, auditError });
   } catch (err) {
     if (err instanceof ApplyValidationError) {
       // Thrown inside the transaction, so the approval rolled back too.

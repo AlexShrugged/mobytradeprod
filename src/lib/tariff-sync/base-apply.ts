@@ -18,11 +18,10 @@
 //
 // Relative imports on purpose — reachable from the tsx seed script.
 
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
-import { auditEntry } from "../audit/auditor";
 import * as schema from "../db/schema";
-import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
+import { type DbClient } from "../duty/reference";
 import { planCloseDate, planWindow } from "../effective-dating";
 import { getFileStore } from "../storage";
 import { ApplyValidationError } from "./apply";
@@ -81,19 +80,16 @@ export function planBaseChange(
   return planBaseWindow(current.validFrom, effectiveDate);
 }
 
-export type ReauditSummary = {
-  entries: number;
-  cleared: number;
-  created: number;
-};
-
 export type BaseApplyStats = {
   added: number;
   changed: number;
   removed: number;
   unchanged: number;
-  /** Null when no touched code is declared on any entry, in any org. */
-  audit: ReauditSummary | null;
+  /** The changed/removed code digits — the caller's re-audit scope. Exact
+   *  digits suffice: rate inheritance means a subheading change surfaces on
+   *  every inheriting 10-digit leaf as its own changed row, so declared
+   *  leaf codes are always present in this set. */
+  touchedDigits: string[];
 };
 
 export type BaseApplyResult = BaseApplyStats & {
@@ -105,8 +101,9 @@ export type BaseApplyResult = BaseApplyStats & {
 /** Apply a base-schedule diff inside a caller-provided transaction:
  *  unchanged rows get their release stamp refreshed in place, changed rows
  *  tile (or correct) their window, removed rows close, added/reappearing
- *  rows open a fresh window — then entries declaring a touched code are
- *  re-audited across EVERY org (the reference is global). Announcement
+ *  rows open a fresh window. The re-audit is the CALLER'S job, after the
+ *  transaction commits, scoped to the returned touchedDigits (auditor
+ *  helpers: findEntriesForHtsDigits + sweepAuditsForEntries). Announcement
  *  bookkeeping belongs to the callers (stageBaseRelease opens it,
  *  applyBaseRelease resolves it). */
 export async function applyBaseSchedule(
@@ -186,17 +183,15 @@ export async function applyBaseSchedule(
       ),
     );
 
-  const audit = await reauditTouchedEntriesAllOrgs(db, [
-    ...diff.changed.map((c) => c.row.codeDigits),
-    ...diff.removed.map((r) => r.codeDigits),
-  ]);
-
   return {
     added: diff.added.length,
     changed: diff.changed.length,
     removed: diff.removed.length,
     unchanged: diff.unchanged,
-    audit,
+    touchedDigits: [
+      ...diff.changed.map((c) => c.row.codeDigits),
+      ...diff.removed.map((r) => r.codeDigits),
+    ],
   };
 }
 
@@ -274,67 +269,6 @@ export async function applyBaseRelease(
   return { release, effectiveDate, announcementId, ...stats };
 }
 
-/** Re-audit entries whose declared line digits match a changed/removed
- *  code, in EVERY org — base windows are global. Exact digits match
- *  suffices: rate inheritance means a subheading change surfaces on every
- *  inheriting 10-digit leaf as its own changed row, so declared leaf codes
- *  are always present in the touched set. */
-async function reauditTouchedEntriesAllOrgs(
-  db: DbClient,
-  touchedDigits: string[],
-): Promise<ReauditSummary | null> {
-  if (touchedDigits.length === 0) return null;
-
-  const orgs = await db.query.orgs.findMany({ columns: { id: true } });
-  let entries = 0;
-  let cleared = 0;
-  let created = 0;
-
-  for (const { id: orgId } of orgs) {
-    const entryIds = new Set<string>();
-    for (const digitsBatch of chunk(touchedDigits, 500)) {
-      const rows = await db
-        .selectDistinct({ entryId: schema.entryLineItems.entryId })
-        .from(schema.entryLineItems)
-        .where(
-          and(
-            eq(schema.entryLineItems.orgId, orgId),
-            inArray(schema.entryLineItems.htsCodeDigits, digitsBatch),
-          ),
-        );
-      for (const r of rows) entryIds.add(r.entryId);
-    }
-    if (entryIds.size === 0) continue;
-
-    // Reference data reloaded AFTER the window writes so the re-audit sees
-    // the new truth.
-    const ref = await loadReferenceDataForOrg(db, orgId);
-    for (const entryId of entryIds) {
-      const before = await openAlertKeys(db, entryId);
-      await auditEntry(db, orgId, entryId, ref);
-      const after = await openAlertKeys(db, entryId);
-      for (const key of before) if (!after.has(key)) cleared += 1;
-      for (const key of after) if (!before.has(key)) created += 1;
-    }
-    entries += entryIds.size;
-  }
-
-  return entries === 0 ? null : { entries, cleared, created };
-}
-
-async function openAlertKeys(
-  db: DbClient,
-  entryId: string,
-): Promise<Set<string>> {
-  const rows = await db.query.auditAlerts.findMany({
-    where: and(
-      eq(schema.auditAlerts.entryId, entryId),
-      eq(schema.auditAlerts.status, "open"),
-    ),
-    columns: { alertKey: true },
-  });
-  return new Set(rows.map((r) => r.alertKey));
-}
 
 /** The one current window per base code: digits + no measure + open. */
 function currentBaseWindowOf(codeDigits: string) {

@@ -7,6 +7,8 @@ import { getCurrentOrgId } from "@/lib/org";
 // Run the classifier for one part and (re)queue its review item. The
 // Claude classifier can take up to its 120s deadline; keep the function
 // alive well past it (same allowance as the entry analyze route).
+// classifyPart owns its own transaction boundary: the model call runs
+// outside any transaction, so no pooled connection is held for it.
 export const maxDuration = 800;
 
 export async function POST(
@@ -16,7 +18,7 @@ export async function POST(
   const { partId } = await params;
   const orgId = await getCurrentOrgId();
 
-  const result = await db.transaction((tx) => classifyPart(tx, orgId, partId));
+  const result = await classifyPart(db, orgId, partId);
   if (!result) {
     return NextResponse.json({ error: "Part not found." }, { status: 404 });
   }

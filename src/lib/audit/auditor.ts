@@ -5,7 +5,7 @@
 //
 // Relative imports on purpose — this module runs under the tsx seed script.
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, like, or } from "drizzle-orm";
 
 import * as schema from "../db/schema";
 import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
@@ -383,6 +383,121 @@ export async function sweepAuditsAllOrgs(db: DbClient): Promise<ReauditSummary> 
     total.created += summary.created;
   }
   return total;
+}
+
+/** One entry a tariff change touches — the unit of a scoped sweep. */
+export type SweepTarget = { orgId: string; entryId: string };
+
+/** Entries (every org — reference data is global) declaring a line whose
+ *  HTS digits fall under any of these measure prefixes: the blast radius
+ *  of a Ch99 change. Prefixes are digit strings, same form the calculator
+ *  matches with startsWith. */
+export async function findEntriesForHtsPrefixes(
+  db: DbClient,
+  prefixes: string[],
+): Promise<SweepTarget[]> {
+  const unique = [...new Set(prefixes)];
+  const targets = new Map<string, SweepTarget>();
+  for (let i = 0; i < unique.length; i += 200) {
+    const batch = unique.slice(i, i + 200);
+    const rows = await db
+      .selectDistinct({
+        orgId: schema.entryLineItems.orgId,
+        entryId: schema.entryLineItems.entryId,
+      })
+      .from(schema.entryLineItems)
+      .where(
+        or(
+          ...batch.map((p) =>
+            like(schema.entryLineItems.htsCodeDigits, `${p}%`),
+          ),
+        ),
+      );
+    for (const r of rows) targets.set(r.entryId, r);
+  }
+  return [...targets.values()];
+}
+
+/** Entries declaring a line whose digits exactly match a touched base
+ *  code. Exact match suffices for base releases: rate inheritance means a
+ *  subheading change surfaces on every inheriting 10-digit leaf as its own
+ *  changed row, so declared leaf codes are always in the touched set. */
+export async function findEntriesForHtsDigits(
+  db: DbClient,
+  digits: string[],
+): Promise<SweepTarget[]> {
+  const unique = [...new Set(digits)];
+  const targets = new Map<string, SweepTarget>();
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
+    const rows = await db
+      .selectDistinct({
+        orgId: schema.entryLineItems.orgId,
+        entryId: schema.entryLineItems.entryId,
+      })
+      .from(schema.entryLineItems)
+      .where(inArray(schema.entryLineItems.htsCodeDigits, batch));
+    for (const r of rows) targets.set(r.entryId, r);
+  }
+  return [...targets.values()];
+}
+
+/** The touched-entry set for a list of changed/ended Ch99 measures.
+ *  Returns null when the change cannot be scoped — an all_products measure
+ *  reaches every line — and the caller must fall back to a full sweep. An
+ *  empty measure list means nothing changed: empty set, not a full sweep.
+ *  extraPrefixes folds in the proposal's own prefix list as a safety
+ *  superset (covers a scope narrowed by the apply). */
+export async function findEntriesForMeasures(
+  db: DbClient,
+  measureIds: string[],
+  extraPrefixes: string[] = [],
+): Promise<SweepTarget[] | null> {
+  const ids = [...new Set(measureIds)];
+  if (ids.length === 0) return [];
+  const measures = await db.query.tradeMeasures.findMany({
+    where: inArray(schema.tradeMeasures.id, ids),
+    columns: { scope: true },
+  });
+  if (measures.some((m) => m.scope === "all_products")) return null;
+  const prefixRows = await db.query.tradeMeasureHts.findMany({
+    where: inArray(schema.tradeMeasureHts.tradeMeasureId, ids),
+    columns: { htsPrefix: true },
+  });
+  return findEntriesForHtsPrefixes(db, [
+    ...prefixRows.map((r) => r.htsPrefix),
+    ...extraPrefixes,
+  ]);
+}
+
+/** Re-audit exactly these entries, loading reference data once per org —
+ *  the scoped follow-up to a tariff apply. Runs AFTER the apply transaction
+ *  commits: the auditor reconciles idempotently by alert_key, so a sweep
+ *  that dies part-way leaves stale-but-valid alerts that the next sweep
+ *  heals, never a torn apply. */
+export async function sweepAuditsForEntries(
+  db: DbClient,
+  targets: SweepTarget[],
+): Promise<ReauditSummary> {
+  const byOrg = new Map<string, string[]>();
+  for (const t of targets) {
+    const list = byOrg.get(t.orgId);
+    if (list) list.push(t.entryId);
+    else byOrg.set(t.orgId, [t.entryId]);
+  }
+  let cleared = 0;
+  let created = 0;
+  for (const [orgId, entryIds] of byOrg) {
+    const ref = await loadReferenceDataForOrg(db, orgId);
+    for (const entryId of entryIds) {
+      const before = await openKeys(db, entryId);
+      await auditEntry(db, orgId, entryId, ref);
+      const after = await openKeys(db, entryId);
+      for (const key of before) if (!after.has(key)) cleared += 1;
+      for (const key of after) if (!before.has(key)) created += 1;
+    }
+  }
+  return { entries: targets.length, cleared, created };
 }
 
 async function openKeys(db: DbClient, entryId: string): Promise<Set<string>> {

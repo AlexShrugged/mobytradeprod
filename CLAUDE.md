@@ -36,7 +36,12 @@ per-revision cards, untracked codes grouped into (authority, 6-digit-prefix) ado
 family cards (`tariff-sync/grouping.ts`), and each base-schedule release as ONE
 reviewable unit with a diffstat + truncation guard (`tariff-sync/base-guard.ts`).
 Nothing reaches the reference tables until the super admin approves it at
-`/admin/tariffs`; approval + apply + all-orgs re-audit run in one transaction. The
+`/admin/tariffs`; approval + apply + re-analysis queueing run in one transaction, and
+the re-audit runs right after commit, scoped to the entries the changed codes touch
+(auditor helpers `findEntriesForMeasures`/`findEntriesForHtsDigits` +
+`sweepAuditsForEntries`; an all_products measure falls back to the full sweep — the
+post-commit sweep is idempotent by alert_key, so a failed sweep heals instead of
+rolling back an approved apply). The
 tariff review queue is **global** (`review_items.org_id` null — a CHECK ties scope to
 item type); classification review stays org-scoped. Staged create_measure proposals get
 dates/countries proposed by `tariff-sync/extractor/` (Claude via `ANTHROPIC_API_KEY` +
@@ -68,8 +73,9 @@ NOVEL findings (empty relatedAlertKeys) join the variance queue as
 at `/variance/[id]` exactly like rule alerts (the alerts PATCH route decides
 both kinds, so mixed-line review flows work); corroborations render only on
 the entry page's AI card. Tariff approvals enqueue re-analysis (pending
-`analysis_runs` rows, one per previously analyzed entry) inside the apply
-transaction and drain the queue after the response (`after()`); with no API
+`analysis_runs` rows, one per previously analyzed entry the changed codes
+touch) inside the apply transaction and drain the queue after the response
+(`after()`); with no API
 key the queue stays visibly queued rather than being stub-drained.
 `scripts/analyze-entry.ts` is the read-only eval harness (planted defects in
 `seed-data/analysis-defects.ts` — deterministic-rule-invisible by design, the
