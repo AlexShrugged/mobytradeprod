@@ -8,7 +8,28 @@
 export const LIQUIDATION_WINDOW_DAYS = 314;
 export const SUBMISSION_WINDOW_DAYS = 15;
 
-export type EntryPhase = "unsubmitted" | "submitted" | "liquidated";
+export const ENTRY_PHASES = ["unsubmitted", "submitted", "liquidated"] as const;
+export type EntryPhase = (typeof ENTRY_PHASES)[number];
+
+/** Dropdown vocabulary for the Phase filters — shared by Variance and
+ *  Entries so the two pages can never drift. */
+export const PHASE_OPTIONS: {
+  phase: EntryPhase;
+  label: string;
+  title?: string;
+}[] = [
+  {
+    phase: "unsubmitted",
+    label: "Unsubmitted",
+    title: "Within 15 days of the entry date; still editable without a PSC",
+  },
+  { phase: "submitted", label: "Submitted" },
+  {
+    phase: "liquidated",
+    label: "Liquidated",
+    title: "The entry has liquidated",
+  },
+];
 
 export type LiquidationWindow = {
   /** entryDate + 314 days, ISO; null when the entry has no date. */

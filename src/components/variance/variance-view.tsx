@@ -18,7 +18,7 @@ import type { VarianceQueueRow } from "@/lib/db/queries/variance";
 import { DEFAULT_PER_PAGE, pageCountFor } from "@/lib/pagination";
 import { varianceCsv } from "@/lib/variance/export";
 import type { VarianceGroup } from "@/lib/variance/grouping";
-import type { EntryPhase } from "@/lib/variance/window";
+import { PHASE_OPTIONS, type EntryPhase } from "@/lib/variance/window";
 
 export type VarianceTypeFilters = Record<
   string,
@@ -39,21 +39,6 @@ export type QueueGroup = VarianceGroup<VarianceQueueRow>;
 // Parts' search). One table row is one line item with all its issues
 // stacked, so every filter matches a group when ANY member matches, and
 // the option counts answer "how many rows will I see if I check this".
-
-const PHASE_OPTIONS: { phase: EntryPhase; label: string; title?: string }[] = [
-  {
-    phase: "unsubmitted",
-    label: "Unsubmitted",
-    title:
-      "Within 15 days of the entry date; still editable without a PSC",
-  },
-  { phase: "submitted", label: "Submitted" },
-  {
-    phase: "liquidated",
-    label: "Liquidated",
-    title: "The entry has liquidated",
-  },
-];
 
 export function VarianceView({
   openGroups,

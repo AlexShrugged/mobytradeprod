@@ -372,7 +372,15 @@ function ExpandedEntry({ entry }: { entry: EntriesTableRow }) {
   );
 }
 
-export function EntriesTable({ rows }: { rows: EntriesTableRow[] }) {
+export function EntriesTable({
+  rows,
+  totalCount,
+}: {
+  rows: EntriesTableRow[];
+  /** Entries in the org, unfiltered — when it is nonzero an empty list
+   *  means the filters emptied it, not that nothing exists yet. */
+  totalCount?: number;
+}) {
   const table = useReactTable({
     data: rows,
     columns,
@@ -411,8 +419,9 @@ export function EntriesTable({ rows }: { rows: EntriesTableRow[] }) {
                 colSpan={columns.length}
                 className="h-24 text-center text-muted-foreground"
               >
-                No entries yet. Process port entry documents on the Data
-                page to create them.
+                {(totalCount ?? 0) > 0
+                  ? "No entries match the filter."
+                  : "No entries yet. Process port entry documents on the Data page to create them."}
               </TableCell>
             </TableRow>
           ) : (

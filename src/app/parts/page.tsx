@@ -5,7 +5,9 @@ import {
   getPartPageIndex,
   getParts,
 } from "@/lib/db/queries/parts";
+import { parseSetParam } from "@/lib/filter-params";
 import { parsePageParams } from "@/lib/pagination";
+import { PART_USAGE_STATUSES } from "@/lib/parts/status";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,7 @@ export default async function PartsPage({
     expand?: string;
     sku?: string;
     q?: string;
+    status?: string;
     page?: string;
     per?: string;
   }>;
@@ -31,6 +34,7 @@ export default async function PartsPage({
   const params = await searchParams;
   const { review, expand, sku } = params;
   const q = (params.q ?? sku ?? "").trim() || null;
+  const status = parseSetParam(params.status, PART_USAGE_STATUSES);
   const { page: requestedPage, per } = parsePageParams(params);
 
   // A deep-linked part must be on the page we open — resolve which one,
@@ -38,11 +42,16 @@ export default async function PartsPage({
   const target = review ?? expand;
   const page =
     target && !params.page
-      ? await getPartPageIndex(target, per, q)
+      ? await getPartPageIndex(target, per, q, status)
       : requestedPage;
 
-  const [{ rows, totalCount, filteredCount, page: effectivePage }, queue] =
-    await Promise.all([getParts({ page, per, q }), getHtsReviewQueue()]);
+  const [
+    { rows, totalCount, filteredCount, page: effectivePage, statusCounts },
+    queue,
+  ] = await Promise.all([
+    getParts({ page, per, q, status }),
+    getHtsReviewQueue(),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -65,6 +74,8 @@ export default async function PartsPage({
         initialReviewPartId={review ?? null}
         initialExpandedPartId={expand ?? null}
         initialQuery={q ?? ""}
+        initialStatus={[...status]}
+        statusCounts={statusCounts}
       />
     </div>
   );

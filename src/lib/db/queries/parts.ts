@@ -13,6 +13,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  not,
   or,
   sql,
   type SQL,
@@ -33,6 +34,10 @@ import { getReferenceDataForOrg } from "./reference";
 import { computeEstimatedLandedCost } from "@/lib/landed-cost/estimate";
 import { rollupBySku, type RollupLine } from "@/lib/landed-cost/rollup";
 import { getCurrentOrgId } from "@/lib/org";
+import {
+  PART_USAGE_STATUSES,
+  type PartUsageStatus,
+} from "@/lib/parts/status";
 
 // The Parts page payload. mobynew's pattern: one query round per concern
 // (catalog, reference data, quote lines, actual entry lines, open review
@@ -224,12 +229,31 @@ function partsSearchWhere(q: string | null | undefined): SQL | undefined {
   );
 }
 
-/** Which page (at `per` rows, under `q`) a given part lands on — deep links
- *  (?expand=, ?review=) must open on the page that shows the part. */
+/** Usage-based Status filter (src/lib/parts/status.ts): Active = the SKU
+ *  appears on at least one entry line. Undefined = no filter; every box
+ *  unchecked matches nothing. */
+function partsStatusWhere(
+  status: Set<PartUsageStatus> | undefined,
+): SQL | undefined {
+  if (!status || status.size >= PART_USAGE_STATUSES.length) return undefined;
+  if (status.size === 0) return sql`false`;
+  const used = exists(
+    db
+      .select({ one: sql`1` })
+      .from(schema.entryLineItems)
+      .where(eq(schema.entryLineItems.partId, schema.parts.id)),
+  );
+  return status.has("active") ? used : not(used);
+}
+
+/** Which page (at `per` rows, under the filters) a given part lands on —
+ *  deep links (?expand=, ?review=) must open on the page that shows the
+ *  part. */
 export async function getPartPageIndex(
   partId: string,
   per: number,
   q?: string | null,
+  status?: Set<PartUsageStatus>,
 ): Promise<number> {
   const orgId = await getCurrentOrgId();
   const part = await db.query.parts.findFirst({
@@ -242,6 +266,7 @@ export async function getPartPageIndex(
     and(
       eq(schema.parts.orgId, orgId),
       partsSearchWhere(q),
+      partsStatusWhere(status),
       lt(schema.parts.sku, part.sku),
     ),
   );
@@ -252,28 +277,50 @@ export type PartsPageResult = {
   rows: PartRow[];
   /** Parts in the org, unfiltered — drives the getting-started empty state. */
   totalCount: number;
-  /** Parts matching the search — drives the page count and footer. */
+  /** Parts matching the filters — drives the page count and footer. */
   filteredCount: number;
   /** Effective page after clamping to the last page. */
   page: number;
+  /** Rows each Status option would show under the current search (the
+   *  status filter itself excluded) — the dropdown option counts. */
+  statusCounts: Record<PartUsageStatus, number>;
 };
 
 export async function getParts(opts: {
   page: number;
   per: number;
   q?: string | null;
+  status?: Set<PartUsageStatus>;
 }): Promise<PartsPageResult> {
   const orgId = await getCurrentOrgId();
   const searchWhere = partsSearchWhere(opts.q);
-  const where = and(eq(schema.parts.orgId, orgId), searchWhere);
+  const statusWhere = partsStatusWhere(opts.status);
+  const searchedWhere = and(eq(schema.parts.orgId, orgId), searchWhere);
+  const where = and(searchedWhere, statusWhere);
 
-  const [totalCount, filteredCount] = await Promise.all([
-    db.$count(schema.parts, eq(schema.parts.orgId, orgId)),
-    searchWhere
-      ? db.$count(schema.parts, where)
-      : Promise.resolve(-1), // filled from totalCount below
-  ]);
-  const filtered = filteredCount === -1 ? totalCount : filteredCount;
+  const [totalCount, filteredRaw, searchedRaw, activeCount] =
+    await Promise.all([
+      db.$count(schema.parts, eq(schema.parts.orgId, orgId)),
+      searchWhere || statusWhere
+        ? db.$count(schema.parts, where)
+        : Promise.resolve(-1), // filled from totalCount below
+      searchWhere
+        ? db.$count(schema.parts, searchedWhere)
+        : Promise.resolve(-1), // ditto
+      db.$count(
+        schema.parts,
+        and(
+          searchedWhere,
+          partsStatusWhere(new Set<PartUsageStatus>(["active"])),
+        ),
+      ),
+    ]);
+  const searched = searchedRaw === -1 ? totalCount : searchedRaw;
+  const filtered = filteredRaw === -1 ? totalCount : filteredRaw;
+  const statusCounts: Record<PartUsageStatus, number> = {
+    active: activeCount,
+    inactive: searched - activeCount,
+  };
 
   const page = Math.min(
     Math.max(1, opts.page),
@@ -287,7 +334,7 @@ export async function getParts(opts: {
     offset: (page - 1) * opts.per,
   });
   if (parts.length === 0) {
-    return { rows: [], totalCount, filteredCount: filtered, page };
+    return { rows: [], totalCount, filteredCount: filtered, page, statusCounts };
   }
   // Every per-concern query below is scoped to this page's parts — the
   // whole point of paginating: a 26k-SKU catalog must never be assembled
@@ -594,7 +641,7 @@ export async function getParts(opts: {
     };
   });
 
-  return { rows, totalCount, filteredCount: filtered, page };
+  return { rows, totalCount, filteredCount: filtered, page, statusCounts };
 }
 
 /** Per-(part, vendor) activity counts, keyed `${partId}:${vendorId}`.

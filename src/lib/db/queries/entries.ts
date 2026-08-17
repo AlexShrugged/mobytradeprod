@@ -1,6 +1,23 @@
 import "server-only";
 
-import { and, count, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  exists,
+  gte,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  not,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import type { OpenAlertCounts } from "@/components/entries/audit-badge";
 import { db, schema } from "@/lib/db";
@@ -15,6 +32,11 @@ import { getReferenceDataForOrg } from "./reference";
 import { resolveSailInfo } from "@/lib/duty/sail";
 import type { ReferenceData, SailBasis } from "@/lib/duty/types";
 import { resolveWindow } from "@/lib/effective-dating";
+import {
+  ENTRY_PHASES,
+  SUBMISSION_WINDOW_DAYS,
+  type EntryPhase,
+} from "@/lib/variance/window";
 import { deriveEntryStatus } from "@/lib/entries/status";
 import { deriveShipmentStatus } from "@/lib/shipments/status";
 import {
@@ -148,30 +170,183 @@ export type EntryRow = {
   purchaseOrders: EntryPurchaseOrderRow[];
 };
 
+/** Server-side search across the entry and its linked records: entry #,
+ *  port, shipment identifiers (number / BOL / container), PO number and
+ *  supplier, and line-item SKU / HTS. Undefined when there is no query. */
+function entriesSearchWhere(q: string | null | undefined): SQL | undefined {
+  const trimmed = q?.trim();
+  if (!trimmed) return undefined;
+  const pattern = `%${trimmed}%`;
+  return or(
+    ilike(schema.entries.entryNumber, pattern),
+    ilike(schema.entries.portOfEntry, pattern),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(schema.entryShipments)
+        .innerJoin(
+          schema.shipments,
+          eq(schema.entryShipments.shipmentId, schema.shipments.id),
+        )
+        .where(
+          and(
+            eq(schema.entryShipments.entryId, schema.entries.id),
+            or(
+              ilike(schema.shipments.shipmentNumber, pattern),
+              ilike(schema.shipments.billOfLading, pattern),
+              ilike(schema.shipments.containerNumber, pattern),
+            ),
+          ),
+        ),
+    ),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(schema.entryPurchaseOrders)
+        .innerJoin(
+          schema.purchaseOrders,
+          eq(
+            schema.entryPurchaseOrders.purchaseOrderId,
+            schema.purchaseOrders.id,
+          ),
+        )
+        .where(
+          and(
+            eq(schema.entryPurchaseOrders.entryId, schema.entries.id),
+            or(
+              ilike(schema.purchaseOrders.poNumber, pattern),
+              ilike(schema.purchaseOrders.supplierName, pattern),
+            ),
+          ),
+        ),
+    ),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(schema.entryLineItems)
+        .where(
+          and(
+            eq(schema.entryLineItems.entryId, schema.entries.id),
+            or(
+              ilike(schema.entryLineItems.sku, pattern),
+              ilike(schema.entryLineItems.htsCode, pattern),
+            ),
+          ),
+        ),
+    ),
+  );
+}
+
+const DAY_MS = 86_400_000;
+
+/** SQL mirror of liquidationWindow's phase (variance/window.ts): a passed
+ *  liquidation date on any linked claim means liquidated; of the rest,
+ *  dated entries within the 15-day submission window are unsubmitted and
+ *  everything else (dateless included) is submitted. Undefined = no
+ *  filter; every box unchecked matches nothing. */
+function entriesPhaseWhere(
+  phases: Set<EntryPhase>,
+  today: string,
+): SQL | undefined {
+  if (phases.size >= ENTRY_PHASES.length) return undefined;
+  if (phases.size === 0) return sql`false`;
+  const liquidated = exists(
+    db
+      .select({ one: sql`1` })
+      .from(schema.refundClaims)
+      .where(
+        and(
+          eq(schema.refundClaims.entryId, schema.entries.id),
+          isNotNull(schema.refundClaims.liquidationDate),
+          lte(schema.refundClaims.liquidationDate, today),
+        ),
+      ),
+  );
+  // Last day inside the window: (today − entryDate) < 15 days ⇔
+  // entryDate ≥ today − 14 days.
+  const cutoff = new Date(
+    Date.parse(`${today}T00:00:00Z`) - (SUBMISSION_WINDOW_DAYS - 1) * DAY_MS,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const conds: SQL[] = [];
+  if (phases.has("unsubmitted")) {
+    conds.push(
+      and(
+        not(liquidated),
+        isNotNull(schema.entries.entryDate),
+        gte(schema.entries.entryDate, cutoff),
+      )!,
+    );
+  }
+  if (phases.has("submitted")) {
+    conds.push(
+      and(
+        not(liquidated),
+        or(
+          isNull(schema.entries.entryDate),
+          lt(schema.entries.entryDate, cutoff),
+        ),
+      )!,
+    );
+  }
+  if (phases.has("liquidated")) conds.push(liquidated);
+  return or(...conds);
+}
+
 export type EntriesPageResult = {
   rows: EntryRow[];
+  /** Entries in the org, unfiltered — drives the getting-started empty
+   *  state. */
   totalCount: number;
+  /** Entries matching the filters — drives the page count. */
+  filteredCount: number;
   /** Effective page after clamping to the last page. */
   page: number;
+  /** Rows each phase option would show under the current search (the
+   *  phase filter itself excluded) — the dropdown option counts. */
+  phaseCounts: Record<EntryPhase, number>;
 };
 
 export async function getEntries(opts: {
   page: number;
   per: number;
+  q?: string | null;
+  phases?: Set<EntryPhase>;
 }): Promise<EntriesPageResult> {
   const orgId = await getCurrentOrgId();
+  const today = todayIso();
 
-  const totalCount = await db.$count(
-    schema.entries,
-    eq(schema.entries.orgId, orgId),
-  );
+  const searchWhere = entriesSearchWhere(opts.q);
+  const phases = opts.phases ?? new Set<EntryPhase>(ENTRY_PHASES);
+  const phaseWhere = entriesPhaseWhere(phases, today);
+  const searchedWhere = and(eq(schema.entries.orgId, orgId), searchWhere);
+  const where = and(searchedWhere, phaseWhere);
+
+  const [totalCount, filteredRaw, ...phaseCountRows] = await Promise.all([
+    db.$count(schema.entries, eq(schema.entries.orgId, orgId)),
+    searchWhere || phaseWhere
+      ? db.$count(schema.entries, where)
+      : Promise.resolve(-1), // filled from totalCount below
+    ...ENTRY_PHASES.map((p) =>
+      db.$count(
+        schema.entries,
+        and(searchedWhere, entriesPhaseWhere(new Set([p]), today)),
+      ),
+    ),
+  ]);
+  const filteredCount = filteredRaw === -1 ? totalCount : filteredRaw;
+  const phaseCounts = Object.fromEntries(
+    ENTRY_PHASES.map((p, i) => [p, phaseCountRows[i]]),
+  ) as Record<EntryPhase, number>;
+
   const page = Math.min(
     Math.max(1, opts.page),
-    Math.max(1, Math.ceil(totalCount / opts.per)),
+    Math.max(1, Math.ceil(filteredCount / opts.per)),
   );
 
   const rows = await db.query.entries.findMany({
-    where: eq(schema.entries.orgId, orgId),
+    where,
     orderBy: desc(schema.entries.entryDate),
     limit: opts.per,
     offset: (page - 1) * opts.per,
@@ -188,7 +363,8 @@ export async function getEntries(opts: {
       entryPurchaseOrders: { with: { purchaseOrder: true } },
     },
   });
-  if (rows.length === 0) return { rows: [], totalCount, page };
+  if (rows.length === 0)
+    return { rows: [], totalCount, filteredCount, page, phaseCounts };
   // Per-entry aggregates scoped to this page's entries only.
   const entryIds = rows.map((e) => e.id);
 
@@ -257,7 +433,6 @@ export async function getEntries(opts: {
       loadSailWindows(),
     ]);
 
-  const today = todayIso();
   const lineCountByEntry = new Map(lineCounts.map((r) => [r.entryId, r.value]));
   const alertsByEntry = new Map<string, OpenAlertCounts>();
   for (const r of alertCounts) {
@@ -342,7 +517,7 @@ export async function getEntries(opts: {
     })),
   }));
 
-  return { rows: entryRows, totalCount, page };
+  return { rows: entryRows, totalCount, filteredCount, page, phaseCounts };
 }
 
 // ----------------------------------------------------------- future entries
