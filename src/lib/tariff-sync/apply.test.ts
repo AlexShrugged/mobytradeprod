@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { ApplyValidationError, dayBefore, planRevisionApply } from "./apply";
+import {
+  ApplyValidationError,
+  dayBefore,
+  planFamilyExemptionLinks,
+  planRevisionApply,
+  type FamilyCh99Row,
+} from "./apply";
 import type { ProposedMeasureChange } from "./types";
 
 function proposed(over: Partial<ProposedMeasureChange> = {}): ProposedMeasureChange {
@@ -131,5 +137,114 @@ describe("planRevisionApply", () => {
     expect(dayBefore("2026-08-01")).toBe("2026-07-31");
     expect(dayBefore("2026-01-01")).toBe("2025-12-31");
     expect(dayBefore("2026-03-01")).toBe("2026-02-28");
+  });
+});
+
+// The 232-metals-2026 shape: one exemption heading (9903.82.01, "no
+// aluminum/steel content") excusing several liability headings in the family.
+function familyRow(over: Partial<FamilyCh99Row> = {}): FamilyCh99Row {
+  return {
+    id: "01a00000-0000-7000-8000-000000000001",
+    code: "9903.82.01",
+    codeDigits: "99038201",
+    description: "No aluminum or steel content",
+    rateType: "ad_valorem",
+    exemption: true,
+    tradeMeasureId: "m-exempt-1",
+    ...over,
+  };
+}
+
+describe("planFamilyExemptionLinks", () => {
+  const exemption = familyRow();
+  const liability8202 = familyRow({
+    id: "01a00000-0000-7000-8000-000000000002",
+    code: "9903.82.02",
+    codeDigits: "99038202",
+    description: "Articles of aluminum, steel, or copper (50%)",
+    exemption: false,
+    tradeMeasureId: "m-8202",
+  });
+  const liability8204 = familyRow({
+    id: "01a00000-0000-7000-8000-000000000003",
+    code: "9903.82.04",
+    codeDigits: "99038204",
+    description: "Articles of aluminum, steel, or copper — UK (25%)",
+    exemption: false,
+    tradeMeasureId: "m-8204",
+  });
+
+  it("copies each family exemption under every liability measure", () => {
+    const plan = planFamilyExemptionLinks([exemption, liability8202, liability8204]);
+    expect(plan).toEqual([
+      {
+        code: "9903.82.01",
+        codeDigits: "99038201",
+        description: "No aluminum or steel content",
+        rateType: "ad_valorem",
+        tradeMeasureId: "m-8202",
+      },
+      {
+        code: "9903.82.01",
+        codeDigits: "99038201",
+        description: "No aluminum or steel content",
+        rateType: "ad_valorem",
+        tradeMeasureId: "m-8204",
+      },
+    ]);
+  });
+
+  it("is idempotent: existing (digits, measure) links are never re-planned", () => {
+    const alreadyLinked = familyRow({
+      id: "01a00000-0000-7000-8000-000000000004",
+      tradeMeasureId: "m-8202",
+    });
+    const plan = planFamilyExemptionLinks([
+      exemption,
+      alreadyLinked,
+      liability8202,
+      liability8204,
+    ]);
+    expect(plan.map((p) => p.tradeMeasureId)).toEqual(["m-8204"]);
+  });
+
+  it("plans nothing without liabilities, without exemptions, or for unlinked rows", () => {
+    expect(planFamilyExemptionLinks([exemption])).toEqual([]);
+    expect(planFamilyExemptionLinks([liability8202, liability8204])).toEqual([]);
+    expect(
+      planFamilyExemptionLinks([familyRow({ tradeMeasureId: null }), liability8202]),
+    ).toEqual([]);
+  });
+
+  it("copies metadata from the lowest-id row per exemption digits", () => {
+    const later = familyRow({
+      id: "01a00000-0000-7000-8000-00000000000f",
+      description: "Renamed later copy",
+      tradeMeasureId: "m-exempt-2",
+    });
+    const plan = planFamilyExemptionLinks([later, exemption, liability8202]);
+    expect(plan).toHaveLength(1);
+    expect(plan[0].description).toBe("No aluminum or steel content");
+  });
+
+  it("handles several exemption codes against several liability windows", () => {
+    const exemption8203 = familyRow({
+      id: "01a00000-0000-7000-8000-000000000005",
+      code: "9903.82.03",
+      codeDigits: "99038203",
+      tradeMeasureId: "m-exempt-3",
+    });
+    const plan = planFamilyExemptionLinks([
+      exemption,
+      exemption8203,
+      liability8202,
+      liability8204,
+    ]);
+    expect(plan.map((p) => `${p.codeDigits}:${p.tradeMeasureId}`)).toEqual([
+      "99038201:m-8202",
+      "99038201:m-8204",
+      "99038203:m-8202",
+      "99038203:m-8204",
+    ]);
   });
 });

@@ -59,7 +59,14 @@ on or after the proposal (broken dates); and programs are proposed by
 `inferProgram` (deterministic, null when unsure), reviewer-editable on the
 cards. There is no "stack" choice: within one program nothing ever charges
 twice, so coexistence is only ever the sail-partition case, which the
-detector now recognizes itself. `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
+detector now recognizes itself. Exemption headings are family-linked at
+apply time (`syncFamilyExemptionLinks` in apply.ts): every liability
+measure in a 6-digit Ch99 family carries a copy of the family's exemption
+rows, so a broker-declared $0 exception code (9903.82.01 "no alu/steel
+content") satisfies the audit's missing-measure check for its family
+(9903.82.02) — linkage only suppresses alerts, never changes duty math.
+`scripts/repair-exemption-linkage.ts` re-establishes the invariant for
+reference data staged before this existed (ran against prod 2026-08-19). `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
 `--apply` to stage) bootstraps the queue from `../moby`'s hand-curated measures. Base
 windows still stamped release `"SEED"` are demo approximations — the first certified
 release corrects them in place instead of tiling them into history. Reference reads go

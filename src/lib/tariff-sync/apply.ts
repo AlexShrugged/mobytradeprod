@@ -8,7 +8,7 @@
 //
 // Relative imports on purpose — reachable from the tsx seed script.
 
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, like } from "drizzle-orm";
 
 import * as schema from "../db/schema";
 import { normalizeHts } from "../duty/calculator";
@@ -617,6 +617,11 @@ async function applyOne(
         .returning();
       await insertCh99Row(db, rev.ch99Code!, proposed, measure.id);
       await insertPrefixes(db, measure.id, proposed.prefixes);
+      // Family linkage both ways: a new exemption heading must satisfy the
+      // family's live liability measures, and a new liability heading must
+      // carry the family's existing exemption codes (Rule 1 reads only
+      // same-measure exemption rows).
+      await syncFamilyExemptionLinks(db, normalizeHts(rev.ch99Code!));
       return { measureId: measure.id, superseded };
     }
 
@@ -654,6 +659,10 @@ async function applyOne(
         });
       }
       await insertPrefixes(db, successor.id, proposed.prefixes);
+      // Beyond the predecessor's own rows: any family exemption codes the
+      // predecessor never carried (pre-linkage windows) reach the successor
+      // here. Idempotent with the inheritance above.
+      await syncFamilyExemptionLinks(db, normalizeHts(rev.ch99Code!));
       return { measureId: successor.id, superseded: [] };
     }
 
@@ -693,8 +702,12 @@ async function applyOne(
 
 /** Live measures of one program, shaped for the pure conflict check. Unlike
  *  same-code tiling, a cross-code supersede does NOT copy the predecessor's
- *  exemption rows — a new heading defines its own carve-outs in its notice,
- *  and inheriting the old code's exclusions could wrongly excuse charges. */
+ *  own exemption rows — a new heading defines its own carve-outs in its
+ *  notice. Family-wide exemption HEADINGS are a different thing: those are
+ *  linked onto every liability measure of the 6-digit family by
+ *  syncFamilyExemptionLinks (a declared $0 family exemption code is a
+ *  broker's statement that satisfies the measure; it never changes duty
+ *  math). */
 export async function loadProgramMeasures(
   db: DbClient,
   program: string,
@@ -774,4 +787,113 @@ async function insertPrefixes(
   await db.insert(schema.tradeMeasureHts).values(
     prefixes.map((htsPrefix) => ({ tradeMeasureId: measureId, htsPrefix })),
   );
+}
+
+// ---- Family exemption linkage ----------------------------------------------
+// Chapter 99 headings come in 6-digit families (the same neighborhood key the
+// sync's grouping uses): liability headings plus the exemption headings whose
+// declaration excuses them (9903.82.01 "no aluminum/steel content" excuses
+// 9903.82.02/.04/.14). Audit Rule 1's missing-measure satisfaction reads
+// MeasureRef.exclusionDigits, which buildReferenceData assembles from
+// exemption hts_codes rows sharing the LIABILITY measure's trade_measure_id —
+// so every liability measure must carry a copy of each family exemption row.
+// The sync pipeline stages each code as its own revision, so linkage is
+// maintained here at apply time; scripts/repair-exemption-linkage.ts sweeps
+// the same invariant across families staged before this existed.
+
+/** One family Chapter 99 row, as fed to the pure planner. */
+export type FamilyCh99Row = {
+  id: string;
+  code: string;
+  codeDigits: string;
+  description: string;
+  rateType: schema.HtsRateTypeValue;
+  exemption: boolean;
+  tradeMeasureId: string | null;
+};
+
+export type ExemptionLinkInsert = {
+  code: string;
+  codeDigits: string;
+  description: string;
+  rateType: schema.HtsRateTypeValue;
+  tradeMeasureId: string;
+};
+
+/** Pure planning, test-pinned: given every Chapter 99 row of ONE 6-digit
+ *  family, the exemption-row copies each liability measure is missing.
+ *  Metadata is copied from the lowest-id row per exemption digits (uuidv7
+ *  ids sort by creation time — the original staging row). Idempotent by
+ *  construction: existing (digits, measure) pairs are never re-planned. */
+export function planFamilyExemptionLinks(
+  rows: FamilyCh99Row[],
+): ExemptionLinkInsert[] {
+  const canonical = new Map<string, FamilyCh99Row>();
+  const existing = new Set<string>();
+  const liabilityMeasures = new Set<string>();
+  for (const r of rows) {
+    if (!r.tradeMeasureId) continue;
+    if (r.exemption) {
+      existing.add(`${r.codeDigits}:${r.tradeMeasureId}`);
+      const cur = canonical.get(r.codeDigits);
+      if (!cur || r.id < cur.id) canonical.set(r.codeDigits, r);
+    } else {
+      liabilityMeasures.add(r.tradeMeasureId);
+    }
+  }
+  const inserts: ExemptionLinkInsert[] = [];
+  for (const [codeDigits, ex] of canonical) {
+    for (const tradeMeasureId of liabilityMeasures) {
+      if (existing.has(`${codeDigits}:${tradeMeasureId}`)) continue;
+      inserts.push({
+        code: ex.code,
+        codeDigits,
+        description: ex.description,
+        rateType: ex.rateType,
+        tradeMeasureId,
+      });
+    }
+  }
+  return inserts.sort(
+    (a, b) =>
+      a.codeDigits.localeCompare(b.codeDigits) ||
+      a.tradeMeasureId.localeCompare(b.tradeMeasureId),
+  );
+}
+
+/** Restore the family invariant for the family containing `ch99Digits`:
+ *  every liability measure carries a copy of each family exemption row.
+ *  Returns how many link rows were inserted. Safe to call repeatedly — the
+ *  (code_digits, trade_measure_id) unique index backstops the planner's
+ *  own dedupe. */
+export async function syncFamilyExemptionLinks(
+  db: DbClient,
+  ch99Digits: string,
+): Promise<number> {
+  const family = ch99Digits.slice(0, 6);
+  if (family.length < 6) return 0;
+  const rows = await db.query.htsCodes.findMany({
+    where: and(
+      isNotNull(schema.htsCodes.tradeMeasureId),
+      like(schema.htsCodes.codeDigits, `${family}%`),
+    ),
+  });
+  const inserts = planFamilyExemptionLinks(rows);
+  if (inserts.length === 0) return 0;
+  await db
+    .insert(schema.htsCodes)
+    .values(
+      inserts.map((i) => ({
+        code: i.code,
+        codeDigits: i.codeDigits,
+        description: i.description,
+        chapter: 99,
+        rateType: i.rateType,
+        rate: "0.000000",
+        tradeMeasureId: i.tradeMeasureId,
+        exemption: true,
+      })),
+    )
+    .onConflictDoNothing();
+  return inserts.length;
 }
