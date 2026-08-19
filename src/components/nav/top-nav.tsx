@@ -11,6 +11,7 @@ const workspaceLinks = [
   { href: "/entries", label: "Entries" },
   { href: "/parts", label: "Parts" },
   { href: "/events", label: "Events" },
+  { href: "/assistant", label: "Assistant" },
 ];
 
 const adminLinks = [

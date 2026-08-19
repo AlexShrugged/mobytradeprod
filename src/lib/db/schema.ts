@@ -1631,6 +1631,99 @@ export const analysisFindings = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------- assistant
+//
+// The org-facing assistant's persisted surface: conversations, the raw
+// Anthropic message transcript (content blocks stored verbatim, so a
+// conversation resumes byte-identically), and propose-and-confirm action
+// cards. The agent holds no write tools — proposals execute only when a
+// human confirms them through the existing decision routes.
+// src/lib/agent/service.ts is the sole writer of all three tables (the
+// proposals PATCH route records the human's confirm/dismiss through it).
+
+export const agentConversations = pgTable(
+  "agent_conversations",
+  {
+    id: id(),
+    orgId: orgId(),
+    title: varchar("title", { length: 120 })
+      .notNull()
+      .default("New conversation"),
+    /** Who opened the conversation — display attribution only
+     *  (conversations are org-shared, like every other surface). */
+    createdByName: text("created_by_name"),
+    /** Soft turn lock: set while a turn streams, cleared when it settles.
+     *  A crashed turn's stale lock is reclaimable after deadline + grace. */
+    turnStartedAt: timestamp("turn_started_at", { withTimezone: true }),
+    lastTurnAt: timestamp("last_turn_at", { withTimezone: true }),
+    /** AgentUsage of the most recent turn. */
+    lastUsage: jsonb("last_usage"),
+    ...timestamps,
+  },
+  (t) => [
+    index("agent_conversations_org_updated_idx").on(t.orgId, t.updatedAt),
+  ],
+);
+
+export const agentMessages = pgTable(
+  "agent_messages",
+  {
+    id: id(),
+    orgId: orgId(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => agentConversations.id, { onDelete: "cascade" }),
+    /** Transcript order — concatenating rows by seq rebuilds the exact
+     *  Anthropic messages array (tool_use/tool_result blocks included). */
+    seq: integer("seq").notNull(),
+    /** "user" | "assistant" — the Anthropic wire roles (tool results ride
+     *  in user messages, exactly as the SDK accumulates them). */
+    role: varchar("role", { length: 16 }).notNull(),
+    /** Raw Anthropic content blocks (string content normalized to a text
+     *  block on write). Display projections derive from these on read. */
+    content: jsonb("content").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("agent_messages_conversation_seq_uq").on(
+      t.conversationId,
+      t.seq,
+    ),
+  ],
+);
+
+export const agentProposals = pgTable(
+  "agent_proposals",
+  {
+    id: id(),
+    orgId: orgId(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => agentConversations.id, { onDelete: "cascade" }),
+    /** The assistant message whose propose_actions call created this card;
+     *  backfilled once that message persists (display anchoring only). */
+    messageId: uuid("message_id").references(() => agentMessages.id, {
+      onDelete: "set null",
+    }),
+    /** "alert_decision" | "analyze_entry". */
+    kind: varchar("kind", { length: 32 }).notNull(),
+    /** Self-contained card payload (AgentProposalPayload) — everything the
+     *  card renders without joins; unit ids are expanded at propose time. */
+    payload: jsonb("payload").notNull(),
+    /** "proposed" | "confirmed" | "dismissed" — the human's call on the
+     *  card. The underlying alert decision lives on the alert rows. */
+    status: varchar("status", { length: 16 }).notNull().default("proposed"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    /** Per-target outcomes recorded at confirm ([{id, ok}]). */
+    results: jsonb("results"),
+    ...timestamps,
+  },
+  (t) => [
+    index("agent_proposals_conversation_idx").on(t.conversationId),
+    index("agent_proposals_org_status_idx").on(t.orgId, t.status),
+  ],
+);
+
 // AD/CVD order corpus — global reference like hts_codes (no org_id).
 // Seeded as demo approximations (the same caveat as pre-certification
 // "SEED" base windows); a certified ingest corrects rows in place later.
@@ -2044,6 +2137,35 @@ export const integrationSourcesRelations = relations(
   }),
 );
 
+export const agentConversationsRelations = relations(
+  agentConversations,
+  ({ many }) => ({
+    messages: many(agentMessages),
+    proposals: many(agentProposals),
+  }),
+);
+
+export const agentMessagesRelations = relations(agentMessages, ({ one }) => ({
+  conversation: one(agentConversations, {
+    fields: [agentMessages.conversationId],
+    references: [agentConversations.id],
+  }),
+}));
+
+export const agentProposalsRelations = relations(
+  agentProposals,
+  ({ one }) => ({
+    conversation: one(agentConversations, {
+      fields: [agentProposals.conversationId],
+      references: [agentConversations.id],
+    }),
+    message: one(agentMessages, {
+      fields: [agentProposals.messageId],
+      references: [agentMessages.id],
+    }),
+  }),
+);
+
 // ---------------------------------------------------------------- row types
 
 export type Org = typeof orgs.$inferSelect;
@@ -2076,6 +2198,9 @@ export type EntryLineCharge = typeof entryLineCharges.$inferSelect;
 export type AuditAlert = typeof auditAlerts.$inferSelect;
 export type AnalysisFinding = typeof analysisFindings.$inferSelect;
 export type AnalysisRun = typeof analysisRuns.$inferSelect;
+export type AgentConversation = typeof agentConversations.$inferSelect;
+export type AgentMessage = typeof agentMessages.$inferSelect;
+export type AgentProposal = typeof agentProposals.$inferSelect;
 export type AdcvdOrder = typeof adcvdOrders.$inferSelect;
 export type RefundClaim = typeof refundClaims.$inferSelect;
 export type HtsClassification = typeof htsClassifications.$inferSelect;

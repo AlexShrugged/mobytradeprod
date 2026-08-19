@@ -10,7 +10,7 @@ customs entries (top-level) with their shipments and POs down to line items, see
 owed and refunds, manage SKUs and HTS classification, understand per-SKU landed cost, and
 follow a chronological event feed of their import business. Scenario modeling comes later.
 
-Six org-facing pages: **Entries · Variance · Parts · Events · Data · Settings**, plus a
+Seven org-facing pages: **Entries · Variance · Parts · Events · Assistant · Data · Settings**, plus a
 platform-operator surface at **/admin** (tariff sync + review queue). Auth is **Clerk
 (Organizations)**: `src/proxy.ts` (Next 16's middleware replacement — never create a
 `middleware.ts`) default-protects every page and API route except sign-in/up and the
@@ -98,6 +98,29 @@ for the analyst, never an input to deterministic duty math. The HTS
 classifier behind `classification/index.ts` is Claude-backed the same way
 (pool-preselected candidates, out-of-pool codes dropped, stub fallback).
 
+The org-facing **assistant** (`/assistant`, `src/lib/agent/`) is the
+conversational surface over all of it: a streaming toolRunner turn (NDJSON
+over POST, `agent/protocol.ts`) with twelve org-scoped tools — variance
+queue/detail, entries, deterministic charge/measure engines, parts,
+documents (incl. `read_document_text`, the first and only reader of
+`documents.raw_extraction`), and `propose_actions`. The agent holds ZERO
+write tools: propose_actions stages `agent_proposals` cards and the human's
+Confirm executes through the EXISTING decision routes client-side (alerts
+PATCH per unit id with the agent's rationale as `resolutionNote`, analyze
+POST). Unit expansion (rate/amount twins via `pairSiblingAlerts`) happens
+server-side at propose time; cards join live row status on read so stale
+proposals render as decided-elsewhere. Tools do request-scoped IO through
+the injectable `AgentToolDeps` seam (`agent/deps.ts`, server-only) — a
+DELIBERATE departure from the analyst's zero-IO bundle doctrine; the pure
+submodules (protocol, transcript repair/elision, document-text, markdown,
+display) are vitest-covered, and `agent/claude.test.ts` drives real tools
+through a scripted fake stream client. Transcripts persist as raw Anthropic
+content blocks (`agent_messages`, rebuilt + repaired by `agent/transcript.ts`);
+turns are locked one-per-conversation (`turnStartedAt`, stale-reclaimed);
+Stop only stops rendering — the turn finishes via `after()` and
+`router.refresh()` reconciles. Env: `AGENT_MODEL`/`AGENT_DEADLINE_MS`/
+`AGENT_MAX_ITERATIONS`; no key → echo stub locally, 503 + banner on Vercel.
+
 ## Architecture doctrines (carried from mobynew — do not violate)
 
 - **Derived data is never stored.** Expected charges, duty totals, refund stage, landed
@@ -108,7 +131,10 @@ classifier behind `classification/index.ts` is Claude-backed the same way
   part writes; `classification/service.ts` owns the HTS projection; `audit/auditor.ts`
   owns `audit_alerts` (reconciled by stable `alert_key`; resolved/dismissed rows never
   touched); `analysis/service.ts` owns `analysis_runs` + `analysis_findings` (same
-  reconcile contract, keyed by `finding_key`); `tariff-sync/apply.ts` owns Ch99
+  reconcile contract, keyed by `finding_key`); `agent/service.ts` owns
+  `agent_conversations` + `agent_messages` + `agent_proposals` (the assistant
+  itself never writes domain rows — human-confirmed proposals execute through
+  the existing decision routes); `tariff-sync/apply.ts` owns Ch99
   reference rows; `tariff-sync/base-apply.ts` owns base-schedule windows. Both tariff writers are approval-gated: they refuse
   unless the matching review item is approved, and the sync/extractor/import paths
   write staging tables only.
