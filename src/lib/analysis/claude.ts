@@ -1,5 +1,5 @@
 // Claude-backed entry analyst: the SDK tool runner drives an investigation
-// loop over the eight analysis tools; report_findings is the terminal action.
+// loop over the nine analysis tools; report_findings is the terminal action.
 // A run that ends without a report gets ONE structured-output nudge over the
 // accumulated transcript; total failure degrades to the stub's deterministic
 // findings with the error noted. Never throws — the eval harness (and any

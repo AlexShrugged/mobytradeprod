@@ -17,6 +17,7 @@ import {
   type ImpactContext,
   type ImpactLineSnapshot,
 } from "@/lib/variance/impact";
+import { hasActionableDiff } from "@/lib/variance/field-issue";
 import { compareSiblingAlerts } from "@/lib/variance/grouping";
 import {
   liquidationWindow,
@@ -35,10 +36,12 @@ import {
 // derived on read (never stored); the auditor stays the sole writer of the
 // alerts and analysis/service.ts of the findings. AI rows join the queue
 // under alertType "ai_<category>" — same grouping, filters, and decisions
-// as rule rows — with two deliberate differences: only NOVEL findings
-// enter (a corroboration's issue is already a rule row), and impact stays
-// null (the deterministic engine owns money math; the analyst only cites
-// it).
+// as rule rows — with three deliberate differences: only NOVEL findings
+// enter (a corroboration's issue is already a rule row), only findings
+// carrying a real filed-vs-expected diff enter (hasActionableDiff — a
+// diff-less observation like "could not verify" is not a variance; it
+// renders on the entry page's AI card only), and impact stays null (the
+// deterministic engine owns money math; the analyst only cites it).
 
 export const DUTY_CHARGE_TYPES = new Set([
   "base_duty",
@@ -279,6 +282,7 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
       ? (f.relatedAlertKeys as string[])
       : [];
     if (related.length > 0) continue;
+    if (!hasActionableDiff(f.fields)) continue;
     const entryStatus = deriveEntryStatus(f.entry.refundClaims, today);
     rows.push({
       alertId: f.id,

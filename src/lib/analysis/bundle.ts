@@ -16,6 +16,7 @@ import type {
   BundleAdcvdOrder,
   BundleDocument,
   BundlePart,
+  BundleSiblingEntry,
   EntryBundle,
 } from "./types";
 
@@ -118,6 +119,76 @@ export async function loadEntryBundle(
     documents.push(doc);
   }
 
+  // Other entries on this entry's shipments, with declared lines + charges.
+  // Goods moving together should carry identical Ch99 treatment; loading the
+  // siblings here makes that check deliberate instead of depending on which
+  // packet document happened to home onto both entries.
+  const siblingEntries: BundleSiblingEntry[] = [];
+  if (shipmentIds.length > 0) {
+    const siblingLinks = await db.query.entryShipments.findMany({
+      where: and(
+        eq(schema.entryShipments.orgId, orgId),
+        inArray(schema.entryShipments.shipmentId, shipmentIds),
+      ),
+      with: { shipment: true },
+    });
+    const shipmentsBySibling = new Map<
+      string,
+      BundleSiblingEntry["sharedShipments"]
+    >();
+    for (const link of siblingLinks) {
+      if (link.entryId === entryId) continue;
+      const list = shipmentsBySibling.get(link.entryId) ?? [];
+      list.push({
+        shipmentNumber: link.shipment.shipmentNumber,
+        billOfLading: link.shipment.billOfLading,
+        mode: link.shipment.mode,
+      });
+      shipmentsBySibling.set(link.entryId, list);
+    }
+    if (shipmentsBySibling.size > 0) {
+      const siblingRows = await db.query.entries.findMany({
+        where: and(
+          eq(schema.entries.orgId, orgId),
+          inArray(schema.entries.id, [...shipmentsBySibling.keys()]),
+        ),
+        with: {
+          lineItems: {
+            with: { charges: true },
+            orderBy: (li, { asc }) => [asc(li.lineNumber)],
+          },
+        },
+        orderBy: (e, { asc }) => [asc(e.entryNumber)],
+      });
+      for (const sibling of siblingRows) {
+        siblingEntries.push({
+          entryNumber: sibling.entryNumber,
+          entryDate: sibling.entryDate,
+          entryType: sibling.entryType,
+          totalEnteredValue: sibling.totalEnteredValue,
+          totalDuty: sibling.totalDuty,
+          sharedShipments: shipmentsBySibling.get(sibling.id) ?? [],
+          lines: sibling.lineItems.map((li) => ({
+            lineNumber: li.lineNumber,
+            sku: li.sku,
+            description: li.description,
+            htsCode: li.htsCode,
+            countryOfOrigin: li.countryOfOrigin,
+            supplierName: li.supplierName,
+            quantity: li.quantity,
+            enteredValue: li.enteredValue,
+            charges: li.charges.map((c) => ({
+              chargeType: c.chargeType,
+              htsCode: c.htsCode,
+              rate: c.rate,
+              amount: c.amount,
+            })),
+          })),
+        });
+      }
+    }
+  }
+
   const skus = [
     ...new Set(
       snapshot.auditable.lines
@@ -184,5 +255,5 @@ export async function loadEntryBundle(
     source: o.source,
   }));
 
-  return { orgId, snapshot, documents, partsBySku, adcvdOrders };
+  return { orgId, snapshot, documents, siblingEntries, partsBySku, adcvdOrders };
 }

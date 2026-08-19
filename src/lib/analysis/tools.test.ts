@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { FindingsReport } from "./findings";
-import { fixtureBundle, fixtureRef as ref } from "./test-fixtures";
+import { fixtureBundle, fixtureSibling, fixtureRef as ref } from "./test-fixtures";
 import {
   buildAnalystTools,
   type ReportCollector,
@@ -24,7 +24,7 @@ function setup(bundle = fixtureBundle()) {
 }
 
 describe("buildAnalystTools", () => {
-  it("exposes exactly the eight planned tools", () => {
+  it("exposes exactly the nine planned tools", () => {
     const { byName } = setup();
     expect([...byName.keys()].sort()).toEqual([
       "get_adcvd_orders",
@@ -33,6 +33,7 @@ describe("buildAnalystTools", () => {
       "get_measures",
       "get_part",
       "get_regulatory_params",
+      "get_sibling_entries",
       "read_document",
       "report_findings",
     ]);
@@ -87,6 +88,22 @@ describe("buildAnalystTools", () => {
     const part = JSON.parse(await run("get_part", { sku: "EB-MTR-500W" }));
     expect(part.name).toBe("500W hub motor");
     expect(await run("get_part", { sku: "NOPE" })).toMatch(/^ERROR:/);
+  });
+
+  it("get_sibling_entries returns the shipment siblings with charges", async () => {
+    const { run } = setup(fixtureBundle({ siblingEntries: [fixtureSibling()] }));
+    const out = JSON.parse(await run("get_sibling_entries", {}));
+    expect(out).toHaveLength(1);
+    expect(out[0].entryNumber).toBe("231-0000002-2");
+    expect(out[0].sharedShipments[0].billOfLading).toBe("MAEU12345678");
+    expect(out[0].lines[0].charges.map((c: { htsCode: string | null }) => c.htsCode)).toContain(
+      "9903.88.01",
+    );
+  });
+
+  it("get_sibling_entries returns an empty list when the entry ships alone", async () => {
+    const { run } = setup();
+    expect(JSON.parse(await run("get_sibling_entries", {}))).toEqual([]);
   });
 
   it("get_deterministic_findings runs the audit rules", async () => {

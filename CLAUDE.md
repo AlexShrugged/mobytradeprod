@@ -88,10 +88,13 @@ citations. `analysis/service.ts` is the sole writer of `analysis_runs` +
 a clean Claude run reconciles — failed/degraded runs never clobber findings
 and the stub never persists at all (the analyze route 503s without a key).
 NOVEL findings (empty relatedAlertKeys) join the variance queue as
-`ai_<category>` rows with null impact (the engine owns dollars) and reconcile
-at `/variance/[id]` exactly like rule alerts (the alerts PATCH route decides
-both kinds, so mixed-line review flows work); corroborations render only on
-the entry page's AI card. Tariff approvals enqueue re-analysis (pending
+`ai_<category>` rows with null impact (the engine owns dollars) — but only
+when they carry a real filed-vs-expected diff (`hasActionableDiff` in
+`variance/field-issue.ts`, mirrored in SQL by the entries-list count;
+diff-less observations like "could not verify" are not variances) — and
+reconcile at `/variance/[id]` exactly like rule alerts (the alerts PATCH
+route decides both kinds, so mixed-line review flows work); corroborations
+and diff-less observations render only on the entry page's AI card. Tariff approvals enqueue re-analysis (pending
 `analysis_runs` rows, one per previously analyzed entry the changed codes
 touch) inside the apply transaction and drain the queue after the response
 (`after()`); with no API

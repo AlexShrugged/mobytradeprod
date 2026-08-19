@@ -4,7 +4,7 @@
 
 import { buildSeedReferenceData, type DayFn } from "../db/seed-data/tariff";
 import type { AuditableSnapshot } from "../audit/auditor";
-import type { EntryBundle } from "./types";
+import type { BundleSiblingEntry, EntryBundle } from "./types";
 
 // Fixed anchor, same idiom as rules.test.ts.
 export const day: DayFn = (offset) =>
@@ -13,6 +13,48 @@ export const day: DayFn = (offset) =>
     .slice(0, 10);
 
 export const fixtureRef = buildSeedReferenceData(day);
+
+/** A sibling on the same shipment declaring the same goods WITH the CN
+ *  Section 301 measure the fixture entry omits — the cross-entry
+ *  inconsistency shape. */
+export function fixtureSibling(): BundleSiblingEntry {
+  return {
+    entryNumber: "231-0000002-2",
+    entryDate: day(-30),
+    entryType: "01",
+    totalEnteredValue: "5000.00",
+    totalDuty: "1450.00",
+    sharedShipments: [
+      { shipmentNumber: "SHP-1001", billOfLading: "MAEU12345678", mode: "ocean" },
+    ],
+    lines: [
+      {
+        lineNumber: 1,
+        sku: "EB-MTR-500W",
+        description: "500W hub motors",
+        htsCode: "8501.31.4000",
+        countryOfOrigin: "CN",
+        supplierName: "Shenzhen Drivetrain Co",
+        quantity: "50.0000",
+        enteredValue: "5000.00",
+        charges: [
+          {
+            chargeType: "base_duty",
+            htsCode: "8501.31.4000",
+            rate: "0.04",
+            amount: "200.00",
+          },
+          {
+            chargeType: "additional_duty",
+            htsCode: "9903.88.01",
+            rate: "0.25",
+            amount: "1250.00",
+          },
+        ],
+      },
+    ],
+  };
+}
 
 export function fixtureBundle(over: Partial<EntryBundle> = {}): EntryBundle {
   const snapshot: AuditableSnapshot = {
@@ -83,6 +125,7 @@ export function fixtureBundle(over: Partial<EntryBundle> = {}): EntryBundle {
         extractedData: { entry_number: "231-0000001-1", entry_type: "03" },
       },
     ],
+    siblingEntries: [],
     partsBySku: new Map([
       [
         "EB-MTR-500W",

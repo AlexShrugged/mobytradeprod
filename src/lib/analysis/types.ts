@@ -61,10 +61,45 @@ export type BundleAdcvdOrder = {
   source: string | null;
 };
 
+export type BundleSiblingEntry = {
+  entryNumber: string;
+  entryDate: string | null;
+  entryType: string | null;
+  totalEnteredValue: string | null;
+  totalDuty: string | null;
+  /** The shipments this sibling shares with the entry under analysis. */
+  sharedShipments: {
+    shipmentNumber: string;
+    billOfLading: string | null;
+    mode: string;
+  }[];
+  lines: {
+    lineNumber: number;
+    sku: string | null;
+    description: string | null;
+    htsCode: string | null;
+    countryOfOrigin: string | null;
+    supplierName: string | null;
+    quantity: string | null;
+    enteredValue: string | null;
+    charges: {
+      chargeType: string;
+      htsCode: string | null;
+      rate: string | null;
+      amount: string | null;
+    }[];
+  }[];
+};
+
 export type EntryBundle = {
   orgId: string;
   snapshot: AuditableSnapshot;
   documents: BundleDocument[];
+  /** Other entries on this entry's shipments, with their declared lines and
+   *  charges — the cross-entry consistency corpus. Goods moving together
+   *  should get identical Ch99 treatment; without this the analyst only sees
+   *  siblings when a packet document happens to home onto both entries. */
+  siblingEntries: BundleSiblingEntry[];
   /** Catalog data for every SKU on the entry's lines (missing SKUs simply
    *  have no entry — itself a signal the analyst can surface). */
   partsBySku: Map<string, BundlePart>;

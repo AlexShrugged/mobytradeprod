@@ -1,4 +1,4 @@
-// The analyst's tool surface: eight betaZodTools closed over a preloaded
+// The analyst's tool surface: nine betaZodTools closed over a preloaded
 // ToolContext — zero IO inside a tool, so every call is cheap, deterministic,
 // and testable without a database. Tools return JSON strings (capped) or
 // "ERROR: ..." strings the model can self-correct from; report_findings is
@@ -195,6 +195,15 @@ export function buildAnalystTools(
     },
   });
 
+  const getSiblingEntries = betaZodTool({
+    name: "get_sibling_entries",
+    description:
+      "Other entries moving on this entry's shipments (same bill of lading / air waybill), with their declared lines and charges. Identical goods on one shipment should carry identical Chapter 99 treatment — use this to check cross-entry consistency. An empty list means no sibling entries are known.",
+    inputSchema: z.object({}),
+    run: (input) =>
+      respond(ctx, "get_sibling_entries", input, bundle.siblingEntries),
+  });
+
   const getDeterministicFindings = betaZodTool({
     name: "get_deterministic_findings",
     description:
@@ -281,7 +290,7 @@ export function buildAnalystTools(
           ctx,
           "get_adcvd_orders",
           input,
-          `No matching order. Known case numbers: ${bundle.adcvdOrders.map((o) => o.caseNumber).join(", ")}. A case number absent from this corpus is not proof the case does not exist — say so if it matters.`,
+          `No matching order. Known case numbers: ${bundle.adcvdOrders.map((o) => o.caseNumber).join(", ")}. This corpus is incomplete, so an empty lookup is inconclusive, never evidence: do not treat a declared case number as invalid because it is absent here, and never report the inability to verify as a finding. Report an AD/CVD finding only when the entry's own documents, charges, or case numbers actually conflict.`,
         );
       }
       return respond(ctx, "get_adcvd_orders", input, orders);
@@ -309,6 +318,7 @@ export function buildAnalystTools(
     getExpectedCharges,
     getMeasures,
     getPart,
+    getSiblingEntries,
     getDeterministicFindings,
     getRegulatoryParams,
     getAdcvdOrders,

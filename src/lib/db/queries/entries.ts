@@ -32,6 +32,7 @@ import { getReferenceDataForOrg } from "./reference";
 import { resolveSailInfo } from "@/lib/duty/sail";
 import type { ReferenceData, SailBasis } from "@/lib/duty/types";
 import { resolveWindow } from "@/lib/effective-dating";
+import { hasActionableDiff } from "@/lib/variance/field-issue";
 import {
   ENTRY_PHASES,
   SUBMISSION_WINDOW_DAYS,
@@ -397,7 +398,9 @@ export async function getEntries(opts: {
         )
         .groupBy(schema.auditAlerts.entryId, schema.auditAlerts.severity),
       // Open NOVEL AI findings count as variances too — corroborations
-      // would double-count the rule row they ride on.
+      // would double-count the rule row they ride on. Diff-less findings
+      // (no fields row with a real expected value) are observations, not
+      // variances — SQL mirror of hasActionableDiff (variance/field-issue).
       db
         .select({
           entryId: schema.analysisFindings.entryId,
@@ -411,6 +414,12 @@ export async function getEntries(opts: {
             eq(schema.analysisFindings.status, "open"),
             inArray(schema.analysisFindings.entryId, entryIds),
             sql`${schema.analysisFindings.relatedAlertKeys} = '[]'::jsonb`,
+            sql`CASE WHEN jsonb_typeof(${schema.analysisFindings.fields}) = 'array'
+                 THEN EXISTS (
+                   SELECT 1 FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
+                   WHERE btrim(coalesce(fe->>'expected', '')) <> ''
+                 )
+                 ELSE false END`,
           ),
         )
         .groupBy(
@@ -1270,13 +1279,18 @@ export async function getEntryDetail(
     const openAlerts: OpenAlertCounts = { ...EMPTY_ALERTS };
     for (const a of lineAlerts) openAlerts[a.severity] += 1;
     // Open NOVEL AI findings count as line variances too (corroborations
-    // would double-count the rule row they ride on) — same rule as the
-    // variance queue.
+    // would double-count the rule row they ride on) — same admission rule
+    // as the variance queue, diff-less observations included.
     for (const f of entry.analysisFindings) {
       const related = Array.isArray(f.relatedAlertKeys)
         ? (f.relatedAlertKeys as string[])
         : [];
-      if (f.status === "open" && f.lineItemId === li.id && related.length === 0)
+      if (
+        f.status === "open" &&
+        f.lineItemId === li.id &&
+        related.length === 0 &&
+        hasActionableDiff(f.fields)
+      )
         openAlerts[f.severity] += 1;
     }
 

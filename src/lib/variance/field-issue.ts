@@ -7,6 +7,20 @@ import { formatHts, formatMoney, formatRate } from "@/lib/format";
 
 export type FieldIssue = { field: string; expected: string; filed: string };
 
+/** The variance admission rule for AI findings: at least one
+ *  filed-vs-expected row with a real expected value. A finding without one
+ *  is an observation ("could not verify"), not a variance — it renders on
+ *  the entry page's AI card but never joins the queue or the variance
+ *  counts. The entries-list count query mirrors this in SQL. */
+export function hasActionableDiff(fields: unknown): boolean {
+  if (!Array.isArray(fields)) return false;
+  return fields.some((row) => {
+    if (!row || typeof row !== "object") return false;
+    const expected = (row as { expected?: unknown }).expected;
+    return typeof expected === "string" && expected.trim() !== "";
+  });
+}
+
 export function fieldIssue(a: {
   alertType: string;
   details: Record<string, unknown> | null;
