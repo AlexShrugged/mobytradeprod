@@ -1,7 +1,11 @@
+import type { Metadata } from "next";
+
 import { ConversationSidebar } from "@/components/assistant/conversation-sidebar";
 import { getAgentConversations } from "@/lib/db/queries/agent";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "MobyAI" };
 
 // Two panes: every conversation openable from the left, the active thread
 // (or the new-conversation composer) on the right.
