@@ -24,10 +24,33 @@ describe("hasActionableDiff", () => {
     expect(hasActionableDiff([])).toBe(false);
   });
 
-  it("rejects rows with no expressible expectation", () => {
+  it("rejects a single filed fact with no expectation", () => {
     expect(
       hasActionableDiff([
         { field: "Case number", filed: "A-570-133", expected: null },
+      ]),
+    ).toBe(false);
+  });
+
+  it("admits a filed-vs-filed disagreement (cross-entity split)", () => {
+    expect(
+      hasActionableDiff([
+        { field: "This entry", filed: "9903.82.01 at $0", expected: null },
+        {
+          field: "Entry 231-0000002-2",
+          filed: "9903.82.02 at $1,250.00",
+          expected: null,
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  it("ignores blank filed values when counting the disagreement", () => {
+    expect(
+      hasActionableDiff([
+        { field: "A", filed: "9903.82.01", expected: null },
+        { field: "B", filed: "  ", expected: null },
+        { field: "C", filed: null, expected: null },
       ]),
     ).toBe(false);
   });

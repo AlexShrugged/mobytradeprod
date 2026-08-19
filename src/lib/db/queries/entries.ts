@@ -398,9 +398,11 @@ export async function getEntries(opts: {
         )
         .groupBy(schema.auditAlerts.entryId, schema.auditAlerts.severity),
       // Open NOVEL AI findings count as variances too — corroborations
-      // would double-count the rule row they ride on. Diff-less findings
-      // (no fields row with a real expected value) are observations, not
-      // variances — SQL mirror of hasActionableDiff (variance/field-issue).
+      // would double-count the rule row they ride on. The fields must
+      // present a comparison (an expected value, or two-plus filed values
+      // in disagreement) — SQL mirror of hasActionableDiff
+      // (variance/field-issue); anything less is an observation, not a
+      // variance.
       db
         .select({
           entryId: schema.analysisFindings.entryId,
@@ -418,7 +420,10 @@ export async function getEntries(opts: {
                  THEN EXISTS (
                    SELECT 1 FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
                    WHERE btrim(coalesce(fe->>'expected', '')) <> ''
-                 )
+                 ) OR (
+                   SELECT count(*) FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
+                   WHERE btrim(coalesce(fe->>'filed', '')) <> ''
+                 ) >= 2
                  ELSE false END`,
           ),
         )

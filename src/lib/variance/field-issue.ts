@@ -7,18 +7,23 @@ import { formatHts, formatMoney, formatRate } from "@/lib/format";
 
 export type FieldIssue = { field: string; expected: string; filed: string };
 
-/** The variance admission rule for AI findings: at least one
- *  filed-vs-expected row with a real expected value. A finding without one
- *  is an observation ("could not verify"), not a variance — it renders on
- *  the entry page's AI card but never joins the queue or the variance
- *  counts. The entries-list count query mirrors this in SQL. */
+/** The variance admission rule for AI findings: the fields must present a
+ *  COMPARISON — a filed-vs-expected diff (some row has a real expected
+ *  value) or a filed-vs-filed disagreement (two or more declared values,
+ *  the cross-entity inconsistency shape, where filling expected would
+ *  assert which side is right). A finding with neither is an observation
+ *  ("could not verify"), not a variance — it renders on the entry page's
+ *  AI card but never joins the queue, the counts, or the line navigators.
+ *  The entries-list count query mirrors this in SQL. */
 export function hasActionableDiff(fields: unknown): boolean {
   if (!Array.isArray(fields)) return false;
-  return fields.some((row) => {
+  const has = (row: unknown, key: "filed" | "expected"): boolean => {
     if (!row || typeof row !== "object") return false;
-    const expected = (row as { expected?: unknown }).expected;
-    return typeof expected === "string" && expected.trim() !== "";
-  });
+    const v = (row as Record<string, unknown>)[key];
+    return typeof v === "string" && v.trim() !== "";
+  };
+  if (fields.some((r) => has(r, "expected"))) return true;
+  return fields.filter((r) => has(r, "filed")).length >= 2;
 }
 
 export function fieldIssue(a: {
