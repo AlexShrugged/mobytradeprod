@@ -3,8 +3,10 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { AuthControls } from "@/components/nav/auth-controls";
 import { TopNav } from "@/components/nav/top-nav";
+import { isAgentConfigured } from "@/lib/agent";
 import { clerkEnabled } from "@/lib/auth/config";
 import "./globals.css";
 
@@ -39,6 +41,7 @@ export default function RootLayout({
         {children}
       </main>
       <Toaster richColors />
+      <AssistantWidget configured={isAgentConfigured()} />
     </ThemeProvider>
   );
   return (

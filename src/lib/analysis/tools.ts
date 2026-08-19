@@ -11,6 +11,7 @@ import type { BetaRunnableTool } from "@anthropic-ai/sdk/lib/tools/BetaRunnableT
 import { z } from "zod";
 
 import { computeEntryAlerts, toCents } from "../audit/rules";
+import { applySuppressions } from "../audit/suppression";
 import {
   computeExpectedCharges,
   normalizeHts,
@@ -18,6 +19,7 @@ import {
   resolveExpectedMeasures,
 } from "../duty/calculator";
 import type { ReferenceData } from "../duty/types";
+import type { SuppressionSpec } from "../org-rules";
 import { findingsReportSchema, type FindingsReport } from "./findings";
 import { resolveRegulatoryParams } from "./regulatory-params";
 import type { EntryBundle, ToolTraceEntry } from "./types";
@@ -207,16 +209,36 @@ export function buildAnalystTools(
   const getDeterministicFindings = betaZodTool({
     name: "get_deterministic_findings",
     description:
-      "Run the deterministic audit rules over this entry (the same pass production runs) and return the desired alerts. Reconcile these into your findings' relatedAlertKeys — corroborate or contextualize them, don't re-derive them.",
+      "Run the deterministic audit rules over this entry (the same pass production runs) and return the desired alerts. Reconcile these into your findings' relatedAlertKeys — corroborate or contextualize them, don't re-derive them. An alert with a non-null suppressedByRule is hidden from the variance queue by that org rule: do not restate it as a finding, but do weigh what it shows when evidence points at a material, non-routine problem.",
     inputSchema: z.object({}),
     run: (input) => {
-      const alerts = computeEntryAlerts(auditable, ref).map((a) => ({
+      // Unsuppressed output WITH attribution: hiding data from an
+      // investigator creates blind spots — the analyst should notice when a
+      // rule conceals something material; the annotation plus the prompt
+      // doctrine keeps it from re-reporting routine suppressed noise.
+      const computed = computeEntryAlerts(auditable, ref);
+      const { suppressed } = applySuppressions(
+        computed,
+        auditable,
+        bundle.orgRules
+          .filter((r) => r.suppression != null)
+          .map((r) => ({
+            id: r.id,
+            text: r.text,
+            suppression: r.suppression as SuppressionSpec,
+          })),
+      );
+      const ruleTextByKey = new Map(
+        suppressed.map((s) => [s.alert.alertKey, s.ruleText]),
+      );
+      const alerts = computed.map((a) => ({
         alertKey: a.alertKey,
         alertType: a.alertType,
         severity: a.severity,
         label: a.label,
         message: a.message,
         details: a.details,
+        suppressedByRule: ruleTextByKey.get(a.alertKey) ?? null,
       }));
       return respond(ctx, "get_deterministic_findings", input, alerts);
     },

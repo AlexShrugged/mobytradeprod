@@ -22,6 +22,8 @@ import type {
 } from "../db/queries/variance";
 import type { EntryDetail, EntryRow } from "../db/queries/entries";
 import type { PartRow } from "../db/queries/parts";
+import { auditAlertType } from "../db/schema";
+import { normalizeHtsPrefix, type SuppressionSpec } from "../org-rules";
 import {
   pairSiblingAlerts,
   unitIds,
@@ -668,17 +670,24 @@ export function buildAgentTools(
   const proposeActions = betaZodTool({
     name: "propose_actions",
     description:
-      "Stage actions for the user to confirm - nothing executes until they confirm the card. alert_decision needs alertId + decision + note (your rationale; it lands on the record). The decidable unit (a rate mismatch plus its amount twin) is expanded automatically. analyze_entry needs entryId + reason. Not terminal: keep talking after proposing.",
+      "Stage actions for the user to confirm - nothing executes until they confirm the card. alert_decision needs alertId + decision + note (your rationale; it lands on the record). The decidable unit (a rate mismatch plus its amount twin) is expanded automatically. analyze_entry needs entryId + reason. save_org_rule needs ruleText (one concise sentence, the standing instruction); add suppressAlertTypes (plus optional suppressSupplierName / suppressCountryOfOrigin / suppressHtsPrefix scope) ONLY when the user clearly wants matching variance alerts hidden. Not terminal: keep talking after proposing.",
     inputSchema: z.object({
       actions: z
         .array(
           z.object({
-            kind: z.enum(["alert_decision", "analyze_entry"]),
+            kind: z.enum(["alert_decision", "analyze_entry", "save_org_rule"]),
             alertId: z.string().nullable(),
             decision: z.enum(["resolved", "dismissed", "open"]).nullable(),
             note: z.string().nullable(),
             entryId: z.string().nullable(),
             reason: z.string().nullable(),
+            ruleText: z.string().nullable(),
+            suppressAlertTypes: z
+              .array(z.enum(auditAlertType.enumValues))
+              .nullable(),
+            suppressSupplierName: z.string().nullable(),
+            suppressCountryOfOrigin: z.string().nullable(),
+            suppressHtsPrefix: z.string().nullable(),
           }),
         )
         .min(1)
@@ -693,6 +702,10 @@ export function buildAgentTools(
         for (const action of input.actions) {
           if (action.kind === "alert_decision") {
             const built = await buildAlertDecision(deps, action);
+            if (typeof built === "string") errors.push(built);
+            else payloads.push(built);
+          } else if (action.kind === "save_org_rule") {
+            const built = buildSaveOrgRule(action);
             if (typeof built === "string") errors.push(built);
             else payloads.push(built);
           } else {
@@ -757,6 +770,53 @@ export function buildAgentTools(
     readDocumentText,
     proposeActions,
   ];
+}
+
+/** Validate one save_org_rule. Pure — the rule only exists once the user
+ *  confirms the card, which POSTs /api/org-rules. Returns the payload, or an
+ *  error sentence for the model. */
+function buildSaveOrgRule(action: {
+  ruleText: string | null;
+  suppressAlertTypes: SuppressionSpec["alertTypes"] | null;
+  suppressSupplierName: string | null;
+  suppressCountryOfOrigin: string | null;
+  suppressHtsPrefix: string | null;
+}): AgentProposalPayload | string {
+  const text = action.ruleText?.trim();
+  if (!text) {
+    return "save_org_rule needs ruleText - one concise sentence.";
+  }
+  if (text.length > 300) {
+    return "save_org_rule: ruleText is over 300 characters. Condense it to one sentence.";
+  }
+  const hasScope =
+    action.suppressSupplierName != null ||
+    action.suppressCountryOfOrigin != null ||
+    action.suppressHtsPrefix != null;
+  if (hasScope && (action.suppressAlertTypes?.length ?? 0) === 0) {
+    return "save_org_rule: scope fields need suppressAlertTypes - a guidance rule has no scope.";
+  }
+  let suppression: SuppressionSpec | null = null;
+  if (action.suppressAlertTypes && action.suppressAlertTypes.length > 0) {
+    const coo = action.suppressCountryOfOrigin?.trim().toUpperCase() ?? null;
+    if (coo !== null && coo.length !== 2) {
+      return "save_org_rule: suppressCountryOfOrigin must be an ISO-2 code.";
+    }
+    const prefix = action.suppressHtsPrefix
+      ? normalizeHtsPrefix(action.suppressHtsPrefix)
+      : null;
+    if (prefix !== null && prefix.length < 2) {
+      return "save_org_rule: suppressHtsPrefix needs at least 2 digits.";
+    }
+    const supplier = action.suppressSupplierName?.trim() || null;
+    suppression = {
+      alertTypes: action.suppressAlertTypes,
+      supplierName: supplier,
+      countryOfOrigin: coo,
+      htsPrefix: prefix,
+    };
+  }
+  return { kind: "save_org_rule", text, suppression };
 }
 
 /** Validate one alert_decision and expand its unit against live siblings.

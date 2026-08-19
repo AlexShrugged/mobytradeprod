@@ -170,6 +170,7 @@ export function fixtureBundle(over: Partial<EntryBundle> = {}): EntryBundle {
         source: "test",
       },
     ],
+    orgRules: [],
     ...over,
   };
 }

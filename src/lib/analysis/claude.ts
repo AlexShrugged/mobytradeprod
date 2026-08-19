@@ -12,7 +12,7 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 
 import type { ReferenceData } from "../duty/types";
 import { findingsReportSchema } from "./findings";
-import { buildInitialUserMessage, SYSTEM_PROMPT } from "./prompt";
+import { buildInitialUserMessage, buildSystemPrompt } from "./prompt";
 import { StubEntryAnalyst } from "./stub";
 import { buildAnalystTools, type ReportCollector } from "./tools";
 import type {
@@ -96,6 +96,9 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
     const trace: ToolTraceEntry[] = [];
     const collector: ReportCollector = { report: null };
     const tools = buildAnalystTools({ bundle, ref, trace }, collector);
+    // Built once per run and reused by the nudge — byte-identity keeps the
+    // cached prefix intact.
+    const system = buildSystemPrompt(bundle.orgRules);
     const usage: AnalystUsage = {
       iterations: 0,
       inputTokens: 0,
@@ -111,7 +114,7 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
         {
           model: this.model,
           max_tokens: MAX_TOKENS,
-          system: SYSTEM_PROMPT,
+          system,
           messages: [
             { role: "user", content: buildInitialUserMessage(bundle) },
           ],
@@ -152,7 +155,7 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
         const response = await this.client.beta.messages.parse({
           model: this.model,
           max_tokens: MAX_TOKENS,
-          system: SYSTEM_PROMPT,
+          system,
           messages: [...transcript, { role: "user", content: NUDGE }],
           // Same tool defs (stripped to wire shape) keep the cached prefix;
           // tool_choice none forces the report out as text.

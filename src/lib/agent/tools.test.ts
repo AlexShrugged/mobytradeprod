@@ -382,4 +382,129 @@ describe("propose_actions", () => {
       entryNumber: "E-1",
     });
   });
+
+  it("stages a guidance save_org_rule from ruleText alone", async () => {
+    const { ctx, events } = makeCtx();
+    const created: AgentProposalPayload[][] = [];
+    const deps = makeDeps({
+      createProposals: async (payloads) => {
+        created.push(payloads);
+        return payloads.map((p, i) => ({
+          id: `p${i}`,
+          conversationId: "c1",
+          messageId: null,
+          kind: p.kind,
+          payload: p,
+          status: "proposed" as const,
+          decidedAt: null,
+          results: null,
+          createdAt: "2026-08-18T00:00:00.000Z",
+          liveStatuses: null,
+        }));
+      },
+    });
+    const out = await tool(deps, ctx, "propose_actions").run({
+      actions: [
+        {
+          kind: "save_org_rule",
+          alertId: null,
+          decision: null,
+          note: null,
+          entryId: null,
+          reason: null,
+          ruleText: "  Always check type 03 entries for AD/CVD consistency.  ",
+          suppressAlertTypes: null,
+          suppressSupplierName: null,
+          suppressCountryOfOrigin: null,
+          suppressHtsPrefix: null,
+        },
+      ],
+    });
+    expect(out.startsWith("ERROR:")).toBe(false);
+    expect(created[0][0]).toEqual({
+      kind: "save_org_rule",
+      text: "Always check type 03 entries for AD/CVD consistency.",
+      suppression: null,
+    });
+    expect(events.some((e) => e.type === "proposal")).toBe(true);
+  });
+
+  it("builds a normalized suppression spec", async () => {
+    const { ctx } = makeCtx();
+    const created: AgentProposalPayload[][] = [];
+    const deps = makeDeps({
+      createProposals: async (payloads) => {
+        created.push(payloads);
+        return [];
+      },
+    });
+    await tool(deps, ctx, "propose_actions").run({
+      actions: [
+        {
+          kind: "save_org_rule",
+          alertId: null,
+          decision: null,
+          note: null,
+          entryId: null,
+          reason: null,
+          ruleText: "Ignore rate noise on CN drivetrain motors.",
+          suppressAlertTypes: ["rate_mismatch", "amount_mismatch"],
+          suppressSupplierName: "Shenzhen Drivetrain Co",
+          suppressCountryOfOrigin: "cn",
+          suppressHtsPrefix: "8501.31",
+        },
+      ],
+    });
+    expect(created[0][0]).toEqual({
+      kind: "save_org_rule",
+      text: "Ignore rate noise on CN drivetrain motors.",
+      suppression: {
+        alertTypes: ["rate_mismatch", "amount_mismatch"],
+        supplierName: "Shenzhen Drivetrain Co",
+        countryOfOrigin: "CN",
+        htsPrefix: "850131",
+      },
+    });
+  });
+
+  it("rejects a rule without text and scope without alert types", async () => {
+    const { ctx } = makeCtx();
+    let createCalls = 0;
+    const deps = makeDeps({
+      createProposals: async () => {
+        createCalls += 1;
+        return [];
+      },
+    });
+    const base = {
+      kind: "save_org_rule" as const,
+      alertId: null,
+      decision: null,
+      note: null,
+      entryId: null,
+      reason: null,
+      suppressAlertTypes: null,
+      suppressSupplierName: null,
+      suppressCountryOfOrigin: null,
+      suppressHtsPrefix: null,
+    };
+    const noText = await tool(deps, ctx, "propose_actions").run({
+      actions: [{ ...base, ruleText: "   " }],
+    });
+    expect(noText.startsWith("ERROR:")).toBe(true);
+    expect(noText).toContain("ruleText");
+
+    const scopeOnly = await tool(deps, ctx, "propose_actions").run({
+      actions: [
+        {
+          ...base,
+          ruleText: "Ignore Acme.",
+          suppressSupplierName: "Acme",
+        },
+      ],
+    });
+    expect(scopeOnly.startsWith("ERROR:")).toBe(true);
+    expect(scopeOnly).toContain("suppressAlertTypes");
+    expect(createCalls).toBe(0);
+  });
 });

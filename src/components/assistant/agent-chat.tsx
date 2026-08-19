@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { ArrowUp, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
 
@@ -9,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownBlocks } from "@/components/assistant/markdown-blocks";
 import { ProposalCard } from "@/components/assistant/proposal-card";
+import { useAssistantRefresh } from "@/components/assistant/refresh-context";
 import { ToolChip } from "@/components/assistant/tool-chip";
 import { condensedToolLabel, type ToolCallView } from "@/lib/agent/display";
 import { parseEventLine } from "@/lib/agent/protocol";
@@ -83,7 +83,7 @@ export function AgentChat({
   turnInFlight: boolean;
   configured: boolean;
 }) {
-  const router = useRouter();
+  const refresh = useAssistantRefresh();
   const [live, setLive] = React.useState<LiveTurn>(IDLE);
   const [turnError, setTurnError] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState("");
@@ -229,10 +229,10 @@ export function AgentChat({
       } finally {
         abortRef.current = null;
         setLive((l) => ({ ...l, active: false }));
-        router.refresh();
+        refresh();
       }
     },
-    [conversationId, handleEvent, router],
+    [conversationId, handleEvent, refresh],
   );
 
   // Auto-send the draft stashed by the new-conversation composer. Removing

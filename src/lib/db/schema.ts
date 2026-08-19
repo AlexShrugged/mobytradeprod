@@ -862,6 +862,38 @@ export const integrationSources = pgTable(
   (t) => [uniqueIndex("integration_sources_org_kind_name_uq").on(t.orgId, t.kind, t.name)],
 );
 
+// ---------------------------------------------------------------- org rules
+//
+// Standing instructions an importer records, shown on the Data page. Tier 1:
+// a rule may carry a structured suppression spec (alert types + optional
+// supplier/COO/HTS-prefix scope, zod-validated in the routes) that filters
+// the auditor's desired alerts before reconcile — rule changes trigger an
+// org sweep so open alerts clear/reappear; resolved and dismissed rows are
+// never touched. Tier 2: every enabled rule's text injects into the entry
+// analyst's and assistant's prompts as standing instructions. Written ONLY
+// by the org-rules routes (manual Data-page CRUD and assistant-confirmed
+// save_org_rule proposals both execute through them). Rule kind (suppression
+// vs guidance) derives from spec presence on read — never stored. Suppression
+// narrows alerting, never duty math; no custom deterministic checks live here.
+
+export const orgRules = pgTable(
+  "org_rules",
+  {
+    id: id(),
+    orgId: orgId(),
+    /** One concise sentence — shown verbatim in the UI and in AI prompts. */
+    text: text("text").notNull(),
+    /** SuppressionSpec jsonb (src/lib/org-rules.ts); null = guidance-only. */
+    suppression: jsonb("suppression"),
+    enabled: boolean("enabled").notNull().default(true),
+    /** "manual" | "assistant" — varchar for growth (agent_proposals.kind precedent). */
+    source: varchar("source", { length: 16 }).notNull().default("manual"),
+    createdByName: text("created_by_name").notNull(),
+    ...timestamps,
+  },
+  (t) => [index("org_rules_org_enabled_idx").on(t.orgId, t.enabled)],
+);
+
 // ---------------------------------------------------------------- tariff reference
 //
 // Reference tables are global (no org_id): they mirror objective government
@@ -1666,6 +1698,11 @@ export const agentConversations = pgTable(
     lastTurnAt: timestamp("last_turn_at", { withTimezone: true }),
     /** AgentUsage of the most recent turn. */
     lastUsage: jsonb("last_usage"),
+    /** Pathname the conversation was opened from (embedded widget only;
+     *  null for /assistant threads). Client sends a validated pathname,
+     *  never free text — the human-readable description is derived
+     *  server-side and injected into the system prompt as context. */
+    contextPath: text("context_path"),
     ...timestamps,
   },
   (t) => [
@@ -2193,6 +2230,7 @@ export type PartClassification = typeof partClassifications.$inferSelect;
 export type QuoteSheet = typeof quoteSheets.$inferSelect;
 export type QuoteLine = typeof quoteLines.$inferSelect;
 export type IntegrationSource = typeof integrationSources.$inferSelect;
+export type OrgRule = typeof orgRules.$inferSelect;
 
 export type Invoice = typeof invoices.$inferSelect;
 export type InvoiceLineItem = typeof invoiceLineItems.$inferSelect;

@@ -7,7 +7,9 @@
 // Relative imports on purpose — this module runs under the tsx eval script.
 
 import { computeEntryAlerts, type DesiredAlert } from "../audit/rules";
+import { applySuppressions } from "../audit/suppression";
 import type { ReferenceData } from "../duty/types";
+import type { SuppressionSpec } from "../org-rules";
 import type { Finding, FindingCategory } from "./findings";
 import type { AnalystResult, EntryAnalyst, EntryBundle } from "./types";
 
@@ -60,9 +62,20 @@ export class StubEntryAnalyst implements EntryAnalyst {
     bundle: EntryBundle,
     ref: ReferenceData,
   ): Promise<AnalystResult> {
-    const findings = computeEntryAlerts(bundle.snapshot.auditable, ref).map(
-      alertToFinding,
+    // Mirror what production audits persist: suppressed alerts have no
+    // audit_alerts rows to echo.
+    const { kept } = applySuppressions(
+      computeEntryAlerts(bundle.snapshot.auditable, ref),
+      bundle.snapshot.auditable,
+      bundle.orgRules
+        .filter((r) => r.suppression != null)
+        .map((r) => ({
+          id: r.id,
+          text: r.text,
+          suppression: r.suppression as SuppressionSpec,
+        })),
     );
+    const findings = kept.map(alertToFinding);
     return {
       report: {
         summary:

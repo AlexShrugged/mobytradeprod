@@ -1,5 +1,6 @@
 import { AutoRefresh } from "@/components/data/auto-refresh";
 import { DocumentsTable } from "@/components/data/documents-table";
+import { OrgRulesCard } from "@/components/data/org-rules-card";
 import { PageHeader } from "@/components/page-header";
 import { SourceCards } from "@/components/data/source-cards";
 import { UploadDropzone } from "@/components/data/upload-dropzone";
@@ -13,13 +14,15 @@ import {
 } from "@/components/ui/card";
 import { getDocuments } from "@/lib/db/queries/documents";
 import { getIntegrationSources } from "@/lib/db/queries/integrations";
+import { getOrgRules } from "@/lib/db/queries/org-rules";
 
 export const dynamic = "force-dynamic";
 
 export default async function DataPage() {
-  const [documents, sources] = await Promise.all([
+  const [documents, sources, rules] = await Promise.all([
     getDocuments(),
     getIntegrationSources(),
+    getOrgRules(),
   ]);
   // The manual-upload source IS the dropzone; the cards show the automated
   // intake seams we support (SFTP / email inbox). Allowlisted, not
@@ -67,6 +70,17 @@ export default async function DataPage() {
           </p>
         </div>
         <DocumentsTable documents={documents} />
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Org rules</h2>
+          <p className="text-sm text-muted-foreground">
+            Standing instructions. Suppression rules hide matching variance
+            alerts; every rule guides the AI.
+          </p>
+        </div>
+        <OrgRulesCard rules={rules} />
       </div>
       </div>
     </UploadStatusProvider>

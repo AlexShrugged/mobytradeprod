@@ -7,7 +7,17 @@
 
 import type { AuditableSnapshot } from "../audit/auditor";
 import type { ReferenceData } from "../duty/types";
+import type { SuppressionSpec } from "../org-rules";
 import type { FindingsReport } from "./findings";
+
+/** An enabled org rule, as the analyst sees it: the standing-instruction
+ *  text plus the suppression spec (when present) so the prompt and the
+ *  deterministic-findings tool can attribute suppressed alerts. */
+export type BundleOrgRule = {
+  id: string;
+  text: string;
+  suppression: SuppressionSpec | null;
+};
 
 export type BundleDocument = {
   id: string;
@@ -106,6 +116,9 @@ export type EntryBundle = {
   /** The full AD/CVD order corpus (global, small) — indicative context for
    *  case-number/rate adjudication, never deterministic duty math. */
   adcvdOrders: BundleAdcvdOrder[];
+  /** Enabled org rules — standing instructions injected into the system
+   *  prompt; suppression specs also annotate get_deterministic_findings. */
+  orgRules: BundleOrgRule[];
 };
 
 /** One tool invocation, recorded for the eval transcript. */

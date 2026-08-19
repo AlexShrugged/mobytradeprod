@@ -16,6 +16,7 @@ import type {
   VarianceDetail,
   VarianceQueueRow,
 } from "../db/queries/variance";
+import type { SuppressionSpec } from "../org-rules";
 
 // ------------------------------------------------------------- proposals
 
@@ -43,7 +44,20 @@ export type AnalyzeEntryPayload = {
   reason: string;
 };
 
-export type AgentProposalPayload = AlertDecisionPayload | AnalyzeEntryPayload;
+/** An org rule awaiting human confirmation. Confirm POSTs /api/org-rules —
+ *  the same write path the Data page uses; the agent never writes rules. */
+export type SaveOrgRulePayload = {
+  kind: "save_org_rule";
+  /** The cleaned one-sentence rule. */
+  text: string;
+  /** Non-null makes it a suppression rule (matching variance alerts hide). */
+  suppression: SuppressionSpec | null;
+};
+
+export type AgentProposalPayload =
+  | AlertDecisionPayload
+  | AnalyzeEntryPayload
+  | SaveOrgRulePayload;
 
 export type AgentProposalStatus = "proposed" | "confirmed" | "dismissed";
 

@@ -12,6 +12,7 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { loadAuditableSnapshot } from "../audit/auditor";
 import * as schema from "../db/schema";
 import type { DbClient } from "../duty/reference";
+import { enabledRules, loadOrgRules, type SuppressionSpec } from "../org-rules";
 import type {
   BundleAdcvdOrder,
   BundleDocument,
@@ -255,5 +256,19 @@ export async function loadEntryBundle(
     source: o.source,
   }));
 
-  return { orgId, snapshot, documents, siblingEntries, partsBySku, adcvdOrders };
+  const orgRules = enabledRules(await loadOrgRules(db, orgId)).map((r) => ({
+    id: r.id,
+    text: r.text,
+    suppression: r.suppression as SuppressionSpec | null,
+  }));
+
+  return {
+    orgId,
+    snapshot,
+    documents,
+    siblingEntries,
+    partsBySku,
+    adcvdOrders,
+    orgRules,
+  };
 }

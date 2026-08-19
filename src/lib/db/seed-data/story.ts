@@ -396,6 +396,14 @@ export type SourceSeed = {
   lastRunAt: Date | null;
 };
 
+export type RuleSeed = {
+  text: string;
+  suppression: Record<string, unknown> | null;
+  enabled: boolean;
+  source: "manual" | "assistant";
+  createdByName: string;
+};
+
 export type DocLinkSeed = {
   entityType:
     | "entry"
@@ -488,6 +496,7 @@ export type Story = {
   refundClaims: RefundClaimSeed[];
   quoteSheets: QuoteSheetSeed[];
   integrationSources: SourceSeed[];
+  orgRules: RuleSeed[];
   documents: DocumentSeed[];
 };
 
@@ -1126,6 +1135,35 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     { kind: "email_inbox", name: "Document inbox", status: "active", config: { address: ORG_SEED.inboxAddress }, lastReceivedAt: at(-1, 16, 0), lastRunAt: null },
   ];
 
+  // ------------------------------------------------------------ org rules
+  //
+  // One enabled guidance rule (prompt-only, perturbs nothing) and one
+  // DISABLED suppression rule showing the full UI shape. The suppression
+  // rule must stay disabled: the seeded audit pass asserts specific entries
+  // audit clean and the analysis-defect entries stay rule-invisible — an
+  // active suppression would perturb both.
+  const orgRules: RuleSeed[] = [
+    {
+      text: "Always check type 03 entries for AD/CVD case number consistency.",
+      suppression: null,
+      enabled: true,
+      source: "manual",
+      createdByName: ORG_SEED.defaultActorName,
+    },
+    {
+      text: "Ignore invoice comparison skips for non-USD invoices.",
+      suppression: {
+        alertTypes: ["invoice_comparison_skipped"],
+        supplierName: null,
+        countryOfOrigin: null,
+        htsPrefix: null,
+      },
+      enabled: false,
+      source: "manual",
+      createdByName: ORG_SEED.defaultActorName,
+    },
+  ];
+
   // ------------------------------------------------------------ documents
   //
   // One per major artifact. uploadedAt is 1–2 days AFTER the business date
@@ -1544,6 +1582,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
     refundClaims,
     quoteSheets,
     integrationSources,
+    orgRules,
     documents,
   };
 }

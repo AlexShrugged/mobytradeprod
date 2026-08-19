@@ -13,10 +13,11 @@ import { and, asc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { db, schema } from "../db";
 import { getCurrentOrg, getCurrentActorName, getCurrentOrgId } from "../org";
 import type { AgentConversation, AgentProposal } from "../db/schema";
+import { enabledRules, loadOrgRules } from "../org-rules";
 import { DEADLINE_MS, LOCK_GRACE_MS, deriveTitle } from "./conversation";
 import { buildAgentToolDeps } from "./deps";
 import { toProposalView } from "./display";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, describePageContext } from "./prompt";
 import { buildAgentTools } from "./tools";
 import {
   appendUserMessage,
@@ -36,13 +37,19 @@ import type {
 export class TurnInFlightError extends Error {}
 export class ProposalStateError extends Error {}
 
-export async function createConversation(): Promise<AgentConversation> {
+export async function createConversation(opts?: {
+  contextPath?: string | null;
+}): Promise<AgentConversation> {
   const orgId = await getCurrentOrgId();
   // Outside any transaction (PGlite single-session rule).
   const actor = await getCurrentActorName();
   const [row] = await db
     .insert(schema.agentConversations)
-    .values({ orgId, createdByName: actor })
+    .values({
+      orgId,
+      createdByName: actor,
+      contextPath: opts?.contextPath ?? null,
+    })
     .returning();
   return row;
 }
@@ -236,10 +243,18 @@ export async function runTurn(opts: {
         );
     };
 
+    // Enabled org rules land in the system prompt as standing instructions.
+    // Loaded once per turn — byte-stable within it.
+    const orgRules = enabledRules(
+      await loadOrgRules(db, conversation.orgId),
+    ).map((r) => ({ text: r.text, isSuppression: r.suppression != null }));
+
     const result = await opts.agent.runTurn({
       system: buildSystemPrompt({
         orgName: org.name,
         todayIso: new Date().toISOString().slice(0, 10),
+        orgRules,
+        pageContext: describePageContext(conversation.contextPath),
       }),
       messages: wire,
       tools: tools as unknown as AgentTurnInput["tools"],

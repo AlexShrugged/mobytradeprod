@@ -72,6 +72,10 @@ async function main() {
 
   // ------------------------------------------------------------- wipe
   // Children first, in FK order. Every new table must be added here.
+  await db.delete(schema.agentProposals);
+  await db.delete(schema.agentMessages);
+  await db.delete(schema.agentConversations);
+  await db.delete(schema.orgRules);
   await db.delete(schema.analysisFindings);
   await db.delete(schema.analysisRuns);
   await db.delete(schema.adcvdOrders);
@@ -232,6 +236,20 @@ async function main() {
       })
       .returning({ id: schema.integrationSources.id });
     sourceIdByKind[s.kind] = row.id;
+  }
+
+  // ------------------------------------------------------------ org rules
+  if (story.orgRules.length > 0) {
+    await db.insert(schema.orgRules).values(
+      story.orgRules.map((r) => ({
+        orgId,
+        text: r.text,
+        suppression: r.suppression,
+        enabled: r.enabled,
+        source: r.source,
+        createdByName: r.createdByName,
+      })),
+    );
   }
 
   // ------------------------------------------------------------ documents
@@ -834,6 +852,7 @@ async function main() {
     documents: await count(schema.documents),
     document_links: await count(schema.documentLinks),
     integration_sources: await count(schema.integrationSources),
+    org_rules: await count(schema.orgRules),
     trade_measures: await count(schema.tradeMeasures),
     trade_measure_hts: await count(schema.tradeMeasureHts),
     hts_codes: await count(schema.htsCodes),

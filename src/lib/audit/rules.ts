@@ -65,7 +65,9 @@ export type AuditableLine = {
    *  it — loaded for readers (the entry analyst) that reason about
    *  descriptions. Optional so rule-test fixtures stay untouched. */
   description?: string | null;
-  /** Supplier name as declared on the line — same reader-only status. */
+  /** Supplier name as declared on the line. No rule reads it, but the
+   *  suppression evaluator (./suppression.ts) matches supplier-scoped org
+   *  rules against it. Optional so rule-test fixtures stay untouched. */
   supplierName?: string | null;
   charges: AuditableCharge[];
 };

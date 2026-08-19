@@ -46,10 +46,12 @@ export class StubAgent implements AgentRunner {
     const text = lastUserText(input.messages);
     let reply: string;
 
-    if (/propose/i.test(text)) {
+    if (/rule/i.test(text)) {
+      reply = await this.proposeRule(input);
+    } else if (/propose/i.test(text)) {
       reply = await this.propose(input);
     } else {
-      reply = `Stub assistant (no ANTHROPIC_API_KEY set). You said: "${text.slice(0, 200)}". Say "propose" to exercise the proposal card flow against the seeded variance queue.`;
+      reply = `Stub assistant (no ANTHROPIC_API_KEY set). You said: "${text.slice(0, 200)}". Say "propose" to exercise the proposal card flow against the seeded variance queue, or "rule" to stage a save_org_rule card.`;
     }
 
     input.sink.emit({ type: "text_delta", delta: reply });
@@ -111,10 +113,45 @@ export class StubAgent implements AgentRunner {
           note: "Stub proposal for local development.",
           entryId: null,
           reason: null,
+          ruleText: null,
+          suppressAlertTypes: null,
+          suppressSupplierName: null,
+          suppressCountryOfOrigin: null,
+          suppressHtsPrefix: null,
         },
       ],
     } as never)) as string;
     if (result.startsWith("ERROR:")) return `Stub: ${result}`;
     return `Proposed resolving [${first.label}](/variance/${first.id}) on entry ${first.entryNumber}. Confirm or decline the card below.`;
+  }
+
+  /** Canned save_org_rule through the REAL propose_actions tool, so the
+   *  rule card flow is developable keyless. */
+  private async proposeRule(input: AgentTurnInput): Promise<string> {
+    const proposeTool = input.tools.find(
+      (t) => t.name === "propose_actions",
+    ) as RunnableLike | undefined;
+    if (!proposeTool) return "Stub: tools unavailable.";
+
+    const result = (await proposeTool.run({
+      actions: [
+        {
+          kind: "save_org_rule",
+          alertId: null,
+          decision: null,
+          note: null,
+          entryId: null,
+          reason: null,
+          ruleText:
+            "Always check type 03 entries for AD/CVD case number consistency.",
+          suppressAlertTypes: null,
+          suppressSupplierName: null,
+          suppressCountryOfOrigin: null,
+          suppressHtsPrefix: null,
+        },
+      ],
+    } as never)) as string;
+    if (result.startsWith("ERROR:")) return `Stub: ${result}`;
+    return "Proposed a stub org rule. Confirm or decline the card below.";
   }
 }

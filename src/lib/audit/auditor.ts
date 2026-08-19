@@ -8,11 +8,14 @@
 import { and, eq, inArray, like, or } from "drizzle-orm";
 
 import * as schema from "../db/schema";
+import type { OrgRule } from "../db/schema";
 import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
 import { resolveSailInfo } from "../duty/sail";
 import type { ReferenceData } from "../duty/types";
 import { resolveWindow } from "../effective-dating";
+import { activeSuppressionRules, loadOrgRules } from "../org-rules";
 import { computeEntryAlerts, type AuditableEntry } from "./rules";
+import { applySuppressions } from "./suppression";
 
 /** Per-vendor as-of resolution of a part's sourcing windows: for each
  *  vendor, the window containing the entry date wins, falling back to the
@@ -242,12 +245,24 @@ export async function auditEntry(
   // Sweeps re-auditing many entries pass one preloaded ReferenceData so the
   // reference tables aren't re-read per entry.
   preloadedRef?: ReferenceData,
+  // Same shape for org rules: sweeps preload once per org.
+  preloadedRules?: OrgRule[],
 ): Promise<void> {
   const snapshot = await loadAuditableSnapshot(db, orgId, entryId);
   if (!snapshot) return;
 
   const ref = preloadedRef ?? (await loadReferenceDataForOrg(db, orgId));
-  const desired = computeEntryAlerts(snapshot.auditable, ref);
+  const computed = computeEntryAlerts(snapshot.auditable, ref);
+  // Org suppression rules filter the desired set BEFORE reconcile, so
+  // suppressed alerts behave like disappeared conditions: open rows delete
+  // as stale, resolved/dismissed rows are never touched, and disabling a
+  // rule re-inserts on the next audit. Duty math is untouched.
+  const orgRules = preloadedRules ?? (await loadOrgRules(db, orgId));
+  const { kept: desired } = applySuppressions(
+    computed,
+    snapshot.auditable,
+    activeSuppressionRules(orgRules),
+  );
 
   const existing = await db.query.auditAlerts.findMany({
     where: eq(schema.auditAlerts.entryId, entryId),
@@ -327,11 +342,12 @@ export async function reauditEntriesForPart(
       ),
     );
 
+  const orgRules = await loadOrgRules(db, orgId);
   let cleared = 0;
   let created = 0;
   for (const { entryId } of rows) {
     const before = await openKeys(db, entryId);
-    await auditEntry(db, orgId, entryId);
+    await auditEntry(db, orgId, entryId, undefined, orgRules);
     const after = await openKeys(db, entryId);
     for (const key of before) if (!after.has(key)) cleared += 1;
     for (const key of after) if (!before.has(key)) created += 1;
@@ -351,6 +367,7 @@ export async function sweepAudits(
   orgId: string,
 ): Promise<ReauditSummary> {
   const ref = await loadReferenceDataForOrg(db, orgId);
+  const orgRules = await loadOrgRules(db, orgId);
   const rows = await db.query.entries.findMany({
     where: eq(schema.entries.orgId, orgId),
     columns: { id: true },
@@ -360,7 +377,7 @@ export async function sweepAudits(
   let created = 0;
   for (const { id } of rows) {
     const before = await openKeys(db, id);
-    await auditEntry(db, orgId, id, ref);
+    await auditEntry(db, orgId, id, ref, orgRules);
     const after = await openKeys(db, id);
     for (const key of before) if (!after.has(key)) cleared += 1;
     for (const key of after) if (!before.has(key)) created += 1;
@@ -489,9 +506,10 @@ export async function sweepAuditsForEntries(
   let created = 0;
   for (const [orgId, entryIds] of byOrg) {
     const ref = await loadReferenceDataForOrg(db, orgId);
+    const orgRules = await loadOrgRules(db, orgId);
     for (const entryId of entryIds) {
       const before = await openKeys(db, entryId);
-      await auditEntry(db, orgId, entryId, ref);
+      await auditEntry(db, orgId, entryId, ref, orgRules);
       const after = await openKeys(db, entryId);
       for (const key of before) if (!after.has(key)) cleared += 1;
       for (const key of after) if (!before.has(key)) created += 1;

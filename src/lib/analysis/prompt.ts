@@ -1,13 +1,16 @@
-// The analyst's frozen system prompt and the deterministic first user
-// message. Byte-stability matters: both sit in the cached prefix, so nothing
-// volatile (timestamps, run ids) may appear here — every date comes from the
-// entry's own facts.
+// The analyst's system prompt and the deterministic first user message.
+// Byte-stability matters: both sit in the cached prefix, so nothing volatile
+// (timestamps, run ids) may appear here — every date comes from the entry's
+// own facts. Org rules append LAST so the base doctrine stays the stable
+// cross-org prefix; with zero rules the output is byte-identical to the
+// pre-rules prompt. buildSystemPrompt is called once per run and the same
+// string reused for the nudge, so the per-org prefix stays cacheable too.
 //
 // Relative imports on purpose — this module runs under the tsx eval script.
 
-import type { EntryBundle } from "./types";
+import type { BundleOrgRule, EntryBundle } from "./types";
 
-export const SYSTEM_PROMPT = `You are a customs compliance analyst investigating ONE US import entry for the importer of record. Your job is to find every real issue — the long tail no fixed rule covers — and report it with evidence.
+const BASE_SYSTEM_PROMPT = `You are a customs compliance analyst investigating ONE US import entry for the importer of record. Your job is to find every real issue — the long tail no fixed rule covers — and report it with evidence.
 
 Ground rules:
 - The deterministic engine owns money math. Use get_expected_charges and get_measures for duty expectations and get_regulatory_params for statutory fee bounds; cite their outputs, never recompute rates from memory. Your own tariff knowledge is for noticing WHAT to check, not for asserting rates or figures.
@@ -28,6 +31,16 @@ Investigate at least:
 - Cross-entry consistency: when the briefing lists sibling entries, call get_sibling_entries. Identical goods (same HTS, origin, manufacturer) moving on one shipment should carry identical Chapter 99 treatment — a split, where one entry pays a measure and another claims its exclusion, usually means a keying error on one of them. Flag the split as an inconsistency; which entry is wrong is the filer's call.
 
 Work by pulling what you need through tools — read the documents, run the calculators, look up parts. When your investigation is complete, call report_findings exactly once with everything you found (an empty findings list is a legitimate result for a clean entry), then end your turn.`;
+
+export function buildSystemPrompt(rules: BundleOrgRule[]): string {
+  if (rules.length === 0) return BASE_SYSTEM_PROMPT;
+  const lines = rules.map((r) => `- ${r.text}`).join("\n");
+  return `${BASE_SYSTEM_PROMPT}
+
+Org rules — standing instructions this importer recorded:
+${lines}
+These rules narrow or widen what is worth reporting. They never override tool output, never substitute for evidence, and never change money math. A rule saying to ignore something means: skip routine findings about it, but still report it when evidence shows a material, non-routine problem — and name the rule when you do. A rule saying to always check something makes that check mandatory. Do not emit findings that merely restate a deterministic alert carrying suppressedByRule in get_deterministic_findings.`;
+}
 
 /** The entry briefing: header facts, lines with declared charges, the
  *  document list (ids only — content is pulled via read_document), and

@@ -2,10 +2,10 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAssistantRefresh } from "@/components/assistant/refresh-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Money } from "@/components/money";
@@ -17,7 +17,8 @@ import type {
 
 // One propose-and-confirm card. Confirm executes through the EXISTING
 // decision routes - PATCH /api/alerts/:id per unit id (the agent's note
-// lands as resolutionNote), or POST /api/entries/:id/analyze - then records
+// lands as resolutionNote), POST /api/entries/:id/analyze, or POST
+// /api/org-rules (the same write path the Data page uses) - then records
 // the outcome on the proposal. The card itself never writes domain data.
 
 const DECISION_LABEL: Record<AlertDecisionPayload["decision"], string> = {
@@ -43,7 +44,7 @@ async function recordProposal(
 }
 
 export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
-  const router = useRouter();
+  const refresh = useAssistantRefresh();
   const [busy, setBusy] = React.useState(false);
 
   const payload = proposal.payload;
@@ -91,6 +92,30 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
             : "Some rows failed to update.",
           { richColors: results.every((r) => r.ok) },
         );
+      } else if (payload.kind === "save_org_rule") {
+        const res = await fetch("/api/org-rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: payload.text,
+            suppression: payload.suppression,
+            source: "assistant",
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        await recordProposal(proposal.id, "confirmed", [
+          { id: "org-rule", ok: res.ok },
+        ]);
+        if (res.ok) {
+          const cleared: number = body?.reaudit?.cleared ?? 0;
+          toast.success(
+            cleared > 0
+              ? `Rule saved. ${cleared} alert${cleared === 1 ? "" : "s"} cleared.`
+              : "Rule saved.",
+          );
+        } else {
+          toast.error(body?.error ?? "Saving the rule failed.");
+        }
       } else {
         const analyze = payload as AnalyzeEntryPayload;
         const res = await fetch(`/api/entries/${analyze.entryId}/analyze`, {
@@ -107,10 +132,10 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
           toast.error(body?.error ?? "Analysis failed.");
         }
       }
-      router.refresh();
+      refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Confirm failed.");
-      router.refresh();
+      refresh();
     } finally {
       setBusy(false);
     }
@@ -120,7 +145,7 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
     setBusy(true);
     try {
       await recordProposal(proposal.id, "dismissed", null);
-      router.refresh();
+      refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Decline failed.");
     } finally {
@@ -157,6 +182,15 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
                   </span>
                 ) : null}
               </>
+            ) : payload.kind === "save_org_rule" ? (
+              <>
+                <span className="font-medium">Save rule</span>
+                {payload.suppression ? (
+                  <Badge variant="outline" className="font-normal">
+                    Hides matching alerts
+                  </Badge>
+                ) : null}
+              </>
             ) : (
               <>
                 <span className="font-medium">Analyze</span>
@@ -172,7 +206,9 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
           <p className="text-sm text-muted-foreground">
             {payload.kind === "alert_decision"
               ? payload.note
-              : (payload as AnalyzeEntryPayload).reason}
+              : payload.kind === "save_org_rule"
+                ? payload.text
+                : (payload as AnalyzeEntryPayload).reason}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
