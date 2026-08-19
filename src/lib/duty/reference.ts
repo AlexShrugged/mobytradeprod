@@ -103,6 +103,12 @@ export function buildReferenceData(
   }
 
   const exclusionsByMeasure = new Map<string, string[]>();
+  // Cross-program carve-outs per measure, from exemption rows that name a
+  // trigger program (see hts_codes.carveout_trigger_program).
+  const carveoutsByMeasure = new Map<
+    string,
+    { triggerProgram: string; exemptionCode: string; exemptionDigits: string }[]
+  >();
   // Entry-date windows in which each exemption Ch99 digits string is live —
   // isExemptionActive resolves against these so a declared exclusion code
   // is only "always allowed" on entries its measure window actually covers.
@@ -115,6 +121,15 @@ export function buildReferenceData(
     const list = exclusionsByMeasure.get(h.tradeMeasureId) ?? [];
     list.push(h.codeDigits);
     exclusionsByMeasure.set(h.tradeMeasureId, list);
+    if (h.carveoutTriggerProgram) {
+      const carveouts = carveoutsByMeasure.get(h.tradeMeasureId) ?? [];
+      carveouts.push({
+        triggerProgram: h.carveoutTriggerProgram,
+        exemptionCode: h.code,
+        exemptionDigits: h.codeDigits,
+      });
+      carveoutsByMeasure.set(h.tradeMeasureId, carveouts);
+    }
     const m = measureById.get(h.tradeMeasureId);
     if (m) {
       const windows = exemptionsByDigits.get(h.codeDigits) ?? [];
@@ -152,6 +167,7 @@ export function buildReferenceData(
       rateType: h.rateType,
       rateText: h.col1General,
       exclusionDigits: exclusionsByMeasure.get(m.id) ?? [],
+      carveouts: carveoutsByMeasure.get(m.id) ?? [],
       prefixes: prefixesByMeasure.get(m.id) ?? [],
     });
   }

@@ -810,6 +810,9 @@ export type FamilyCh99Row = {
   rateType: schema.HtsRateTypeValue;
   exemption: boolean;
   tradeMeasureId: string | null;
+  /** Cross-program carve-out trigger — copied with the exemption row so
+   *  every family liability measure carries the displacement. */
+  carveoutTriggerProgram?: string | null;
 };
 
 export type ExemptionLinkInsert = {
@@ -818,6 +821,7 @@ export type ExemptionLinkInsert = {
   description: string;
   rateType: schema.HtsRateTypeValue;
   tradeMeasureId: string;
+  carveoutTriggerProgram: string | null;
 };
 
 /** Pure planning, test-pinned: given every Chapter 99 row of ONE 6-digit
@@ -851,6 +855,7 @@ export function planFamilyExemptionLinks(
         description: ex.description,
         rateType: ex.rateType,
         tradeMeasureId,
+        carveoutTriggerProgram: ex.carveoutTriggerProgram ?? null,
       });
     }
   }
@@ -892,6 +897,7 @@ export async function syncFamilyExemptionLinks(
         rate: "0.000000",
         tradeMeasureId: i.tradeMeasureId,
         exemption: true,
+        carveoutTriggerProgram: i.carveoutTriggerProgram,
       })),
     )
     .onConflictDoNothing();

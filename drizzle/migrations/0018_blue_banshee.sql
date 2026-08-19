@@ -1,0 +1,1 @@
+ALTER TABLE "hts_codes" ADD COLUMN "carveout_trigger_program" text;

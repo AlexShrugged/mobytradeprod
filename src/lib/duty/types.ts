@@ -59,6 +59,17 @@ export type MeasureRef = {
   // Digits of exemption Chapter 99 rows under this measure; a declared
   // charge on any of these satisfies the measure.
   exclusionDigits: string[];
+  // Cross-program statutory carve-outs: when a measure of triggerProgram
+  // survives on the line, THIS measure is displaced — the expected filing
+  // becomes the $0 exemption heading, not the liability rate (e.g. Section
+  // 122's 9903.03.06 displaces its 10% surcharge on Section 232 metals
+  // lines). Absent/empty = no carve-outs; the exemption heading also
+  // appears in exclusionDigits, so a declared claim still satisfies.
+  carveouts?: {
+    triggerProgram: string;
+    exemptionCode: string;
+    exemptionDigits: string;
+  }[];
   prefixes: string[];
   // HTS digit prefixes carved out of the measure entirely (suppresses
   // applicability BEFORE stacking). Only scenario-injected proposed
@@ -100,7 +111,16 @@ export type ReferenceData = {
 };
 
 export type SuppressedMeasure = MeasureRef & {
-  suppressedBy: { winnerAuthority: MeasureAuthorityValue; reason: string };
+  suppressedBy: {
+    winnerAuthority: MeasureAuthorityValue;
+    reason: string;
+    // Set when the suppression is a cross-program carve-out displacement:
+    // the corrected filing is a SWAP (add the trigger measure, back the
+    // displaced charge out into this $0 exemption heading) — and a declared
+    // exclusion of the TRIGGER program's family negates the displacement
+    // (the alternative bundle: no trigger charge, liability stays owed).
+    carveout?: { triggerProgram: string; expectedExemptionCode: string };
+  };
 };
 
 /**

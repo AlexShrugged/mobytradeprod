@@ -185,6 +185,7 @@ async function main() {
         rate: c.rate.toFixed(6),
         tradeMeasureId: measure.id,
         exemption: c.exemption,
+        carveoutTriggerProgram: c.carveoutTriggerProgram ?? null,
       })),
     );
 

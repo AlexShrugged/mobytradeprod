@@ -158,6 +158,59 @@ describe("computeExpectedCharges over seed reference data", () => {
   });
 });
 
+describe("cross-program carve-out displacement", () => {
+  // Inside the Section 122 window (cutoff day(-10) = 2026-08-01), sailed
+  // after the cutoff so the sail gate resolves exactly.
+  const IN_WINDOW = {
+    entryDate: "2026-08-06",
+    sail: { earliestSail: "2026-08-02", latestSail: "2026-08-02", estimated: false },
+  };
+
+  it("displaces Section 122 into 9903.03.06 when the 232 program covers the line", () => {
+    const result = resolveExpectedMeasures(
+      { htsDigits: "8714913000", countryOfOrigin: "TW", ...IN_WINDOW },
+      ref,
+    );
+    expect(result.applicable.map((m) => m.authority)).toEqual([
+      "section_232_aluminum",
+    ]);
+    const s122 = result.suppressed.find((s) => s.authority === "section_122")!;
+    expect(s122.suppressedBy.winnerAuthority).toBe("section_232_aluminum");
+    expect(s122.suppressedBy.reason).toContain("9903.03.06");
+    expect(s122.suppressedBy.carveout).toEqual({
+      triggerProgram: "section-232-aluminum",
+      expectedExemptionCode: "9903.03.06",
+    });
+    expect(result.sailBasis).toBe("exact");
+  });
+
+  it("leaves Section 122 applicable on lines the trigger program does not cover", () => {
+    const result = resolveExpectedMeasures(
+      { htsDigits: "8501314000", countryOfOrigin: "CN", ...IN_WINDOW },
+      ref,
+    );
+    const codes = result.applicable.map((m) => m.ch99Code);
+    expect(codes).toContain("9903.03.01");
+    expect(
+      result.suppressed.some((s) => s.suppressedBy.carveout !== undefined),
+    ).toBe(false);
+  });
+
+  it("expected charges exclude the displaced measure's amount", () => {
+    const result = computeExpectedCharges(
+      {
+        htsDigits: "8714913000",
+        countryOfOrigin: "TW",
+        enteredValueCents: 1_000_000,
+        ...IN_WINDOW,
+      },
+      ref,
+    );
+    expect(result.measures.map((m) => m.ch99Code)).toEqual(["9903.85.08"]);
+    expect(result.measures[0].amountCents).toBe(250_000);
+  });
+});
+
 describe("entry-date-aware base-rate windows", () => {
   // Two change-tiling windows for the CN motor code: 4% through 2026-06-30
   // (closed), 6% from 2026-07-01 (current). htsByDigits carries the CURRENT

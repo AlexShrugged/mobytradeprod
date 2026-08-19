@@ -472,6 +472,23 @@ export function computeEntryAlerts(
         const suppressedMatch = expected.suppressed.find(
           (s) => s.ch99Digits === c.htsCodeDigits,
         );
+        // A carve-out displacement is claim-aware: the calculator displaces
+        // on SCOPE (the trigger program covers the line), but a declared
+        // exclusion of the trigger program's own family asserts the trigger
+        // does not actually charge — and then this measure's liability
+        // correctly stands. The two filings are alternative bundles; only a
+        // mixed bundle (trigger charged, or nothing declared for the
+        // trigger) makes this charge a swap leg worth flagging.
+        const carveout = suppressedMatch?.suppressedBy.carveout;
+        if (carveout) {
+          const trigger = expected.measures.find(
+            (m) => m.program === carveout.triggerProgram,
+          );
+          const negated = trigger?.exclusionDigits.some((d) =>
+            declaredDigits.has(d),
+          );
+          if (negated) continue;
+        }
         const name =
           suppressedMatch?.name ?? refMeasure?.name ?? c.htsCode ?? "measure";
         alerts.push({
@@ -490,6 +507,9 @@ export function computeEntryAlerts(
             sku: line.sku,
             ...(suppressedMatch
               ? { stacking_reason: suppressedMatch.suppressedBy.reason }
+              : {}),
+            ...(carveout
+              ? { expected_exemption: carveout.expectedExemptionCode }
               : {}),
           },
           lineItemId: line.id,

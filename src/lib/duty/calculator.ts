@@ -262,9 +262,51 @@ export function resolveExpectedMeasures(
         : "exact";
 
   const stacked = applyStacking(survivors, ref.stackingRules, input.entryDate);
+
+  // Cross-program statutory carve-outs: a measure whose exemption heading
+  // names a trigger program is displaced when a measure of that program
+  // survives on the line — the expected filing becomes the $0 exemption
+  // heading, not the liability rate (Section 122's 9903.03.06 vs the 232
+  // metals programs). Scope-based on purpose: expectations bias toward the
+  // costlier correct bundle; the AUDIT is where a declared trigger-family
+  // exclusion claim negates the displacement (see rules.ts, carveout).
+  // Fixpoint loop: each displacement shrinks the list, so it terminates,
+  // and a displaced measure never acts as a trigger afterward.
+  const applicable = stacked.applicable;
+  const carveoutSuppressed: SuppressedMeasure[] = [];
+  for (let displaced = true; displaced; ) {
+    displaced = false;
+    for (let i = 0; i < applicable.length; i++) {
+      const m = applicable[i];
+      const carveout = m.carveouts?.find((c) =>
+        applicable.some(
+          (o) => o !== m && o.program !== null && o.program === c.triggerProgram,
+        ),
+      );
+      if (!carveout) continue;
+      const winner = applicable.find(
+        (o) => o !== m && o.program === carveout.triggerProgram,
+      )!;
+      applicable.splice(i, 1);
+      carveoutSuppressed.push({
+        ...m,
+        suppressedBy: {
+          winnerAuthority: winner.authority,
+          reason: `${winner.name} (${winner.ch99Code}) covers this line, so the statutory carve-out applies in its place — the expected filing is ${carveout.exemptionCode} at $0, not ${m.ch99Code}.`,
+          carveout: {
+            triggerProgram: carveout.triggerProgram,
+            expectedExemptionCode: carveout.exemptionCode,
+          },
+        },
+      });
+      displaced = true;
+      break;
+    }
+  }
+
   return {
-    applicable: stacked.applicable,
-    suppressed: [...programSuppressed, ...stacked.suppressed],
+    applicable,
+    suppressed: [...programSuppressed, ...stacked.suppressed, ...carveoutSuppressed],
     sailBasis,
   };
 }

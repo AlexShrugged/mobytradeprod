@@ -37,6 +37,7 @@ function htsRow(over: Partial<HtsCodeRow> & Pick<HtsCodeRow, "code" | "codeDigit
     validTo: null,
     tradeMeasureId: null,
     exemption: false,
+    carveoutTriggerProgram: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over,

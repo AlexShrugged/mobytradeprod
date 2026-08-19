@@ -86,7 +86,7 @@ export function buildAnalystTools(
   const getExpectedCharges = betaZodTool({
     name: "get_expected_charges",
     description:
-      "Compute the deterministic expected charges for one entry line (base duty + applicable Chapter 99 measures with stacking, date- and sail-resolved). This is the source of truth for duty math — cite it, never recompute rates yourself. MPF/HMF are never included (they are ingested facts; check them against get_regulatory_params).",
+      "Compute the deterministic expected charges for one entry line (base duty + applicable Chapter 99 measures with stacking, date- and sail-resolved). This is the source of truth for duty math — cite it, never recompute rates yourself. MPF/HMF are never included (they are ingested facts; check them against get_regulatory_params). A suppressed entry with a carveout is a displaced swap leg: the expected filing is its $0 exemption heading, so corrections net BOTH legs.",
     inputSchema: z.object({ lineNumber: z.number() }),
     run: (input) => {
       const line = auditable.lines.find(

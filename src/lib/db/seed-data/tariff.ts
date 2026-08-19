@@ -97,6 +97,9 @@ export type MeasureSeed = {
     description: string;
     rate: number;
     exemption: boolean;
+    // Cross-program carve-out (exemption rows only): a measure of this
+    // program on the line displaces the parent measure into this heading.
+    carveoutTriggerProgram?: string;
   }[];
   prefixes: string[];
 };
@@ -144,6 +147,19 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
         `entered for consumption on or before ${longDate(graceDeadline)})`,
       rate: 0,
       exemption: true,
+    },
+    // Statutory cross-program carve-out: goods the Section 232 aluminum
+    // action already reaches claim this heading instead of paying the 10% —
+    // the surcharge and the 232 duty never both charge one line. Mirrors
+    // the real 9903.03.06 "IRN/STL/ALUM DERIV" exclusion.
+    {
+      code: "9903.03.06",
+      description:
+        "Articles exempt from the Section 122 surcharge (statutory " +
+        "carve-out: derivative articles subject to Section 232 duties)",
+      rate: 0,
+      exemption: true,
+      carveoutTriggerProgram: "section-232-aluminum",
     },
   ];
 
@@ -252,6 +268,17 @@ export function buildMeasureSeed(day: DayFn): MeasureSeed[] {
             "Derivative aluminum articles subject to Section 232 (25%)",
           rate: 0.25,
           exemption: false,
+        },
+        // The no-content exception — the family's declared-exclusion shape
+        // (mirrors 9903.82.01 in the 2026 metals program): a $0 claim here
+        // satisfies the measure and negates cross-program carve-outs that
+        // trigger on this program.
+        {
+          code: "9903.85.09",
+          description:
+            "Derivative articles with no aluminum content (exempt)",
+          rate: 0,
+          exemption: true,
         },
       ],
       prefixes: ["871491"],
@@ -421,6 +448,13 @@ export function buildSeedReferenceData(day: DayFn): ReferenceData {
     const exclusionDigits = seed.ch99
       .filter((c) => c.exemption)
       .map((c) => normalizeHts(c.code));
+    const carveouts = seed.ch99
+      .filter((c) => c.exemption && c.carveoutTriggerProgram)
+      .map((c) => ({
+        triggerProgram: c.carveoutTriggerProgram!,
+        exemptionCode: c.code,
+        exemptionDigits: normalizeHts(c.code),
+      }));
 
     for (const c of seed.ch99) {
       const codeDigits = normalizeHts(c.code);
@@ -451,6 +485,7 @@ export function buildSeedReferenceData(day: DayFn): ReferenceData {
         ch99Digits: codeDigits,
         rate: c.rate,
         exclusionDigits,
+        carveouts,
         prefixes: seed.prefixes,
       });
     }

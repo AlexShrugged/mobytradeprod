@@ -209,6 +209,90 @@ describe("rule 2: unexpected measure", () => {
     expect(alerts[0].details?.stacking_reason).toContain("Section 232");
   });
 
+  // Section 122 vs the 232 program on one line: the headings are paired
+  // bundles. 82-style liability (9903.85.08) pairs with the 122 carve-out
+  // (9903.03.06 at $0); the no-content claim (9903.85.09 at $0) pairs with
+  // 122 at 10%. Only a MIXED bundle is a finding.
+  describe("cross-program carve-out (Section 122 vs 232)", () => {
+    // Inside the 122 window, sail resolved exactly (no assumption alert).
+    const IN_WINDOW = {
+      entryDate: "2026-08-06",
+      sail: { earliestSail: "2026-08-02", latestSail: "2026-08-02", estimated: false },
+    };
+    const frameLine = (charges: AuditableCharge[]) =>
+      cleanMotorLine({
+        sku: "EB-FRM-MTB",
+        htsCode: "8714.91.3000",
+        htsCodeDigits: "8714913000",
+        countryOfOrigin: "TW",
+        partHtsCode: "8714.91.3000",
+        charges,
+      });
+
+    it("flags the mixed bundle: 232 charged AND 122 paid at 10% — the swap leg", () => {
+      const line = frameLine([
+        charge("base_duty", "8714.91.3000", 0.039, "390.00"),
+        charge("additional_duty", "9903.85.08", 0.25, "2500.00"),
+        charge("additional_duty", "9903.03.01", 0.1, "1000.00"),
+      ]);
+      const alerts = computeEntryAlerts(
+        entry({ ...IN_WINDOW, lines: [line], totalDuty: "3890.00" }),
+        ref,
+      );
+      expect(keys(alerts)).toEqual(["unexpected_measure:line1:99030301"]);
+      expect(alerts[0].severity).toBe("warning");
+      expect(alerts[0].message).toContain("9903.03.06");
+      expect(alerts[0].details?.expected_exemption).toBe("9903.03.06");
+    });
+
+    it("accepts the alternative bundle: no-content claim + 122 at 10%", () => {
+      // The declared 9903.85.09 exclusion asserts the 232 program does not
+      // actually charge — then the 10% surcharge correctly stands.
+      const line = frameLine([
+        charge("base_duty", "8714.91.3000", 0.039, "390.00"),
+        charge("additional_duty", "9903.85.09", 0, "0.00"),
+        charge("additional_duty", "9903.03.01", 0.1, "1000.00"),
+      ]);
+      const alerts = computeEntryAlerts(
+        entry({ ...IN_WINDOW, lines: [line], totalDuty: "1390.00" }),
+        ref,
+      );
+      expect(alerts).toEqual([]);
+    });
+
+    it("accepts the correct bundle: 232 charged + 122 carve-out claimed at $0", () => {
+      const line = frameLine([
+        charge("base_duty", "8714.91.3000", 0.039, "390.00"),
+        charge("additional_duty", "9903.85.08", 0.25, "2500.00"),
+        charge("additional_duty", "9903.03.06", 0, "0.00"),
+      ]);
+      const alerts = computeEntryAlerts(
+        entry({ ...IN_WINDOW, lines: [line], totalDuty: "2890.00" }),
+        ref,
+      );
+      expect(alerts).toEqual([]);
+    });
+
+    it("emits both legs when 232 is missing outright and 122 was paid", () => {
+      const line = frameLine([
+        charge("base_duty", "8714.91.3000", 0.039, "390.00"),
+        charge("additional_duty", "9903.03.01", 0.1, "1000.00"),
+      ]);
+      const alerts = computeEntryAlerts(
+        entry({ ...IN_WINDOW, lines: [line], totalDuty: "1390.00" }),
+        ref,
+      );
+      expect(keys(alerts)).toEqual([
+        "missing_measure:line1:99038508",
+        "unexpected_measure:line1:99030301",
+      ]);
+      // The two legs net: +$2,500 owed on the missing 232, −$1,000 back on
+      // the displaced surcharge.
+      expect(alerts[0].details?.expected_amount).toBe(2500);
+      expect(alerts[1].details?.actual_amount).toBe(1000);
+    });
+  });
+
   it("treats an unknown Chapter 99 code as an info-level coverage gap", () => {
     const line = cleanMotorLine();
     line.charges.push(charge("additional_duty", "9903.77.77", 0.05, "500.00"));

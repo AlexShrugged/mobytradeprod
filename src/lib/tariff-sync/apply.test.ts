@@ -183,6 +183,7 @@ describe("planFamilyExemptionLinks", () => {
         description: "No aluminum or steel content",
         rateType: "ad_valorem",
         tradeMeasureId: "m-8202",
+        carveoutTriggerProgram: null,
       },
       {
         code: "9903.82.01",
@@ -190,6 +191,37 @@ describe("planFamilyExemptionLinks", () => {
         description: "No aluminum or steel content",
         rateType: "ad_valorem",
         tradeMeasureId: "m-8204",
+        carveoutTriggerProgram: null,
+      },
+    ]);
+  });
+
+  it("carries a carve-out trigger onto every family copy", () => {
+    const carveoutExemption = familyRow({
+      id: "01a00000-0000-7000-8000-000000000006",
+      code: "9903.03.06",
+      codeDigits: "99030306",
+      description: "S122 excl: iron/steel/aluminum derivatives",
+      tradeMeasureId: "m-122-a",
+      carveoutTriggerProgram: "section-232-2026-metals",
+    });
+    const liability122 = familyRow({
+      id: "01a00000-0000-7000-8000-000000000007",
+      code: "9903.03.01",
+      codeDigits: "99030301",
+      description: "Section 122 import surcharge (10%)",
+      exemption: false,
+      tradeMeasureId: "m-122-b",
+    });
+    const plan = planFamilyExemptionLinks([carveoutExemption, liability122]);
+    expect(plan).toEqual([
+      {
+        code: "9903.03.06",
+        codeDigits: "99030306",
+        description: "S122 excl: iron/steel/aluminum derivatives",
+        rateType: "ad_valorem",
+        tradeMeasureId: "m-122-b",
+        carveoutTriggerProgram: "section-232-2026-metals",
       },
     ]);
   });

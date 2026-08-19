@@ -171,7 +171,18 @@ Stop only stops rendering — the turn finishes via `after()` and
   measure per program applies to a line (country-specific headings beat the worldwide
   baseline, then costlier rate; losers surface as suppressed). Distinct programs stack
   even under one statute (CBP filed 301 + IEEPA fentanyl + IEEPA reciprocal on ONE
-  line), so `authority` is a display bucket, never the exclusivity key. Null program =
+  line), so `authority` is a display bucket, never the exclusivity key. The one
+  cross-program interaction is the statutory carve-out
+  (`hts_codes.carveout_trigger_program` on an exemption row): when a measure of the
+  trigger program survives on the line, the parent measure is displaced into the $0
+  exemption heading (Section 122's 9903.03.06 vs the 232 metals program — paired
+  bundles, confirmed from ASC 7501s 2026-08-19). The calculator displaces on SCOPE
+  (suppressed with `suppressedBy.carveout`, so corrections net both swap legs); the
+  AUDIT is claim-aware — a declared exclusion of the trigger's own family (9903.82.01)
+  negates the displacement, so the alternative bundle (no-content claim + 122 at 10%)
+  audits clean and contesting the claim itself stays the AI analyst's job.
+  `scripts/apply-section122-carveout.ts` stages the trigger on pre-migration prod data
+  (dry-run default). Null program =
   lineage unknown: never deduped — sync-created measures stay null until a human
   assigns the program.
 - **MPF/HMF are ingested facts** on entries — never computed (CBP per-entry mins/caps).

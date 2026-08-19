@@ -997,6 +997,12 @@ export const htsCodes = pgTable(
     // always lives on its hts_codes row, never on trade_measures.
     tradeMeasureId: uuid("trade_measure_id").references(() => tradeMeasures.id),
     exemption: boolean("exemption").notNull().default(false),
+    // Cross-program statutory carve-out (exemption rows only): when a
+    // measure of this program applies to a line, the parent measure is
+    // displaced and THIS exemption heading is the expected filing (e.g.
+    // Section 122's 9903.03.06 displaces the 10% surcharge on lines the
+    // Section 232 metals program covers). Null = ordinary exemption.
+    carveoutTriggerProgram: text("carveout_trigger_program"),
     ...timestamps,
   },
   (t) => [
