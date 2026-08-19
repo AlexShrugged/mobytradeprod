@@ -1,7 +1,7 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import { auditEntry } from "@/lib/audit/auditor";
-import { db, schema } from "@/lib/db";
+import { db, schema, type DbClient } from "@/lib/db";
 import { normalizeHts } from "@/lib/duty/calculator";
 import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
@@ -648,6 +648,7 @@ export async function linkExtraction(
             created: createdParts.has(line.partId),
           });
         }
+        await adoptEntryLinesForParts(tx, orgId, result.createdPartIds);
         break;
       }
 
@@ -807,4 +808,73 @@ export async function linkExtraction(
         .onConflictDoNothing();
     }
   });
+}
+
+// The SKU→part match above runs at document-processing time only, so a part
+// that arrives AFTER its entries (catalog import, manual New SKU, quote-
+// created draft) never picks up the lines already on the books — they sit
+// with part_id null and the Parts page counts the SKU inactive. This is the
+// same linkage run from the other side, called by every part-creation path
+// so the entry graph ends up identical whichever side arrived first. Lives
+// here because this module is the entry graph's single writer. Touched
+// entries are re-audited in the same transaction — the catalog HTS/COO
+// comparisons only see lines through this link.
+export async function adoptEntryLinesForParts(
+  tx: DbClient,
+  orgId: string,
+  partIds: string[],
+): Promise<{ linkedLines: number; auditedEntries: number }> {
+  const ids = [...new Set(partIds)];
+  if (ids.length === 0) return { linkedLines: 0, auditedEntries: 0 };
+
+  // Chunked: a whole-catalog import passes tens of thousands of ids.
+  const partIdBySku = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 5000) {
+    const chunk = await tx.query.parts.findMany({
+      where: and(
+        eq(schema.parts.orgId, orgId),
+        inArray(schema.parts.id, ids.slice(i, i + 5000)),
+      ),
+      columns: { id: true, sku: true },
+    });
+    for (const p of chunk) partIdBySku.set(p.sku, p.id);
+  }
+
+  const skus = [...partIdBySku.keys()];
+  const orphans: { id: string; entryId: string; sku: string | null }[] = [];
+  for (let i = 0; i < skus.length; i += 5000) {
+    const chunk = await tx.query.entryLineItems.findMany({
+      where: and(
+        eq(schema.entryLineItems.orgId, orgId),
+        isNull(schema.entryLineItems.partId),
+        inArray(schema.entryLineItems.sku, skus.slice(i, i + 5000)),
+      ),
+      columns: { id: true, entryId: true, sku: true },
+    });
+    orphans.push(...chunk);
+  }
+  if (orphans.length === 0) return { linkedLines: 0, auditedEntries: 0 };
+
+  const lineIdsByPart = new Map<string, string[]>();
+  for (const line of orphans) {
+    const partId = line.sku ? partIdBySku.get(line.sku) : undefined;
+    if (partId === undefined) continue; // unreachable: matched by inArray
+    const bucket = lineIdsByPart.get(partId);
+    if (bucket) bucket.push(line.id);
+    else lineIdsByPart.set(partId, [line.id]);
+  }
+  for (const [partId, lineIds] of lineIdsByPart) {
+    for (let i = 0; i < lineIds.length; i += 5000) {
+      await tx
+        .update(schema.entryLineItems)
+        .set({ partId })
+        .where(inArray(schema.entryLineItems.id, lineIds.slice(i, i + 5000)));
+    }
+  }
+
+  const entryIds = [...new Set(orphans.map((l) => l.entryId))];
+  for (const entryId of entryIds) {
+    await auditEntry(tx, orgId, entryId);
+  }
+  return { linkedLines: orphans.length, auditedEntries: entryIds.length };
 }

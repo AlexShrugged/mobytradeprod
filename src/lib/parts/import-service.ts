@@ -7,6 +7,7 @@ import {
 } from "@/lib/classification/service";
 import { db, schema } from "@/lib/db";
 import { normalizeHts } from "@/lib/duty/calculator";
+import { adoptEntryLinesForParts } from "@/lib/processing/linker";
 import { normalizeVendorName } from "@/lib/vendors/normalize";
 import { findOrCreateVendor, type ResolvedVendor } from "@/lib/vendors/service";
 
@@ -49,6 +50,9 @@ export type CatalogImportSummary = {
   unchanged: number;
   sourcesCreated: number;
   sourcesUpdated: number;
+  /** Orphaned entry lines (processed before their part existed) adopted
+   *  onto imported SKUs — what flips those parts to Active. */
+  entryLinesLinked: number;
   issues: ImportIssue[];
 };
 
@@ -356,6 +360,17 @@ export async function applyCatalogImport(opts: {
       touched.push({ partId: part.id, created: false });
     }
 
+    // Entry lines processed before their part existed carry part_id null —
+    // adopt them onto every SKU this file touches (created or not, so a
+    // re-import heals an org whose entries predate the catalog). Runs
+    // before the per-part re-audits so those see the adopted lines; the
+    // adopter re-audits the entries it links itself.
+    const adopted = await adoptEntryLinesForParts(
+      tx,
+      orgId,
+      touched.map((t) => t.partId),
+    );
+
     // A changed COO moves what the auditor expects on this part's entry
     // lines. updatePartHts re-audits its own changes; duplicates here are
     // harmless (alert_key reconcile is idempotent) but skipped anyway.
@@ -386,6 +401,7 @@ export async function applyCatalogImport(opts: {
           unchanged,
           sources_created: sourcesCreated,
           sources_updated: sourcesUpdated,
+          entry_lines_linked: adopted.linkedLines,
           columns: opts.columns,
           issues: summaryIssues,
         },
@@ -415,6 +431,7 @@ export async function applyCatalogImport(opts: {
       unchanged,
       sourcesCreated,
       sourcesUpdated,
+      entryLinesLinked: adopted.linkedLines,
       issues: opts.issues,
     };
   });

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { db, schema } from "@/lib/db";
 import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
+import { adoptEntryLinesForParts } from "@/lib/processing/linker";
 import { findOrCreateVendor } from "@/lib/vendors/service";
 
 const bodySchema = z
@@ -109,6 +110,11 @@ export async function POST(request: Request) {
         });
       }
     }
+
+    // Entry lines processed before this SKU existed link up now (and the
+    // touched entries re-audit) — the part shows Active from birth if its
+    // entries are already on the books.
+    await adoptEntryLinesForParts(tx, orgId, [created.id]);
 
     return created;
   });

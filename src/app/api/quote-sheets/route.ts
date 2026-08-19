@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
+import { adoptEntryLinesForParts } from "@/lib/processing/linker";
 import { ingestQuoteSheet } from "@/lib/quotes/service";
 
 const isoDate = z
@@ -60,8 +61,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = await db.transaction((tx) =>
-    ingestQuoteSheet(tx, orgId, { ...parsed.data, documentId: null }),
-  );
+  const result = await db.transaction(async (tx) => {
+    const ingested = await ingestQuoteSheet(tx, orgId, {
+      ...parsed.data,
+      documentId: null,
+    });
+    // Draft parts this sheet created adopt any entry lines that predate
+    // them — same as the uploaded-sheet path in processing/linker.
+    await adoptEntryLinesForParts(tx, orgId, ingested.createdPartIds);
+    return ingested;
+  });
   return NextResponse.json(result, { status: 201 });
 }

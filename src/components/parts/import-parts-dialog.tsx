@@ -26,6 +26,7 @@ type ImportSummary = {
   unchanged: number;
   sourcesCreated: number;
   sourcesUpdated: number;
+  entryLinesLinked: number;
   issues: ImportIssue[];
 };
 
@@ -144,6 +145,9 @@ export function ImportPartsDialog({ onClose }: { onClose: () => void }) {
             <p className="text-sm">
               {summary.created} created · {summary.updated} updated ·{" "}
               {summary.unchanged} unchanged
+              {summary.entryLinesLinked > 0
+                ? ` · ${summary.entryLinesLinked} entry line${summary.entryLinesLinked === 1 ? "" : "s"} linked`
+                : null}
               <span className="text-muted-foreground">
                 {" "}
                 ({summary.rows} row{summary.rows === 1 ? "" : "s"},{" "}
