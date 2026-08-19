@@ -6,7 +6,7 @@
 
 export type InlineNode =
   | { type: "text"; text: string }
-  | { type: "bold"; text: string }
+  | { type: "bold"; inlines: InlineNode[] }
   | { type: "code"; text: string }
   | { type: "link"; label: string; href: string };
 
@@ -32,12 +32,15 @@ export function parseInlines(text: string): InlineNode[] {
     if (index > last) nodes.push({ type: "text", text: text.slice(last, index) });
     last = index + token.length;
     if (token.startsWith("**")) {
-      nodes.push({ type: "bold", text: token.slice(2, -2) });
+      // Bold can wrap a link ("**[entry](/entries/x)** filed:") - recurse so
+      // the inner markup renders instead of leaking as literal text. Bold
+      // content can't contain "*", so this never nests further.
+      nodes.push({ type: "bold", inlines: parseInlines(token.slice(2, -2)) });
     } else if (token.startsWith("`")) {
       nodes.push({ type: "code", text: token.slice(1, -1) });
     } else {
       const close = token.indexOf("](");
-      const label = token.slice(1, close);
+      const label = token.slice(1, close).replace(/\*\*/g, "");
       const href = token.slice(close + 2, -1);
       if (isSafeInternalHref(href)) {
         nodes.push({ type: "link", label, href });

@@ -8,11 +8,27 @@ describe("parseInlines", () => {
       parseInlines("See **HTS 8501** at `line 2` in [the variance](/variance/abc)"),
     ).toEqual([
       { type: "text", text: "See " },
-      { type: "bold", text: "HTS 8501" },
+      { type: "bold", inlines: [{ type: "text", text: "HTS 8501" }] },
       { type: "text", text: " at " },
       { type: "code", text: "line 2" },
       { type: "text", text: " in " },
       { type: "link", label: "the variance", href: "/variance/abc" },
+    ]);
+  });
+
+  it("parses a link wrapped in bold", () => {
+    expect(parseInlines("**[231-7354575-4](/entries/abc)** filed:")).toEqual([
+      {
+        type: "bold",
+        inlines: [{ type: "link", label: "231-7354575-4", href: "/entries/abc" }],
+      },
+      { type: "text", text: " filed:" },
+    ]);
+  });
+
+  it("strips bold markers inside a link label", () => {
+    expect(parseInlines("[**231-7354575-4**](/entries/abc)")).toEqual([
+      { type: "link", label: "231-7354575-4", href: "/entries/abc" },
     ]);
   });
 

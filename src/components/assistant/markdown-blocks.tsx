@@ -17,7 +17,7 @@ function Inlines({ nodes }: { nodes: InlineNode[] }) {
           case "bold":
             return (
               <strong key={i} className="font-semibold">
-                {node.text}
+                <Inlines nodes={node.inlines} />
               </strong>
             );
           case "code":
