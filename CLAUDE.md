@@ -78,11 +78,18 @@ through `duty/reference.ts`: the full loader is for schedule-wide scans only
 
 The AI entry analyst (`src/lib/analysis/`) investigates one entry at a time:
 Claude (`ANTHROPIC_API_KEY`, tuned by `ENTRY_ANALYST_MODEL`/`_DEADLINE_MS`/
-`_MAX_ITERATIONS`) drives eight zero-IO tools over a preloaded bundle
-(auditable snapshot, document extractions, catalog, AD/CVD order corpus). The
+`_MAX_ITERATIONS`) drives nine zero-IO tools over a preloaded bundle
+(auditable snapshot, document extractions, catalog, AD/CVD order corpus,
+sibling entries sharing a shipment — get_sibling_entries makes cross-entry
+consistency checks deliberate instead of depending on packet-document
+homing). The
 deterministic engine stays the source of truth for money math and is exposed
 AS tools (get_expected_charges etc.); every finding carries verbatim evidence
-citations. `analysis/service.ts` is the sole writer of `analysis_runs` +
+citations. The prompt carries the exclusion-claim doctrine: a declared $0
+family-exemption charge is never itself a duty shortfall — the analyst
+contests one only with affirmative contradicting evidence (e.g. a sibling
+entry paying the measure on identical goods), framed as an inconsistency
+for the filer, never as duty owed. `analysis/service.ts` is the sole writer of `analysis_runs` +
 `analysis_findings`: findings reconcile by stable finding_key
 (`ai:<category>:<line>`), resolved/dismissed rows are never touched, and only
 a clean Claude run reconciles — failed/degraded runs never clobber findings

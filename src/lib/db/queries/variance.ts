@@ -613,7 +613,10 @@ function computeLineCatalogExpected(
 /** Every issue on one line — rule alerts AND novel AI findings — as
  *  navigator-card items in compareSiblingAlerts order, so both detail pages
  *  show one complete line reconciliation. Corroborating AI findings stay
- *  out: their issue is already a rule row. */
+ *  out (their issue is already a rule row), and so do diff-less
+ *  observations (hasActionableDiff — not variances, AI card only). A
+ *  directly opened diff-less finding still renders: every consumer
+ *  tolerates a currentId absent from siblings. */
 function buildLineSiblings(
   detail: EntryDetail,
   lineItemId: string,
@@ -644,7 +647,10 @@ function buildLineSiblings(
     });
   const findingItems: VarianceSiblingAlert[] = detail.aiFindings
     .filter(
-      (f) => f.lineItemId === lineItemId && f.relatedAlertKeys.length === 0,
+      (f) =>
+        f.lineItemId === lineItemId &&
+        f.relatedAlertKeys.length === 0 &&
+        hasActionableDiff(f.fields),
     )
     .map((f) => ({
       id: f.id,

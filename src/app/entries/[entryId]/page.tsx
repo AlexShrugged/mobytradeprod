@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/card";
 import type { DutyBucket } from "@/lib/duty/authority";
 import { getEntryDetail, type EntryDocument } from "@/lib/db/queries/entries";
+import { hasActionableDiff } from "@/lib/variance/field-issue";
 import { liquidationWindow } from "@/lib/variance/window";
 import { formatCents, formatDate, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -66,10 +67,15 @@ export default async function EntryDetailPage({
   const entry = await getEntryDetail(entryId);
   if (!entry) notFound();
 
-  // Open variances = open rule alerts + open NOVEL AI findings, matching
-  // the variance queue (corroborations ride their rule row).
+  // Open variances = open rule alerts + open NOVEL AI findings carrying a
+  // real filed-vs-expected diff, matching the variance queue's admission
+  // rule (corroborations ride their rule row; diff-less observations live
+  // on the AI card only).
   const openNovelFindings = entry.aiFindings.filter(
-    (f) => f.status === "open" && f.relatedAlertKeys.length === 0,
+    (f) =>
+      f.status === "open" &&
+      f.relatedAlertKeys.length === 0 &&
+      hasActionableDiff(f.fields),
   );
   const openRuleAlertCount = entry.alerts.filter(
     (a) => a.status === "open",
