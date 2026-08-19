@@ -32,6 +32,7 @@ export const CLASSIFICATION_SCHEMA = {
       type: "string",
       enum: [
         "port_entry",
+        "cargo_release",
         "shipment",
         "purchase_order",
         "commercial_invoice",
@@ -44,8 +45,15 @@ export const CLASSIFICATION_SCHEMA = {
         "other",
       ],
       description:
-        "The document's type. port_entry: a US CBP Form 7501 Entry Summary " +
-        "or similar customs entry declaration, ALONE in this file. shipment: " +
+        "The document's type. port_entry: a US CBP Form 7501 Entry Summary, " +
+        "ALONE in this file — the form headed DEPARTMENT OF HOMELAND " +
+        "SECURITY and titled ENTRY SUMMARY, with numbered declaration lines " +
+        "carrying HTS codes, entered values, and duty/fee amounts. A " +
+        "document is only port_entry when it IS that form; an entry number " +
+        "alone does not make one. cargo_release: a US CBP Form 3461 " +
+        "Entry/Immediate Delivery, cargo release, or broker release " +
+        "notification — it shows an entry number and shipment references " +
+        "but no per-line duty amounts; NOT an entry summary. shipment: " +
         "an ocean bill of lading, air waybill, or shipment confirmation. " +
         "purchase_order: a buyer's purchase order to a supplier. " +
         "commercial_invoice: a supplier's commercial invoice for goods. " +
@@ -277,6 +285,31 @@ const PORT_ENTRY_SCHEMA = {
     },
   },
   required: ["entry_number", "line_items"],
+} as const;
+
+// Thin by design: the release only needs to identify its entry and
+// shipment(s). No line items, no money — a cargo release is never
+// authoritative for entry facts (see the cargo_release linker case).
+const CARGO_RELEASE_SCHEMA = {
+  type: "object",
+  properties: {
+    entry_number: {
+      type: "string",
+      description:
+        "The CBP entry number in XXX-XXXXXXX-X format (filer code, entry " +
+        "number, check digit), e.g. 300-1234567-8.",
+    },
+    entry_date: date("Entry date, if the release shows one"),
+    referenced_bols: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Every bill of lading / air waybill number on the release. Only " +
+        "transport document numbers — not the entry number, in-bond number, " +
+        "or broker reference numbers.",
+    },
+  },
+  required: ["entry_number"],
 } as const;
 
 const SHIPMENT_SCHEMA = {
@@ -576,6 +609,7 @@ const REFUND_REPORT_SCHEMA = {
 
 export const EXTRACT_SCHEMAS: Record<ExtractableDocType, unknown> = {
   port_entry: PORT_ENTRY_SCHEMA,
+  cargo_release: CARGO_RELEASE_SCHEMA,
   shipment: SHIPMENT_SCHEMA,
   purchase_order: PURCHASE_ORDER_SCHEMA,
   commercial_invoice: COMMERCIAL_INVOICE_SCHEMA,
@@ -591,6 +625,11 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "under the line's HTS code, Chapter 99 additional duties (Section " +
     "301/232, IEEPA, reciprocal), MPF under code 499, and HMF under code " +
     "501. Capture every charge on every line.",
+  cargo_release:
+    "This is a US CBP Form 3461 (Entry/Immediate Delivery) or a broker's " +
+    "cargo release notification. Capture only the entry number, the entry " +
+    "date if shown, and the transport document (BOL/AWB) numbers. Do not " +
+    "report in-bond numbers or broker file references as bills of lading.",
   shipment:
     "This is an ocean bill of lading or air waybill. Capture the transport " +
     "document number, equipment, routing, and any purchase order references.",
@@ -629,6 +668,13 @@ export const SPLIT_CATEGORIES: SplitCategory[] = [
       "A US CBP Form 7501 Entry Summary or its continuation sheets: the " +
       "customs declaration with entry number, HTS lines, entered values, " +
       "and duty/fee amounts.",
+  },
+  {
+    name: "Cargo Release",
+    description:
+      "A US CBP Form 3461 Entry/Immediate Delivery or broker cargo release " +
+      "notification: shows an entry number and shipment references but no " +
+      "per-line duty amounts. NOT the Entry Summary 7501.",
   },
   {
     name: "Commercial Invoice",

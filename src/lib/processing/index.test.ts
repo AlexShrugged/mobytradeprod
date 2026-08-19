@@ -15,4 +15,12 @@ describe("inferDocType", () => {
       "commercial_invoice",
     );
   });
+
+  it("hints cargo releases BEFORE the broad entry pattern", () => {
+    expect(inferDocType("cbp-3461.pdf")).toBe("cargo_release");
+    expect(inferDocType("Cargo Release 231-7354574-7.pdf")).toBe(
+      "cargo_release",
+    );
+    expect(inferDocType("entry-231-7354574-7.pdf")).toBe("port_entry");
+  });
 });

@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import { auditEntry } from "@/lib/audit/auditor";
 import { db, schema, type DbClient } from "@/lib/db";
@@ -6,6 +6,7 @@ import { normalizeHts } from "@/lib/duty/calculator";
 import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
 import { findOrCreateVendor } from "@/lib/vendors/service";
+import { normalizeBol, splitReferenceNumbers } from "./normalize";
 import type { EntryLineItemExtraction, ExtractionResult } from "./types";
 
 // ISO codes compare exact-match downstream (measure gating, COO audit rule).
@@ -78,13 +79,20 @@ export async function linkExtraction(
   await db.transaction(async (tx) => {
     const links: { entityType: LinkedEntity; entityId: string; created: boolean }[] = [];
 
-    const findOrCreateShipmentByBol = async (bol: string) => {
-      const existing = await tx.query.shipments.findFirst({
+    // BOLs match on normalized form — the same AWB prints "180-61914941" on
+    // a 7501 and "18061914941" on the waybill, and an exact-string match
+    // mints two shipments for one sailing. The first-seen printed form is
+    // what the row keeps for display.
+    const findShipmentByBol = (bol: string) =>
+      tx.query.shipments.findFirst({
         where: and(
           eq(schema.shipments.orgId, orgId),
-          eq(schema.shipments.billOfLading, bol),
+          sql`regexp_replace(upper(${schema.shipments.billOfLading}), '[^A-Z0-9]', '', 'g') = ${normalizeBol(bol)}`,
         ),
       });
+
+    const findOrCreateShipmentByBol = async (bol: string) => {
+      const existing = await findShipmentByBol(bol);
       if (existing) return { id: existing.id, created: false };
       const [created] = await tx
         .insert(schema.shipments)
@@ -205,6 +213,31 @@ export async function linkExtraction(
         });
         if (existing) {
           entryId = existing.id;
+          // A weaker document can win the processing race and create the
+          // entry first (a misclassified release once did, minting dateless
+          // entries). The 7501 is authoritative for its own header, so fill
+          // every fact still missing — gap-fill only, a human-corrected
+          // value is never displaced.
+          const headerFill: Partial<{
+            entryDate: string;
+            portOfEntry: string;
+            entryType: string;
+            importerOfRecord: string;
+          }> = {};
+          if (existing.entryDate === null && f.entry_date !== null)
+            headerFill.entryDate = f.entry_date;
+          if (existing.portOfEntry === null && f.port_of_entry !== null)
+            headerFill.portOfEntry = f.port_of_entry;
+          if (existing.entryType === null && f.entry_type !== null)
+            headerFill.entryType = f.entry_type;
+          if (existing.importerOfRecord === null && f.importer_of_record !== null)
+            headerFill.importerOfRecord = f.importer_of_record;
+          if (Object.keys(headerFill).length > 0) {
+            await tx
+              .update(schema.entries)
+              .set({ ...headerFill, updatedAt: new Date() })
+              .where(eq(schema.entries.id, entryId));
+          }
           links.push({ entityType: "entry", entityId: entryId, created: false });
         } else {
           const [created] = await tx
@@ -234,7 +267,7 @@ export async function linkExtraction(
             created: shipment.created,
           });
         }
-        for (const poNumber of f.referenced_pos) {
+        for (const poNumber of f.referenced_pos.flatMap(splitReferenceNumbers)) {
           const po = await findOrCreatePoByNumber(poNumber);
           await tx
             .insert(schema.entryPurchaseOrders)
@@ -334,7 +367,66 @@ export async function linkExtraction(
             .where(eq(schema.entries.id, entryId));
         }
 
+        // Cargo releases attach-only (they never create entries), so one
+        // that processed before this 7501 found nothing to link to. Adopt
+        // strays by extracted entry number, whichever side arrived first —
+        // the same both-directions linkage adoptEntryLinesForParts does for
+        // parts. Idempotent: the PK on document_links absorbs reruns.
+        const strayReleases = await tx
+          .select({ id: schema.documents.id })
+          .from(schema.documents)
+          .where(
+            and(
+              eq(schema.documents.orgId, orgId),
+              eq(schema.documents.docType, "cargo_release"),
+              ne(schema.documents.id, documentId),
+              sql`regexp_replace(${schema.documents.extractedData}->>'entry_number', '[^0-9]', '', 'g') = ${normalizeEntryNumber(f.entry_number)}`,
+            ),
+          );
+        for (const stray of strayReleases) {
+          await tx
+            .insert(schema.documentLinks)
+            .values({
+              orgId,
+              documentId: stray.id,
+              entityType: "entry",
+              entityId: entryId,
+              created: false,
+            })
+            .onConflictDoNothing();
+        }
+
         await auditEntry(tx, orgId, entryId);
+        break;
+      }
+
+      // Attach-only: a release identifies its entry and shipment(s) but is
+      // authoritative for none of them. Link what already exists, create
+      // NOTHING — the dateless header-less entries a release used to mint
+      // are exactly the bug this class exists to prevent. A release that
+      // processes before its 7501 stays unlinked until the 7501's stray-
+      // adoption pass picks it up.
+      case "cargo_release": {
+        const f = extraction.fields;
+        const entry = await tx.query.entries.findFirst({
+          where: and(
+            eq(schema.entries.orgId, orgId),
+            sql`regexp_replace(${schema.entries.entryNumber}, '[^0-9]', '', 'g') = ${normalizeEntryNumber(f.entry_number)}`,
+          ),
+        });
+        if (entry) {
+          links.push({ entityType: "entry", entityId: entry.id, created: false });
+        }
+        for (const bol of f.referenced_bols) {
+          const shipment = await findShipmentByBol(bol);
+          if (shipment) {
+            links.push({
+              entityType: "shipment",
+              entityId: shipment.id,
+              created: false,
+            });
+          }
+        }
         break;
       }
 
@@ -439,12 +531,7 @@ export async function linkExtraction(
       case "shipment": {
         const f = extraction.fields;
         let shipmentId: string;
-        const existing = await tx.query.shipments.findFirst({
-          where: and(
-            eq(schema.shipments.orgId, orgId),
-            eq(schema.shipments.billOfLading, f.bill_of_lading),
-          ),
-        });
+        const existing = await findShipmentByBol(f.bill_of_lading);
         if (existing) {
           shipmentId = existing.id;
           // Stubs created from a port entry's referenced BOLs carry no
@@ -505,7 +592,7 @@ export async function linkExtraction(
           links.push({ entityType: "shipment", entityId: shipmentId, created: true });
         }
 
-        for (const poNumber of f.referenced_pos) {
+        for (const poNumber of f.referenced_pos.flatMap(splitReferenceNumbers)) {
           const po = await findOrCreatePoByNumber(poNumber);
           await tx
             .insert(schema.shipmentPurchaseOrders)
@@ -655,16 +742,21 @@ export async function linkExtraction(
       case "commercial_invoice": {
         const f = extraction.fields;
 
-        let poId: string | null = null;
-        if (f.po_number) {
-          const po = await findOrCreatePoByNumber(f.po_number);
-          poId = po.id;
+        // Invoices covering several POs arrive with them packed into the
+        // scalar po_number ("8119907E7,8119908E2") — split before matching
+        // or the comma string becomes a literal PO row. The invoice row
+        // keeps the first as its primary PO; every one gets linked.
+        const poIds: string[] = [];
+        for (const poNumber of splitReferenceNumbers(f.po_number)) {
+          const po = await findOrCreatePoByNumber(poNumber);
+          poIds.push(po.id);
           links.push({
             entityType: "purchase_order",
             entityId: po.id,
             created: po.created,
           });
         }
+        const poId: string | null = poIds[0] ?? null;
 
         // Upsert by (org, invoice number); reprocessing replaces the lines
         // wholesale, the same pattern entry line items use. Unlike POs
@@ -750,9 +842,9 @@ export async function linkExtraction(
         });
         const hasDirect = touched.size > 0 || directRows.length > 0;
         for (const row of directRows) touched.add(row.entryId);
-        if (!hasDirect && poId) {
+        if (!hasDirect && poIds.length > 0) {
           const entryLinks = await tx.query.entryPurchaseOrders.findMany({
-            where: eq(schema.entryPurchaseOrders.purchaseOrderId, poId),
+            where: inArray(schema.entryPurchaseOrders.purchaseOrderId, poIds),
             columns: { entryId: true },
           });
           for (const el of entryLinks) touched.add(el.entryId);

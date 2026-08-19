@@ -37,6 +37,7 @@ import {
   SUBMISSION_WINDOW_DAYS,
   type EntryPhase,
 } from "@/lib/variance/window";
+import { homeForDocument, MISC_HOME } from "@/lib/entries/document-homing";
 import { deriveEntryStatus } from "@/lib/entries/status";
 import { deriveShipmentStatus } from "@/lib/shipments/status";
 import {
@@ -994,8 +995,13 @@ export type EntryDetail = {
    *  what the variance detail page renders). */
   documents: EntryDocument[];
   /** Entry-homed paperwork: documents that belong to the entry rather than
-   *  to one of its shipments/POs/invoices (the 7501, refund reports…). */
+   *  to one of its shipments/POs/invoices (the 7501, cargo releases,
+   *  refund reports…). */
   entryPaperwork: EntryDocument[];
+  /** Documents linked to this entry's records that no group claims — a
+   *  sibling entry's 7501 reachable through a shared PO, unclassifiable
+   *  paperwork. Surfaced honestly instead of force-bucketed. */
+  miscellaneousDocuments: EntryDocument[];
 };
 
 const SEVERITY_ORDER = { error: 0, warning: 1, info: 2 } as const;
@@ -1103,11 +1109,10 @@ export async function getEntryDetail(
       .orderBy(desc(schema.documents.uploadedAt)),
   ]);
 
-  // Home each document under exactly ONE group so it never renders twice:
-  // an entry-created link wins (the 7501 also mints stub sub-records, but
-  // it IS the entry's paperwork), then the sub-record it created (a BOL's
-  // home is its shipment, a CI's its invoice), then the first sub-record it
-  // merely references (a packing list under its shipment), else the entry.
+  // Home each document under exactly ONE group so it never renders twice —
+  // the rules live in homeForDocument (documents home only under records of
+  // their own class or the entry itself; everything else, like a sibling
+  // entry's 7501 reachable through a shared PO, goes to Miscellaneous).
   const linksByDoc = new Map<string, typeof documentRows>();
   for (const row of documentRows) {
     const list = linksByDoc.get(row.id) ?? [];
@@ -1116,19 +1121,15 @@ export async function getEntryDetail(
   }
   const docsByHome = new Map<string, EntryDocument[]>();
   for (const links of linksByDoc.values()) {
-    const home =
-      links.find((l) => l.entityType === "entry" && l.created) ??
-      links.find((l) => l.entityType !== "entry" && l.created) ??
-      links.find((l) => l.entityType !== "entry") ??
-      links[0];
-    const key = `${home.entityType}:${home.entityId}`;
+    const doc = links[0];
+    const key = homeForDocument(doc.docType, links, entryId);
     const list = docsByHome.get(key) ?? [];
     list.push({
-      id: home.id,
-      fileName: home.fileName,
-      docType: home.docType,
-      fileSize: home.fileSize,
-      created: home.created,
+      id: doc.id,
+      fileName: doc.fileName,
+      docType: doc.docType,
+      fileSize: doc.fileSize,
+      created: links.some((l) => l.created),
     });
     docsByHome.set(key, list);
   }
@@ -1517,5 +1518,6 @@ export async function getEntryDetail(
         created: d.created,
       })),
     entryPaperwork: homeDocs("entry", entryId),
+    miscellaneousDocuments: docsByHome.get(MISC_HOME) ?? [],
   };
 }

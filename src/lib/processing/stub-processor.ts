@@ -461,6 +461,23 @@ export class StubDocumentProcessor implements DocumentProcessor {
           },
         };
       }
+      case "cargo_release": {
+        // Attach-only downstream: reference an existing entry/BOL when the
+        // org has one so the link actually lands.
+        const fromName = input.fileName.match(/\d{3}-\d{7}-\d/)?.[0];
+        return {
+          docType: "cargo_release",
+          fields: {
+            entry_number:
+              fromName ??
+              (ctx.entryPool.length
+                ? pick(ctx.entryPool, seed)
+                : this.fabricateEntryNumber(seed)),
+            entry_date: iso(seed % 20),
+            referenced_bols: pickSome(ctx.bolPool, seed, 1),
+          },
+        };
+      }
       case "refund_report": {
         const fromName = input.fileName.match(/\d{3}-\d{7}-\d/)?.[0];
         const claimCount = 1 + (seed % 3);

@@ -1,6 +1,7 @@
 import { chargeType, documentType } from "@/lib/db/schema";
 import type { ChargeTypeValue, DocumentTypeValue } from "@/lib/db/schema";
 import type {
+  CargoReleaseExtraction,
   CommercialInvoiceExtraction,
   EntryChargeExtraction,
   EntryLineItemExtraction,
@@ -271,6 +272,16 @@ function mapPortEntry(data: Record<string, unknown>): PortEntryExtraction {
   };
 }
 
+function mapCargoRelease(
+  data: Record<string, unknown>,
+): CargoReleaseExtraction {
+  return {
+    entry_number: required(toStr(data.entry_number), "CBP entry number"),
+    entry_date: toDate(data.entry_date),
+    referenced_bols: toStrArray(data.referenced_bols),
+  };
+}
+
 const SHIPMENT_MODES = new Set(["ocean", "air", "truck", "rail"]);
 
 function toMode(v: unknown): ShipmentExtraction["mode"] {
@@ -446,6 +457,8 @@ export function mapExtractToResult(
   switch (docType) {
     case "port_entry":
       return { docType, fields: mapPortEntry(data) };
+    case "cargo_release":
+      return { docType, fields: mapCargoRelease(data) };
     case "shipment":
       return { docType, fields: mapShipment(data) };
     case "purchase_order":

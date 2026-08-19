@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   ArrowLeft,
+  Files,
   FileText,
   Paperclip,
   ReceiptText,
@@ -401,6 +402,17 @@ export default async function EntryDetailPage({
                   />
                 ))}
               </RecordGroup>
+              {/* Paperwork no group claims — a sibling entry's 7501 sharing
+                  this entry's PO, unclassifiable uploads. Rendered only when
+                  present; force-bucketing these under a record they aren't
+                  is how a 7501 once displayed as a PO's document. */}
+              {entry.miscellaneousDocuments.length > 0 ? (
+                <RecordGroup icon={Files} label="Miscellaneous" empty={false}>
+                  <div className="py-2">
+                    <DocumentRail documents={entry.miscellaneousDocuments} />
+                  </div>
+                </RecordGroup>
+              ) : null}
             </CardContent>
           </Card>
         </div>

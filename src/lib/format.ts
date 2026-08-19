@@ -65,6 +65,7 @@ export function formatHts(code: string | null | undefined): string {
 
 const docTypeLabels: Record<string, string> = {
   port_entry: "Port entry",
+  cargo_release: "Cargo release",
   shipment: "Shipment",
   purchase_order: "Purchase order",
   commercial_invoice: "Commercial invoice",

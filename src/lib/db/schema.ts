@@ -56,6 +56,11 @@ export const shipmentMode = pgEnum("shipment_mode", [
 ]);
 export const documentType = pgEnum("document_type", [
   "port_entry",
+  // A CBP Form 3461 / broker cargo release notification. Carries an entry
+  // number but is NOT the entry summary: it links to an existing entry and
+  // never creates one (a release has no entry date or duty lines, so letting
+  // it mint entries is how dateless header-less entries were born).
+  "cargo_release",
   "shipment",
   "purchase_order",
   "commercial_invoice",
@@ -76,6 +81,9 @@ export const documentType = pgEnum("document_type", [
 // vocabulary (ported from the legacy broker_entry_packet domain rules).
 export const packetRole = pgEnum("packet_role", [
   "entry_summary_7501",
+  // The 3461/cargo-release pages of a packet: entry-numbered but never the
+  // entry's source of truth (see documentType "cargo_release").
+  "cargo_release",
   "commercial_invoice",
   // Assist sheets look columnar like commercial invoices; keeping them a
   // distinct role (mapped to docType "other") is what stops them becoming

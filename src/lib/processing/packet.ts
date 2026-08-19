@@ -29,6 +29,19 @@ const ROLE_PATTERNS: [PacketRoleValue, RegExp[]][] = [
     "entry_summary_7501",
     [/7501/i, /entry\s*summary/i, /entry\s*tariff\s*code\s*sheet/i],
   ],
+  // Strictly BEFORE transport_document: release notices often mention the
+  // BOL, and a cargo release routed into the shipment pipeline would mint
+  // shipment rows from a document that owns none.
+  [
+    "cargo_release",
+    [
+      /cargo\s*release/i,
+      /3461/,
+      /entry\s*\/?\s*immediate\s*delivery/i,
+      /immediate\s*delivery/i,
+      /release\s*noti(ce|fication)/i,
+    ],
+  ],
   [
     "certificate_of_origin",
     [/certificate\s*of\s*origin/i, /\bcert.*origin/i, /\bco[_\s-]/i],
@@ -75,6 +88,7 @@ export function normalizeRole(raw: string | null | undefined): PacketRoleValue {
 // deliberately maps to "other", never commercial_invoice.
 const ROLE_TO_DOC_TYPE: Record<PacketRoleValue, DocumentTypeValue> = {
   entry_summary_7501: "port_entry",
+  cargo_release: "cargo_release",
   commercial_invoice: "commercial_invoice",
   assist_sheet: "other",
   broker_invoice: "other",
@@ -91,6 +105,7 @@ export function roleToDocType(role: PacketRoleValue): DocumentTypeValue {
 
 const ROLE_LABELS: Record<PacketRoleValue, string> = {
   entry_summary_7501: "Entry summary (7501)",
+  cargo_release: "Cargo release",
   commercial_invoice: "Commercial invoice",
   assist_sheet: "Assist sheet",
   broker_invoice: "Broker invoice",

@@ -64,6 +64,15 @@ export type PortEntryExtraction = {
   related_party?: boolean | null;
 };
 
+// A CBP 3461 / cargo release. Deliberately thin: the release identifies its
+// entry and shipment(s) but is never authoritative for entry facts — the
+// linker attaches it to EXISTING records only and creates nothing.
+export type CargoReleaseExtraction = {
+  entry_number: string;
+  entry_date: string | null;
+  referenced_bols: string[];
+};
+
 export type ShipmentExtraction = {
   bill_of_lading: string;
   container_number: string | null;
@@ -214,6 +223,7 @@ export type EntryPacketExtraction = {
 
 export type ExtractionResult =
   | { docType: "port_entry"; fields: PortEntryExtraction }
+  | { docType: "cargo_release"; fields: CargoReleaseExtraction }
   | { docType: "shipment"; fields: ShipmentExtraction }
   | { docType: "purchase_order"; fields: PurchaseOrderExtraction }
   | { docType: "commercial_invoice"; fields: CommercialInvoiceExtraction }

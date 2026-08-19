@@ -39,6 +39,10 @@ export function inferDocType(fileName: string): DocumentTypeValue {
   // Before the "entry" check: packet filenames usually contain "entry" too
   // ("entry-packet-...", broker "ACH PACKET-...").
   if (name.includes("packet")) return "entry_packet";
+  // Before the "entry" check: 3461s are named with "entry" too
+  // ("entry-immediate-delivery", "cargo-release-entry-...").
+  if (name.includes("3461") || (name.includes("cargo") && name.includes("release")))
+    return "cargo_release";
   if (name.includes("entry")) return "port_entry";
   if (name.includes("bol") || name.includes("shipment") || name.includes("awb"))
     return "shipment";

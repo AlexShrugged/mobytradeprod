@@ -26,6 +26,16 @@ describe("normalizeRole", () => {
     expect(normalizeRole("HTS Code List")).toBe("hts_code_list");
   });
 
+  it("maps cargo releases to their own role, never the 7501's", () => {
+    expect(normalizeRole("Cargo Release")).toBe("cargo_release");
+    expect(normalizeRole("CBP Form 3461")).toBe("cargo_release");
+    expect(normalizeRole("Entry/Immediate Delivery")).toBe("cargo_release");
+    expect(roleToDocType("cargo_release")).toBe("cargo_release");
+    // The 7501 keeps its role — "entry summary" never matches the release
+    // patterns.
+    expect(normalizeRole("Entry Summary 7501")).toBe("entry_summary_7501");
+  });
+
   it("matches assist sheets BEFORE the broad invoice pattern", () => {
     // The legacy lesson: assist sheets look columnar like invoices. A title
     // carrying both words must resolve to assist_sheet, never
