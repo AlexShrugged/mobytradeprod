@@ -19,13 +19,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type { OpenMeasureGroup } from "@/lib/db/queries/tariffs";
 import { formatRate } from "@/lib/format";
 
@@ -57,9 +50,6 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
   const [defaultEffectiveDate, setDefaultEffectiveDate] = React.useState("");
   const [defaultEndDate, setDefaultEndDate] = React.useState("");
   const [confirmWorldwide, setConfirmWorldwide] = React.useState(false);
-  const [defaultOnConflict, setDefaultOnConflict] = React.useState<
-    "supersede" | "stack" | ""
-  >("");
   // Per-member effective dates — the one field the feed never carries, and
   // the one that legitimately differs across a family's members. Prefilled
   // from the proposal (extraction can settle it); the default fills blanks.
@@ -106,9 +96,13 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
       if (!res.ok) throw new Error(body?.error ?? "Update failed.");
       if (body?.action === "applied") {
         const audit = body.audit;
+        const superseded: { ch99Code: string }[] = body.superseded ?? [];
         toast.success(
           `${group.title}: ${body.applied} measure(s) applied` +
             (body.rejected > 0 ? ` · ${body.rejected} rejected` : "") +
+            (superseded.length > 0
+              ? ` · superseded ${superseded.map((s) => s.ch99Code).join(", ")}`
+              : "") +
             (audit
               ? ` · ${audit.entries} entr${audit.entries === 1 ? "y" : "ies"} re-audited (${audit.created} new finding(s), ${audit.cleared} cleared)`
               : ""),
@@ -141,7 +135,6 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
         defaultEffectiveDate: defaultEffectiveDate || null,
         defaultEndDate: defaultEndDate || null,
         confirmWorldwide,
-        ...(defaultOnConflict ? { defaultOnConflict } : {}),
         memberEffectiveDates: Object.fromEntries(
           group.members
             .filter(
@@ -179,6 +172,7 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
                 <th className="px-2 py-1.5 font-medium">Rate</th>
                 <th className="px-2 py-1.5 font-medium">Countries</th>
                 <th className="px-2 py-1.5 font-medium">Effective</th>
+                <th className="px-2 py-1.5 font-medium">Overlap</th>
               </tr>
             </thead>
             <tbody>
@@ -268,6 +262,24 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
                         ) : null}
                       </div>
                     </td>
+                    <td className="whitespace-nowrap px-2 py-1">
+                      {m.overlaps.map((o) => (
+                        <span
+                          key={`${o.kind}-${o.ch99Code}`}
+                          className={`block ${
+                            o.kind === "supersedes"
+                              ? "font-medium text-amber-700 dark:text-amber-400"
+                              : "text-muted-foreground"
+                          }`}
+                          title={`${o.name} · live from ${o.effectiveDate}`}
+                        >
+                          {o.kind === "supersedes"
+                            ? "supersedes "
+                            : "coexists (sail) "}
+                          <span className="font-mono">{o.ch99Code}</span>
+                        </span>
+                      ))}
+                    </td>
                   </tr>
                 );
               })}
@@ -299,24 +311,6 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
               onChange={(e) => setDefaultEndDate(e.target.value)}
               className="w-44"
             />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">On overlap with live measures</Label>
-            <Select
-              value={defaultOnConflict === "" ? undefined : defaultOnConflict}
-              disabled={busy}
-              onValueChange={(v) =>
-                setDefaultOnConflict(v as "supersede" | "stack")
-              }
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue placeholder="Block apply" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="supersede">Supersede</SelectItem>
-                <SelectItem value="stack">Stack</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
           <div className="flex items-center gap-2 pb-2.5">
             <Checkbox

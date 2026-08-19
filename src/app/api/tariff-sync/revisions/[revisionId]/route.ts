@@ -57,9 +57,6 @@ const bodySchema = z.discriminatedUnion("action", [
     /** Explicit confirmation that null countries means every country —
      *  create_measure applies refuse worldwide scope without it. */
     worldwide: z.boolean().optional(),
-    /** Resolution when this measure overlaps live same-program measures:
-     *  supersede (close their windows, link lineage) or stack. */
-    onConflict: z.enum(["supersede", "stack"]).nullish(),
     notes: z.string().nullish(),
   }),
   z.object({
@@ -179,7 +176,6 @@ export async function PATCH(
       }
       if (body.program !== undefined) proposed.program = body.program;
       if (body.worldwide !== undefined) proposed.worldwide = body.worldwide;
-      if (body.onConflict !== undefined) proposed.onConflict = body.onConflict;
       await tx
         .update(schema.measureRevisions)
         .set({ proposed, updatedAt: new Date() })
@@ -231,6 +227,9 @@ export async function PATCH(
         status: 200 as const,
         action: "applied" as const,
         measureId: applied.measureId,
+        // Live measures this apply auto-superseded — surfaced in the toast
+        // so the reviewer sees exactly which windows closed.
+        superseded: applied.superseded,
         targets,
         analysesQueued,
       };

@@ -23,7 +23,10 @@ import {
 import type { VarianceQueueRow } from "@/lib/db/queries/variance";
 import { fieldIssue } from "@/lib/variance/field-issue";
 import type { VarianceGroup } from "@/lib/variance/grouping";
-import { LIQUIDATION_WINDOW_DAYS } from "@/lib/variance/window";
+import {
+  LIQUIDATION_WINDOW_DAYS,
+  SUBMISSION_WINDOW_DAYS,
+} from "@/lib/variance/window";
 import {
   formatCents,
   formatDate,
@@ -217,35 +220,49 @@ function WindowCell({ row }: { row: VarianceQueueRow }) {
         <Muted>—</Muted>
       </div>
     );
-  const urgent = w.daysLeft <= 60;
-  const pct = Math.max(
-    0,
-    Math.min(100, (w.daysLeft / LIQUIDATION_WINDOW_DAYS) * 100),
-  );
+  // Phase picks the countdown: an unsubmitted entry races its submission
+  // date (edits still need no PSC), a submitted one races liquidation. The
+  // bar is full at the start of whichever window applies.
+  const unsubmitted = w.phase === "unsubmitted";
+  const days = unsubmitted ? (w.nextPhaseDaysLeft ?? w.daysLeft) : w.daysLeft;
+  const windowDays = unsubmitted
+    ? SUBMISSION_WINDOW_DAYS
+    : LIQUIDATION_WINDOW_DAYS;
+  const urgent = unsubmitted ? days <= 3 : days <= 60;
+  const pct = Math.max(0, Math.min(100, (days / windowDays) * 100));
   return (
     <div
-      className="flex items-center justify-end gap-2"
-      title={`Est. liquidation ${formatDate(w.estDate)} (entry + ${LIQUIDATION_WINDOW_DAYS}d)`}
+      className="text-right"
+      title={
+        unsubmitted
+          ? `Submits ${formatDate(w.nextPhaseDate)} (entry + ${SUBMISSION_WINDOW_DAYS}d)`
+          : `Est. liquidation ${formatDate(w.estDate)} (entry + ${LIQUIDATION_WINDOW_DAYS}d)`
+      }
     >
-      <div className="h-1 w-16 overflow-hidden rounded-full bg-muted">
-        <div
+      <div className="flex items-center justify-end gap-2">
+        <div className="h-1 w-16 overflow-hidden rounded-full bg-muted">
+          <div
+            className={cn(
+              "h-full rounded-full",
+              urgent ? "bg-amber-500" : "bg-primary/60",
+            )}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span
           className={cn(
-            "h-full rounded-full",
-            urgent ? "bg-amber-500" : "bg-primary/60",
+            "text-xs tabular-nums",
+            urgent
+              ? "text-amber-700 dark:text-amber-400"
+              : "text-muted-foreground",
           )}
-          style={{ width: `${pct}%` }}
-        />
+        >
+          {days}d
+        </span>
       </div>
-      <span
-        className={cn(
-          "text-xs tabular-nums",
-          urgent
-            ? "text-amber-700 dark:text-amber-400"
-            : "text-muted-foreground",
-        )}
-      >
-        {w.daysLeft}d
-      </span>
+      {unsubmitted ? (
+        <div className="text-[11px] text-muted-foreground">to submission</div>
+      ) : null}
     </div>
   );
 }

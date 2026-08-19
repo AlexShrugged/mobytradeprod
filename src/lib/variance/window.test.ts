@@ -10,6 +10,7 @@ describe("liquidationWindow", () => {
       closed: false,
       phase: "unsubmitted",
       nextPhaseDate: "2026-01-16",
+      nextPhaseDaysLeft: 15,
     });
   });
 
@@ -27,6 +28,7 @@ describe("liquidationWindow", () => {
         closed: true,
         phase: "liquidated",
         nextPhaseDate: null,
+        nextPhaseDaysLeft: null,
       },
     );
   });
@@ -38,6 +40,7 @@ describe("liquidationWindow", () => {
       closed: false,
       phase: "submitted",
       nextPhaseDate: null,
+      nextPhaseDaysLeft: null,
     });
     expect(liquidationWindow(null, "liquidated", "2026-06-01").closed).toBe(
       true,
@@ -55,5 +58,13 @@ describe("liquidationWindow", () => {
     const day15 = liquidationWindow("2026-01-01", "filed", "2026-01-16");
     expect(day15.phase).toBe("submitted");
     expect(day15.nextPhaseDate).toBe(day15.estDate);
+  });
+
+  it("counts down to the phase boundary: submission first, then liquidation", () => {
+    const day14 = liquidationWindow("2026-01-01", "filed", "2026-01-15");
+    expect(day14.nextPhaseDaysLeft).toBe(1);
+
+    const day15 = liquidationWindow("2026-01-01", "filed", "2026-01-16");
+    expect(day15.nextPhaseDaysLeft).toBe(day15.daysLeft);
   });
 });

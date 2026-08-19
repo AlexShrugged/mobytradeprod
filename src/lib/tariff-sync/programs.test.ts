@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   findProgramConflicts,
+  findSailPartitioned,
   inferProgram,
   planProgramResolution,
   type LiveProgramMeasure,
@@ -75,6 +76,8 @@ function liveMeasure(over: Partial<LiveProgramMeasure>): LiveProgramMeasure {
     endDate: null,
     scope: "all_products",
     prefixes: [],
+    sailedOnOrAfter: null,
+    sailedOnOrBefore: null,
     ...over,
   };
 }
@@ -90,7 +93,8 @@ function proposal(
   | "scope"
   | "prefixes"
   | "exemption"
-  | "onConflict"
+  | "sailedOnOrAfter"
+  | "sailedOnOrBefore"
 > {
   return {
     program: "ieepa-reciprocal",
@@ -100,6 +104,8 @@ function proposal(
     scope: "all_products",
     prefixes: [],
     exemption: false,
+    sailedOnOrAfter: null,
+    sailedOnOrBefore: null,
     ...over,
   };
 }
@@ -188,6 +194,60 @@ describe("findProgramConflicts", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("a null effective date counts as overlapping (pre-review note)", () => {
+    // Before the reviewer confirms dates the window is unsettled — the
+    // review card must still disclose what an overlapping window would
+    // supersede.
+    expect(
+      findProgramConflicts(proposal({ countries: null, effectiveDate: null }), [
+        liveMeasure({}),
+      ]).map((c) => c.id),
+    ).toEqual(["live-1"]);
+    // A closed live window is still not a conflict for a dated proposal.
+    expect(
+      findProgramConflicts(proposal({ countries: null }), [
+        liveMeasure({ endDate: "2026-02-24" }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("disjoint sail windows partition the pair instead of conflicting", () => {
+    // The on-the-water cutover: old rate for goods laden through 6/15, new
+    // rate for goods laden 6/16 on. A sail-date supersession the window
+    // model represents as two simultaneously live measures.
+    const onTheWater = liveMeasure({
+      id: "old-rate",
+      countries: null,
+      sailedOnOrBefore: "2026-06-15",
+    });
+    const newRate = proposal({
+      countries: null,
+      sailedOnOrAfter: "2026-06-16",
+    });
+    expect(findProgramConflicts(newRate, [onTheWater])).toEqual([]);
+    expect(findSailPartitioned(newRate, [onTheWater]).map((c) => c.id)).toEqual(
+      ["old-rate"],
+    );
+
+    // Sail windows that SHARE a lading date do conflict: both claim goods
+    // laden on 6/15.
+    const overlappingSail = proposal({
+      countries: null,
+      sailedOnOrAfter: "2026-06-15",
+    });
+    expect(
+      findProgramConflicts(overlappingSail, [onTheWater]).map((c) => c.id),
+    ).toEqual(["old-rate"]);
+    expect(findSailPartitioned(overlappingSail, [onTheWater])).toEqual([]);
+
+    // No sail condition on either side = no partition to rely on.
+    expect(
+      findProgramConflicts(proposal({ countries: null }), [
+        liveMeasure({}),
+      ]).map((c) => c.id),
+    ).toEqual(["live-1"]);
+  });
 });
 
 describe("planProgramResolution", () => {
@@ -203,25 +263,13 @@ describe("planProgramResolution", () => {
     expect(planProgramResolution(proposal({}), [])).toEqual({ kind: "proceed" });
   });
 
-  it("fails closed without an explicit resolution", () => {
-    const res = planProgramResolution(proposal({}), [conflict]);
-    expect(res.kind).toBe("error");
-    if (res.kind === "error") {
-      expect(res.message).toContain("9903.01.63");
-      expect(res.message).toContain("supersede");
-    }
-  });
-
-  it("supersede closes the conflicts and links the latest as predecessor", () => {
+  it("supersedes automatically: closes the conflicts, links the latest as predecessor", () => {
     const earlier = liveMeasure({
       id: "old-baseline",
       countries: ["CN"],
       effectiveDate: "2025-02-04",
     });
-    const res = planProgramResolution(
-      proposal({ onConflict: "supersede" }),
-      [earlier, conflict],
-    );
+    const res = planProgramResolution(proposal({}), [earlier, conflict]);
     expect(res).toEqual({
       kind: "supersede",
       closeMeasureIds: ["old-baseline", "cn34"],
@@ -229,22 +277,17 @@ describe("planProgramResolution", () => {
     });
   });
 
-  it("supersede refuses conflicts that start on or after the successor", () => {
+  it("fails closed on conflicts that start on or after the successor", () => {
     const later = liveMeasure({
       id: "later",
+      ch99Code: "9903.01.64",
       countries: ["CN"],
       effectiveDate: "2026-08-07",
     });
-    const res = planProgramResolution(
-      proposal({ onConflict: "supersede" }),
-      [later],
-    );
+    const res = planProgramResolution(proposal({}), [later]);
     expect(res.kind).toBe("error");
-  });
-
-  it("stack inserts alongside (the on-the-water pair escape hatch)", () => {
-    expect(
-      planProgramResolution(proposal({ onConflict: "stack" }), [conflict]),
-    ).toEqual({ kind: "proceed" });
+    if (res.kind === "error") {
+      expect(res.message).toContain("9903.01.64");
+    }
   });
 });

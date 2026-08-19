@@ -22,6 +22,7 @@ export function EditableCell({
   placeholder = "Click to add",
   className,
   inputClassName,
+  expandOnEdit = false,
 }: {
   /** PATCH target; body is { [field]: value | null }. */
   endpoint: string;
@@ -34,6 +35,10 @@ export function EditableCell({
   placeholder?: string;
   className?: string;
   inputClassName?: string;
+  /** For width-capped cells: the edit input floats over the columns to the
+   *  right at a fixed wide size, so a truncated value is editable in full
+   *  without reflowing the table. */
+  expandOnEdit?: boolean;
 }) {
   const router = useRouter();
   const [editing, setEditing] = React.useState(false);
@@ -73,7 +78,7 @@ export function EditableCell({
   };
 
   if (editing) {
-    return (
+    const input = (
       <input
         type={type}
         autoFocus
@@ -91,9 +96,25 @@ export function EditableCell({
         step={type === "number" ? "0.01" : undefined}
         className={cn(
           "w-full min-w-16 rounded border bg-background px-1.5 py-0.5 text-sm outline-none focus:ring-1 focus:ring-ring",
+          expandOnEdit &&
+            "absolute inset-y-0 left-0 z-10 w-[32rem] max-w-[75vw] shadow-md",
           inputClassName,
         )}
       />
+    );
+    if (!expandOnEdit) return input;
+    return (
+      <div className={cn("relative", className)}>
+        {/* Invisible copy of the display content holds the cell's exact
+            footprint while the input floats above it. */}
+        <div
+          className="invisible flex items-center gap-1.5 px-1 py-0.5 text-sm"
+          aria-hidden
+        >
+          <span className="truncate">{value === "" ? placeholder : value}</span>
+        </div>
+        {input}
+      </div>
     );
   }
 
@@ -104,7 +125,9 @@ export function EditableCell({
         e.stopPropagation();
         if (!saving) begin();
       }}
-      title="Click to edit"
+      // The full value on hover — the visible text may be truncated by a
+      // width-capped cell. The pencil already signals editability.
+      title={value === "" ? "Click to edit" : value}
       className={cn(
         "group flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 hover:bg-muted/60",
         saving && "opacity-50",
@@ -112,7 +135,9 @@ export function EditableCell({
         className,
       )}
     >
-      <span className="min-w-0">{empty ? placeholder : (display ?? value)}</span>
+      <span className="min-w-0 truncate">
+        {empty ? placeholder : (display ?? value)}
+      </span>
       {/* The editability signal — always faintly present, full on hover. */}
       <Pencil
         aria-hidden

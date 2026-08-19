@@ -93,6 +93,8 @@ export type LiveProgramMeasure = {
   endDate: string | null;
   scope: MeasureScopeValue;
   prefixes: string[];
+  sailedOnOrAfter: string | null;
+  sailedOnOrBefore: string | null;
 };
 
 function windowsOverlap(
@@ -118,6 +120,77 @@ function productScopesIntersect(
   return prefixSetsIntersect(aPrefixes, bPrefixes);
 }
 
+type ProposedOverlapFields = Pick<
+  ProposedMeasureChange,
+  | "program"
+  | "countries"
+  | "effectiveDate"
+  | "endDate"
+  | "scope"
+  | "prefixes"
+  | "exemption"
+  | "sailedOnOrAfter"
+  | "sailedOnOrBefore"
+>;
+
+type SailWindow = {
+  sailedOnOrAfter: string | null;
+  sailedOnOrBefore: string | null;
+};
+
+/** Provably no lading date satisfies both measures: one side's sail window
+ *  ends strictly before the other's begins. Null bounds are open — a
+ *  measure with no sail conditions claims every sail date and is never
+ *  disjoint from anything. */
+function sailWindowsDisjoint(a: SailWindow, b: SailWindow): boolean {
+  return (
+    (a.sailedOnOrBefore !== null &&
+      b.sailedOnOrAfter !== null &&
+      a.sailedOnOrBefore < b.sailedOnOrAfter) ||
+    (b.sailedOnOrBefore !== null &&
+      a.sailedOnOrAfter !== null &&
+      b.sailedOnOrBefore < a.sailedOnOrAfter)
+  );
+}
+
+/** Same program, same country tier, intersecting product scope, entry
+ *  windows that overlap (a null proposed effective date counts as
+ *  overlapping — pre-review, the window is simply not settled yet).
+ *  Sail conditions are NOT considered here. */
+function overlapsIgnoringSail(
+  proposed: ProposedOverlapFields,
+  m: LiveProgramMeasure,
+): boolean {
+  if (m.program !== proposed.program) return false;
+  if (
+    proposed.effectiveDate !== null &&
+    !windowsOverlap(
+      proposed.effectiveDate,
+      proposed.endDate,
+      m.effectiveDate,
+      m.endDate,
+    )
+  ) {
+    return false;
+  }
+  if (
+    !productScopesIntersect(
+      proposed.scope,
+      proposed.prefixes,
+      m.scope,
+      m.prefixes,
+    )
+  ) {
+    return false;
+  }
+  if (proposed.countries === null || m.countries === null) {
+    // Same-tier only: worldwide vs worldwide conflicts, worldwide vs
+    // country-specific coexists by design.
+    return proposed.countries === null && m.countries === null;
+  }
+  return proposed.countries.some((c) => m.countries!.includes(c));
+}
+
 /**
  * Live measures a proposed create_measure genuinely collides with: same
  * program, overlapping entry windows, intersecting product scope, and the
@@ -129,52 +202,40 @@ function productScopesIntersect(
  * overlaps are same-tier — two worldwide baselines, or two headings
  * claiming the same country — which is exactly how the stacked-IEEPA
  * incident was minted.
+ *
+ * A pair whose sail windows are provably disjoint is NOT a conflict either:
+ * that is a sail-date cutover (the on-the-water pattern — the old rate
+ * lingers only for goods already laden), a supersession the entry-date
+ * window model must represent as two simultaneously live measures. The
+ * calculator picks exactly one per entry by sail date. See
+ * findSailPartitioned for surfacing these to the reviewer.
  */
 export function findProgramConflicts(
-  proposed: Pick<
-    ProposedMeasureChange,
-    | "program"
-    | "countries"
-    | "effectiveDate"
-    | "endDate"
-    | "scope"
-    | "prefixes"
-    | "exemption"
-  >,
+  proposed: ProposedOverlapFields,
   live: LiveProgramMeasure[],
 ): LiveProgramMeasure[] {
   if (proposed.exemption) return [];
-  if (!proposed.program || !proposed.effectiveDate) return [];
+  if (!proposed.program) return [];
 
-  return live.filter((m) => {
-    if (m.program !== proposed.program) return false;
-    if (
-      !windowsOverlap(
-        proposed.effectiveDate!,
-        proposed.endDate,
-        m.effectiveDate,
-        m.endDate,
-      )
-    ) {
-      return false;
-    }
-    if (
-      !productScopesIntersect(
-        proposed.scope,
-        proposed.prefixes,
-        m.scope,
-        m.prefixes,
-      )
-    ) {
-      return false;
-    }
-    if (proposed.countries === null || m.countries === null) {
-      // Same-tier only: worldwide vs worldwide conflicts, worldwide vs
-      // country-specific coexists by design.
-      return proposed.countries === null && m.countries === null;
-    }
-    return proposed.countries.some((c) => m.countries!.includes(c));
-  });
+  return live.filter(
+    (m) => overlapsIgnoringSail(proposed, m) && !sailWindowsDisjoint(proposed, m),
+  );
+}
+
+/** Live measures the proposal would collide with EXCEPT that disjoint sail
+ *  windows partition them — the pair coexists, and per entry the sail date
+ *  picks the one that charges. Review-card note material only; these need
+ *  no resolution at apply. */
+export function findSailPartitioned(
+  proposed: ProposedOverlapFields,
+  live: LiveProgramMeasure[],
+): LiveProgramMeasure[] {
+  if (proposed.exemption) return [];
+  if (!proposed.program) return [];
+
+  return live.filter(
+    (m) => overlapsIgnoringSail(proposed, m) && sailWindowsDisjoint(proposed, m),
+  );
 }
 
 export type ProgramResolution =
@@ -192,54 +253,43 @@ export type ProgramResolution =
 
 /**
  * Pure decision for an insert_new apply against its program conflicts.
- * No conflicts → proceed. Conflicts need the reviewer's explicit choice:
- * "supersede" (close the old windows, link lineage) or "stack" (both
- * really owe — e.g. a sail-partitioned pair). Anything else fails closed.
+ * No conflicts → proceed. Conflicts SUPERSEDE automatically: a same-tier,
+ * same-scope collision inside one program has exactly one legal meaning —
+ * the new measure replaces the old ones, whose windows close the day
+ * before it starts (the review cards disclose this per line before
+ * approval). The only fail-closed case left is a conflict that starts on
+ * or after the proposal — "superseding" it would extend history backwards,
+ * so the dates must be wrong. Sail-partitioned pairs never reach here
+ * (findProgramConflicts excludes them).
  */
 export function planProgramResolution(
-  proposed: Pick<
-    ProposedMeasureChange,
-    "program" | "effectiveDate" | "onConflict"
-  >,
+  proposed: Pick<ProposedMeasureChange, "program" | "effectiveDate">,
   conflicts: LiveProgramMeasure[],
 ): ProgramResolution {
   if (conflicts.length === 0) return { kind: "proceed" };
 
-  const list = conflicts
-    .map((c) => `${c.name} (${c.ch99Code}, effective ${c.effectiveDate})`)
-    .join("; ");
-
-  if (proposed.onConflict === "stack") return { kind: "proceed" };
-
-  if (proposed.onConflict === "supersede") {
-    const notEarlier = conflicts.filter(
-      (c) => c.effectiveDate >= proposed.effectiveDate!,
-    );
-    if (notEarlier.length > 0) {
-      return {
-        kind: "error",
-        message:
-          `Cannot supersede a measure that starts on or after this one's ` +
-          `effective date (${proposed.effectiveDate}): ${list}. Fix the ` +
-          `dates, or end the newer measure first.`,
-      };
-    }
-    const latest = conflicts.reduce((w, c) =>
-      c.effectiveDate > w.effectiveDate ? c : w,
-    );
+  const notEarlier = conflicts.filter(
+    (c) => c.effectiveDate >= proposed.effectiveDate!,
+  );
+  if (notEarlier.length > 0) {
+    const list = notEarlier
+      .map((c) => `${c.name} (${c.ch99Code}, effective ${c.effectiveDate})`)
+      .join("; ");
     return {
-      kind: "supersede",
-      closeMeasureIds: conflicts.map((c) => c.id),
-      predecessorId: latest.id,
+      kind: "error",
+      message:
+        `Overlaps live ${proposed.program} measure(s) that start on or ` +
+        `after this one's effective date (${proposed.effectiveDate}): ` +
+        `${list}. A new measure only supersedes earlier ones. Fix the ` +
+        `dates, or end the newer measure first.`,
     };
   }
-
+  const latest = conflicts.reduce((w, c) =>
+    c.effectiveDate > w.effectiveDate ? c : w,
+  );
   return {
-    kind: "error",
-    message:
-      `Overlaps live ${proposed.program} measure(s) for the same countries ` +
-      `and products: ${list}. Choose "supersede" (this measure replaces ` +
-      `them — their windows close the day before it starts) or "stack" ` +
-      `(both really apply, e.g. an on-the-water pair), then re-approve.`,
+    kind: "supersede",
+    closeMeasureIds: conflicts.map((c) => c.id),
+    predecessorId: latest.id,
   };
 }

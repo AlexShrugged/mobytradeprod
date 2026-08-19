@@ -76,12 +76,6 @@ export type ProposedMeasureChange = {
    *  null countries without it — the fail-open that minted worldwide
    *  measures out of unparsed per-country headings. */
   worldwide?: boolean;
-  /** Reviewer's resolution when this create_measure overlaps live
-   *  same-program measures (same country tier + product scope + window):
-   *  "supersede" closes their windows at effective − 1 and links lineage;
-   *  "stack" inserts alongside (both really owe — e.g. a sail-partitioned
-   *  pair). Absent + conflicts = apply fails closed. */
-  onConflict?: "supersede" | "stack" | null;
   scope: MeasureScopeValue;
   countries: string[] | null;
   /** Annex-style carve-outs ("all countries except…"). Optional — absent on

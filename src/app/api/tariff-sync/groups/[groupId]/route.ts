@@ -50,8 +50,6 @@ const bodySchema = z.discriminatedUnion("action", [
     /** Family-level confirmation that null-country members really apply to
      *  every country of origin (the worldwide gate's bulk answer). */
     confirmWorldwide: z.boolean().optional(),
-    /** One supersede/stack answer folded into members that carry none. */
-    defaultOnConflict: z.enum(["supersede", "stack"]).optional(),
     /** Unchecked members — rejected, finalized by this same approval. */
     skipRevisionIds: z.array(z.string()).optional(),
     notes: z.string().nullish(),
@@ -149,7 +147,6 @@ export async function PATCH(
         memberEffectiveDates: body.memberEffectiveDates,
         memberPrograms: body.memberPrograms,
         confirmWorldwide: body.confirmWorldwide,
-        defaultOnConflict: body.defaultOnConflict,
         skipRevisionIds: body.skipRevisionIds,
         decidedBy: actor,
       });
@@ -188,6 +185,9 @@ export async function PATCH(
         action: "applied" as const,
         applied: applied.applied,
         rejected: applied.rejected,
+        // Live measures this apply auto-superseded — surfaced in the toast
+        // so the reviewer sees exactly which windows closed.
+        superseded: applied.superseded,
         targets,
         analysesQueued,
       };

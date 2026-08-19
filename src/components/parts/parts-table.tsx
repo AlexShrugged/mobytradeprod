@@ -104,7 +104,10 @@ export function PartsTable({
       {
         // The part's human-readable identity. `name` is always populated
         // (the SKU code alone identifies nothing); `description` stays an
-        // expansion-level detail.
+        // expansion-level detail. Width-capped: imported catalogs carry
+        // very long names that would otherwise stretch the whole table —
+        // truncated here (full name on hover), and the edit input floats
+        // over the row so the full name is editable in place.
         accessorKey: "name",
         header: "Name",
         cell: ({ row }) => (
@@ -113,6 +116,8 @@ export function PartsTable({
             field="name"
             value={row.original.name}
             placeholder="add"
+            className="max-w-96"
+            expandOnEdit
           />
         ),
       },

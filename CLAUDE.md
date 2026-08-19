@@ -49,11 +49,17 @@ optional `TARIFF_EXTRACTOR_MODEL`, deterministic stub otherwise; merge rules in
 `extractor/merge.ts` — deterministic values win, sub-threshold confidence stays
 evidence-only). Create_measure applies are gated three ways (`apply.ts` + `programs.ts`): null
 countries need the reviewer's explicit worldwide confirmation; a same-program
-overlap (same country tier + product scope + window) fails closed until the
-reviewer picks supersede (closes the old windows at eff−1, links
-`predecessor_id` across codes) or stack; and programs are proposed by
+overlap (same country tier + product scope + window) AUTO-SUPERSEDES on apply
+(closes the old windows at eff−1, links `predecessor_id`) — the review cards
+disclose the targets per line ("Supersedes …", derived on read) and the apply
+response reports what closed, while a pair with provably disjoint sail windows
+is no conflict at all (a sail-date cutover: both stay live, the calculator
+picks one per entry) and the only fail-closed case left is a conflict starting
+on or after the proposal (broken dates); and programs are proposed by
 `inferProgram` (deterministic, null when unsure), reviewer-editable on the
-cards. `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
+cards. There is no "stack" choice: within one program nothing ever charges
+twice, so coexistence is only ever the sail-partition case, which the
+detector now recognizes itself. `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
 `--apply` to stage) bootstraps the queue from `../moby`'s hand-curated measures. Base
 windows still stamped release `"SEED"` are demo approximations — the first certified
 release corrects them in place instead of tiling them into history. Reference reads go

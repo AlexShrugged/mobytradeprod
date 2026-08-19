@@ -195,7 +195,7 @@ export async function applyAnnouncement(
 export async function applyRevision(
   db: DbClient,
   revisionId: string,
-): Promise<{ measureId: string | null } | null> {
+): Promise<{ measureId: string | null; superseded: SupersededMeasure[] } | null> {
   const rev = await db.query.measureRevisions.findFirst({
     where: eq(schema.measureRevisions.id, revisionId),
   });
@@ -312,6 +312,9 @@ export type GroupApplyResult = {
    *  still exists in USITC's next release. */
   rejected: number;
   changedMeasureIds: string[];
+  /** Live measures whose windows this apply closed (auto-supersede),
+   *  reported back to the reviewer's toast. */
+  superseded: SupersededMeasure[];
 };
 
 /** Apply one approved adoption group, ALL-OR-NOTHING: any member that fails
@@ -343,9 +346,6 @@ export async function applyRevisionGroup(
      *  really apply to every country of origin (the family-level answer to
      *  the per-measure worldwide gate). */
     confirmWorldwide?: boolean;
-    /** Folded into members that carry no conflict resolution of their own
-     *  — one supersede/stack answer for the whole family. */
-    defaultOnConflict?: "supersede" | "stack";
     /** Unchecked members — rejected as part of this approval. */
     skipRevisionIds?: string[];
     /** Actor recorded on the per-member rejection items. */
@@ -390,6 +390,7 @@ export async function applyRevisionGroup(
     applied: 0,
     rejected: 0,
     changedMeasureIds: [],
+    superseded: [],
   };
   const failures: { ch99Code: string | null; error: string }[] = [];
 
@@ -470,10 +471,6 @@ export async function applyRevisionGroup(
       proposed.worldwide = true;
       folded = true;
     }
-    if (proposed.onConflict == null && opts.defaultOnConflict) {
-      proposed.onConflict = opts.defaultOnConflict;
-      folded = true;
-    }
     if (folded) {
       await db
         .update(schema.measureRevisions)
@@ -493,6 +490,7 @@ export async function applyRevisionGroup(
         .where(eq(schema.measureRevisions.id, rev.id));
       result.applied += 1;
       if (applied.measureId) result.changedMeasureIds.push(applied.measureId);
+      result.superseded.push(...applied.superseded);
     } catch (err) {
       if (err instanceof ApplyValidationError) {
         failures.push({ ch99Code: rev.ch99Code, error: err.message });
@@ -518,12 +516,20 @@ export async function applyRevisionGroup(
   return result;
 }
 
+/** A live measure an apply closed (window ended at successor effective − 1)
+ *  because the applied measure supersedes it. Reported back to the reviewer. */
+export type SupersededMeasure = {
+  ch99Code: string;
+  name: string;
+  effectiveDate: string;
+};
+
 async function applyOne(
   db: DbClient,
   rev: schema.MeasureRevision,
   proposed: ProposedMeasureChange,
   announcement: schema.TariffAnnouncement,
-): Promise<{ measureId: string | null }> {
+): Promise<{ measureId: string | null; superseded: SupersededMeasure[] }> {
   const live = rev.targetMeasureId
     ? await db.query.tradeMeasures.findFirst({
         where: eq(schema.tradeMeasures.id, rev.targetMeasureId),
@@ -559,13 +565,21 @@ async function applyOne(
 
   switch (plan.action) {
     case "insert_new": {
-      // Same-program collision gate (fail closed): a new heading claiming
-      // the same countries, products, and window as a live measure of its
-      // program needs the reviewer's explicit supersede-or-stack call.
-      // Members of one group apply sequentially in the same transaction, so
-      // within-batch collisions are caught here too. Null program = lineage
-      // unknown: no gate (and the calculator never dedupes it either).
+      // Same-program collision gate: a new heading claiming the same
+      // countries, products, and window as live measures of its program
+      // SUPERSEDES them — their windows close at effective − 1, lineage
+      // links to the latest. The review cards disclose the targets per
+      // line before approval; the only fail-closed case left is broken
+      // dates (a conflict starting on or after the proposal). Sail-
+      // partitioned pairs are not conflicts — they coexist and the
+      // calculator picks one per entry by sail date. Members of one group
+      // apply sequentially in the same transaction, so within-batch
+      // collisions are caught here too (same-date ones fail on the date
+      // guard instead of silently chain-superseding). Null program =
+      // lineage unknown: no gate (and the calculator never dedupes it
+      // either).
       let predecessorId: string | null = null;
+      const superseded: SupersededMeasure[] = [];
       if (!proposed.exemption && proposed.program) {
         const conflicts = findProgramConflicts(
           proposed,
@@ -588,6 +602,13 @@ async function applyOne(
               inArray(schema.tradeMeasures.id, resolution.closeMeasureIds),
             );
           predecessorId = resolution.predecessorId;
+          for (const c of conflicts) {
+            superseded.push({
+              ch99Code: c.ch99Code,
+              name: c.name,
+              effectiveDate: c.effectiveDate,
+            });
+          }
         }
       }
       const [measure] = await db
@@ -596,7 +617,7 @@ async function applyOne(
         .returning();
       await insertCh99Row(db, rev.ch99Code!, proposed, measure.id);
       await insertPrefixes(db, measure.id, proposed.prefixes);
-      return { measureId: measure.id };
+      return { measureId: measure.id, superseded };
     }
 
     case "tile": {
@@ -633,7 +654,7 @@ async function applyOne(
         });
       }
       await insertPrefixes(db, successor.id, proposed.prefixes);
-      return { measureId: successor.id };
+      return { measureId: successor.id, superseded: [] };
     }
 
     case "update_in_place": {
@@ -657,7 +678,7 @@ async function applyOne(
             ),
           );
       }
-      return { measureId: live!.id };
+      return { measureId: live!.id, superseded: [] };
     }
 
     case "end": {
@@ -665,7 +686,7 @@ async function applyOne(
         .update(schema.tradeMeasures)
         .set({ endDate: plan.endDate, updatedAt: new Date() })
         .where(eq(schema.tradeMeasures.id, live!.id));
-      return { measureId: live!.id };
+      return { measureId: live!.id, superseded: [] };
     }
   }
 }
@@ -674,7 +695,7 @@ async function applyOne(
  *  same-code tiling, a cross-code supersede does NOT copy the predecessor's
  *  exemption rows — a new heading defines its own carve-outs in its notice,
  *  and inheriting the old code's exclusions could wrongly excuse charges. */
-async function loadProgramMeasures(
+export async function loadProgramMeasures(
   db: DbClient,
   program: string,
 ): Promise<LiveProgramMeasure[]> {
@@ -714,6 +735,8 @@ async function loadProgramMeasures(
     endDate: m.endDate,
     scope: m.scope,
     prefixes: prefixesByMeasure.get(m.id) ?? [],
+    sailedOnOrAfter: m.sailedOnOrAfter,
+    sailedOnOrBefore: m.sailedOnOrBefore,
   }));
 }
 

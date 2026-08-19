@@ -77,11 +77,14 @@ export default async function VariancePage() {
   // one row per line item.
   const { recoverable, exposure } = dedupedImpactSums(openRows);
   const { active, archived } = partitionVarianceRows(rows);
+  // Phase-aware, matching the table's Window column: the submission
+  // countdown for unsubmitted entries, liquidation for submitted ones.
   const nearest = openRows
-    .filter((r) => !r.window.closed && r.window.daysLeft !== null)
+    .filter((r) => !r.window.closed && r.window.nextPhaseDaysLeft !== null)
     .reduce<VarianceQueueRow | null>(
       (best, r) =>
-        best === null || r.window.daysLeft! < best.window.daysLeft!
+        best === null ||
+        r.window.nextPhaseDaysLeft! < best.window.nextPhaseDaysLeft!
           ? r
           : best,
       null,
@@ -113,8 +116,8 @@ export default async function VariancePage() {
         <StatTile
           label="Nearest window"
           value={
-            nearest?.window.daysLeft != null
-              ? `${nearest.window.daysLeft}d`
+            nearest?.window.nextPhaseDaysLeft != null
+              ? `${nearest.window.nextPhaseDaysLeft}d`
               : "—"
           }
         />

@@ -3,6 +3,12 @@ import "server-only";
 import { and, count, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 import { db, schema } from "@/lib/db";
+import { loadProgramMeasures } from "@/lib/tariff-sync/apply";
+import {
+  findProgramConflicts,
+  findSailPartitioned,
+  inferProgram,
+} from "@/lib/tariff-sync/programs";
 import type {
   BaseReleaseProposalDisplay,
   LiveMeasureSnapshot,
@@ -83,6 +89,96 @@ export async function getTariffStatus(): Promise<TariffStatus> {
 
 // ------------------------------------------------------------ review queue
 
+/** A live same-program measure a staged create_measure overlaps, derived at
+ *  read time for the review-card line notes. "supersedes": approving closes
+ *  its window the day before the new effective date. "coexists_sail":
+ *  disjoint sail windows partition the pair, both stay live and the
+ *  calculator picks one per entry by sail date. */
+export type OverlapNote = {
+  kind: "supersedes" | "coexists_sail";
+  ch99Code: string;
+  name: string;
+  /** The overlapped live measure's window start. */
+  effectiveDate: string;
+  sailedOnOrAfter: string | null;
+  sailedOnOrBefore: string | null;
+};
+
+/** Overlap notes per open create_measure revision. Advisory: computed from
+ *  the STAGED proposal (an unset effective date counts as overlapping, so
+ *  the note shows before the reviewer confirms dates); the authoritative
+ *  check reruns at apply with the confirmed values and the response reports
+ *  what was actually superseded. */
+async function overlapNotesByRevision(
+  revisions: {
+    id: string;
+    changeType: schema.RevisionChangeTypeValue;
+    ch99Code: string | null;
+    proposed: ProposedMeasureChange;
+    evidence: RevisionEvidence;
+  }[],
+): Promise<Map<string, OverlapNote[]>> {
+  const notes = new Map<string, OverlapNote[]>();
+  const candidates = revisions
+    .filter((r) => r.changeType === "create_measure" && !r.proposed.exemption)
+    .map((r) => ({
+      ...r,
+      // Same fallback the card and apply use for pre-inference stagings.
+      program:
+        r.proposed.program !== undefined
+          ? r.proposed.program
+          : inferProgram(
+              r.proposed.authority,
+              r.ch99Code ?? "",
+              r.evidence.description ?? "",
+            ),
+    }))
+    .filter((r) => r.program != null);
+  if (candidates.length === 0) return notes;
+
+  const programs = [...new Set(candidates.map((r) => r.program!))];
+  const liveByProgram = new Map(
+    await Promise.all(
+      programs.map(
+        async (p) => [p, await loadProgramMeasures(db, p)] as const,
+      ),
+    ),
+  );
+
+  for (const r of candidates) {
+    const live = liveByProgram.get(r.program!) ?? [];
+    if (live.length === 0) continue;
+    const proposed = {
+      ...r.proposed,
+      program: r.program,
+      prefixes: r.proposed.prefixes ?? [],
+    };
+    const found = [
+      ...findProgramConflicts(proposed, live).map((m) => ({
+        kind: "supersedes" as const,
+        ...m,
+      })),
+      ...findSailPartitioned(proposed, live).map((m) => ({
+        kind: "coexists_sail" as const,
+        ...m,
+      })),
+    ];
+    if (found.length === 0) continue;
+    notes.set(
+      r.id,
+      found.map((m) => ({
+        kind: m.kind,
+        ch99Code: m.ch99Code,
+        name: m.name,
+        effectiveDate: m.effectiveDate,
+        sailedOnOrAfter: m.sailedOnOrAfter,
+        sailedOnOrBefore: m.sailedOnOrBefore,
+      })),
+    );
+  }
+  return notes;
+}
+
 export type OpenRevision = {
   reviewItemId: string;
   revisionId: string;
@@ -95,6 +191,9 @@ export type OpenRevision = {
   evidence: RevisionEvidence;
   /** Live measure state at diff time, for the side-by-side diff view. */
   liveSnapshot: LiveMeasureSnapshot | null;
+  /** Live same-program measures this create_measure overlaps — what
+   *  approving will supersede, or coexist with when sail-partitioned. */
+  overlaps: OverlapNote[];
   announcement: {
     id: string;
     source: schema.AnnouncementSourceValue;
@@ -125,8 +224,18 @@ export async function getOpenRevisions(): Promise<OpenRevision[]> {
   });
   const itemByRevision = new Map(items.map((i) => [i.subjectId, i]));
 
-  return revisions
-    .filter((r) => r.appliedAt === null)
+  const open = revisions.filter((r) => r.appliedAt === null);
+  const overlapNotes = await overlapNotesByRevision(
+    open.map((r) => ({
+      id: r.id,
+      changeType: r.changeType,
+      ch99Code: r.ch99Code,
+      proposed: r.proposed as ProposedMeasureChange,
+      evidence: r.evidence as RevisionEvidence,
+    })),
+  );
+
+  return open
     .sort(
       (a, b) =>
         b.announcement.fetchedAt.getTime() - a.announcement.fetchedAt.getTime() ||
@@ -141,6 +250,7 @@ export async function getOpenRevisions(): Promise<OpenRevision[]> {
       proposed: r.proposed as ProposedMeasureChange,
       evidence: r.evidence as RevisionEvidence,
       liveSnapshot: r.liveSnapshot as LiveMeasureSnapshot | null,
+      overlaps: overlapNotes.get(r.id) ?? [],
       announcement: {
         id: r.announcement.id,
         source: r.announcement.source,
@@ -168,6 +278,9 @@ export type OpenGroupMember = {
   /** Extraction confidence chips for the member row (absent for stub-less
    *  or pre-extraction stagings). */
   extraction?: import("@/lib/tariff-sync/extractor/types").MeasureExtraction;
+  /** Live same-program measures this member overlaps — what approving will
+   *  supersede, or coexist with when sail-partitioned. */
+  overlaps: OverlapNote[];
 };
 
 export type OpenMeasureGroup = {
@@ -228,6 +341,16 @@ export async function getOpenMeasureGroups(): Promise<OpenMeasureGroup[]> {
     membersByGroup.set(m.groupId, list);
   }
 
+  const overlapNotes = await overlapNotesByRevision(
+    members.map((m) => ({
+      id: m.id,
+      changeType: m.changeType,
+      ch99Code: m.ch99Code,
+      proposed: m.proposed as ProposedMeasureChange,
+      evidence: m.evidence as RevisionEvidence,
+    })),
+  );
+
   return groups
     .map((g) => ({
       reviewItemId: itemByGroup.get(g.id)!.id,
@@ -251,6 +374,7 @@ export async function getOpenMeasureGroups(): Promise<OpenMeasureGroup[]> {
             countriesExcluded: proposed.countriesExcluded ?? null,
             effectiveDate: proposed.effectiveDate,
             extraction: evidence.extraction,
+            overlaps: overlapNotes.get(m.id) ?? [],
           };
         }),
       announcement: {

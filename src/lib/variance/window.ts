@@ -48,6 +48,11 @@ export type LiquidationWindow = {
    *  estimate for a submitted one; null once liquidated (terminal) or
    *  when the entry has no date. */
   nextPhaseDate: string | null;
+  /** Calendar days from today to nextPhaseDate — the phase-aware countdown:
+   *  days until submission for an unsubmitted entry, days to the liquidation
+   *  estimate (same as daysLeft) for a submitted one; null whenever
+   *  nextPhaseDate is null. */
+  nextPhaseDaysLeft: number | null;
 };
 
 const DAY_MS = 86_400_000;
@@ -67,21 +72,31 @@ export function liquidationWindow(
       closed,
       phase: closed ? "liquidated" : "submitted",
       nextPhaseDate: null,
+      nextPhaseDaysLeft: null,
     };
   const entryMs = Date.parse(`${entryDate}T00:00:00Z`);
   const estMs = entryMs + LIQUIDATION_WINDOW_DAYS * DAY_MS;
   const estDate = isoDay(estMs);
   if (closed)
-    return { estDate, daysLeft: null, closed, phase: "liquidated", nextPhaseDate: null };
+    return {
+      estDate,
+      daysLeft: null,
+      closed,
+      phase: "liquidated",
+      nextPhaseDate: null,
+      nextPhaseDaysLeft: null,
+    };
   const todayMs = Date.parse(`${todayIso}T00:00:00Z`);
   const unsubmitted = (todayMs - entryMs) / DAY_MS < SUBMISSION_WINDOW_DAYS;
+  const nextPhaseMs = unsubmitted
+    ? entryMs + SUBMISSION_WINDOW_DAYS * DAY_MS
+    : estMs;
   return {
     estDate,
     daysLeft: Math.round((estMs - todayMs) / DAY_MS),
     closed,
     phase: unsubmitted ? "unsubmitted" : "submitted",
-    nextPhaseDate: unsubmitted
-      ? isoDay(entryMs + SUBMISSION_WINDOW_DAYS * DAY_MS)
-      : estDate,
+    nextPhaseDate: isoDay(nextPhaseMs),
+    nextPhaseDaysLeft: Math.round((nextPhaseMs - todayMs) / DAY_MS),
   };
 }
