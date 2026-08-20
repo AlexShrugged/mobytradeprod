@@ -10,7 +10,11 @@
 // Sets carveout_trigger_program on the 9903.03.06 exemption rows (every
 // family copy, both sail-tiled 122 windows) to the program of the 990382
 // metals family, resolved FROM the data — the script refuses to guess:
-// no 990382 liability rows, a null program, or mixed programs all abort.
+// no 990382 liability rows, no assigned program at all, or two DIFFERENT
+// non-null programs all abort. Null-program measures (lineage unknown, a
+// human assigns — see the program doctrine) are tolerated with a warning:
+// they can never trigger the displacement, which is the conservative
+// direction (no displacement = duty owed).
 // Then re-audits; the sweep is idempotent by alert_key, so re-running heals.
 //
 //   DATABASE_URL=... npx tsx scripts/apply-section122-carveout.ts          # dry run
@@ -46,15 +50,22 @@ async function run(tx: DbClient, log: (m: string) => void): Promise<number> {
   const measures = await tx.query.tradeMeasures.findMany({
     where: inArray(schema.tradeMeasures.id, measureIds),
   });
-  const programs = [...new Set(measures.map((m) => m.program))];
-  if (programs.length !== 1 || programs[0] === null) {
+  const assigned = [...new Set(measures.map((m) => m.program).filter((p): p is string => p !== null))];
+  if (assigned.length !== 1) {
     throw new Error(
-      `family ${TRIGGER_FAMILY} programs are not a single non-null value: ` +
-        `${JSON.stringify(programs)} — assign the program first, then re-run`,
+      `family ${TRIGGER_FAMILY} carries ${assigned.length} distinct non-null program(s): ` +
+        `${JSON.stringify(assigned)} — need exactly one; assign programs first, then re-run`,
     );
   }
-  const triggerProgram = programs[0];
+  const triggerProgram = assigned[0];
+  const unassigned = measures.filter((m) => m.program === null);
   log(`trigger program (from ${measures.length} ${TRIGGER_FAMILY} measure(s)): ${triggerProgram}`);
+  for (const m of unassigned) {
+    log(
+      `  WARNING: ${m.name} has null program (lineage unknown) — lines it covers ` +
+        `will NOT displace Section 122 until a human assigns its program`,
+    );
+  }
 
   const exemptionRows = await tx.query.htsCodes.findMany({
     where: and(
