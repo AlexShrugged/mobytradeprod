@@ -274,6 +274,7 @@ export default async function EntryDetailPage({
           <AiAnalysisCard
             entryId={entry.id}
             findings={entry.aiFindings}
+            documents={entry.documents}
             analysis={entry.analysis}
           />
 

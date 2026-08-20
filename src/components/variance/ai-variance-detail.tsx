@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { DocumentRail } from "@/components/document-rail";
 import { StatusBadge } from "@/components/status-badge";
 import { AlertActions } from "@/components/variance/alert-actions";
+import { FindingEvidenceList } from "@/components/variance/finding-evidence";
 import { LineLedger } from "@/components/variance/line-ledger";
 import { VarianceNavCard } from "@/components/variance/variance-nav-card";
 import { Badge } from "@/components/ui/badge";
@@ -65,24 +66,6 @@ export function AiVarianceDetailView({
           : best,
       null,
     );
-
-  const fileNameById = new Map(documents.map((d) => [d.id, d.fileName]));
-  const attribution = (e: (typeof finding.evidence)[number]): string => {
-    switch (e.source) {
-      case "document":
-        return e.documentId
-          ? (fileNameById.get(e.documentId) ?? "Document on file")
-          : "Document on file";
-      case "entry":
-        return "Entry as filed";
-      case "reference":
-        return "Reference data";
-      case "calculation":
-        return "Duty calculator";
-      default:
-        return e.source;
-    }
-  };
 
   const isOpen = finding.status === "open";
   const accepted = finding.status === "resolved";
@@ -158,28 +141,10 @@ export function AiVarianceDetailView({
                 {finding.explanation}
               </p>
 
-              {finding.evidence.length > 0 ? (
-                <div>
-                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    Evidence
-                  </h4>
-                  <div className="flex flex-col gap-2.5">
-                    {finding.evidence.map((e, i) => (
-                      <div key={i} className="flex gap-2.5">
-                        <div className="mt-1.5 size-1.5 shrink-0 rounded-full bg-border" />
-                        <div>
-                          <p className="text-sm leading-relaxed">
-                            {e.statement ?? e.quote}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {attribution(e)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
+              <FindingEvidenceList
+                evidence={finding.evidence}
+                documents={documents}
+              />
 
               <div>
                 <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
