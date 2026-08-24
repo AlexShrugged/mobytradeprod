@@ -41,9 +41,18 @@ export async function GET(
 
   const store = getFileStore();
 
+  // Header values must be Latin-1; file names are not (packet children carry
+  // an en dash in "pp. 3–6"). RFC 6266 dual form: pure-ASCII fallback in
+  // filename=, the real name UTF-8 percent-encoded in filename* — so the
+  // header build can never throw on a stored name.
+  const asciiName = doc.fileName
+    .replace(/[^\x20-\x7e]/g, "_")
+    .replace(/["\\]/g, "");
+  const utf8Name = encodeURIComponent(doc.fileName);
+
   const headers = {
     "Content-Type": mimeType,
-    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${doc.fileName.replace(/"/g, "")}"`,
+    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`,
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
   };
