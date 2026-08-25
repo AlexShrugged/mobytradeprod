@@ -3,6 +3,8 @@ import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { auditEntry } from "@/lib/audit/auditor";
 import { db, schema, type DbClient } from "@/lib/db";
 import { normalizeHts } from "@/lib/duty/calculator";
+import { buildSkuIndex, normalizeSku, resolveSku } from "@/lib/parts/sku";
+import { skuKeySql } from "@/lib/parts/sku-sql";
 import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
 import { findOrCreateVendor } from "@/lib/vendors/service";
@@ -184,21 +186,27 @@ export async function linkExtraction(
       return map;
     };
 
-    // (org, sku) → part id for a batch of extracted SKUs, one inArray query.
-    const partIdsBySku = async (rawSkus: (string | null)[]) => {
-      const skus = [
-        ...new Set(rawSkus.filter((s): s is string => s !== null)),
+    // (org, sku) → part for a batch of extracted SKUs, one inArray query.
+    // Matched on the normalized key (parts/sku.ts) — extraction casing or
+    // padding must not orphan a line from its catalog part.
+    const partIndexBySku = async (rawSkus: (string | null)[]) => {
+      const keys = [
+        ...new Set(
+          rawSkus
+            .map((s) => normalizeSku(s))
+            .filter((s): s is string => s !== null),
+        ),
       ];
-      const matched = skus.length
+      const matched = keys.length
         ? await tx.query.parts.findMany({
             where: and(
               eq(schema.parts.orgId, orgId),
-              inArray(schema.parts.sku, skus),
+              inArray(skuKeySql(schema.parts.sku), keys),
             ),
             columns: { id: true, sku: true },
           })
         : [];
-      return new Map(matched.map((p) => [p.sku, p.id]));
+      return buildSkuIndex(matched);
     };
 
     switch (extraction.docType) {
@@ -304,7 +312,7 @@ export async function linkExtraction(
         // with their lines; audit alerts survive via set-null and re-attach
         // by alert_key on the next audit pass.
         if (f.line_items.length > 0) {
-          const partIdBySku = await partIdsBySku(
+          const partIndex = await partIndexBySku(
             f.line_items.map((li) => li.sku),
           );
           const vendorIdByName = await vendorIdsByName(
@@ -322,7 +330,7 @@ export async function linkExtraction(
                 orgId,
                 entryId,
                 lineNumber: li.line_number,
-                partId: li.sku ? (partIdBySku.get(li.sku) ?? null) : null,
+                partId: resolveSku(partIndex, li.sku)?.id ?? null,
                 sku: li.sku,
                 description: li.description,
                 htsCode: li.hts_code,
@@ -664,7 +672,7 @@ export async function linkExtraction(
           .delete(schema.purchaseOrderLines)
           .where(eq(schema.purchaseOrderLines.purchaseOrderId, poId));
         if (f.line_items.length > 0) {
-          const partIdBySku = await partIdsBySku(
+          const partIndex = await partIndexBySku(
             f.line_items.map((li) => li.sku),
           );
           await tx.insert(schema.purchaseOrderLines).values(
@@ -672,7 +680,7 @@ export async function linkExtraction(
               orgId,
               purchaseOrderId: poId,
               lineNumber: li.line_number,
-              partId: partIdBySku.get(li.sku) ?? null,
+              partId: resolveSku(partIndex, li.sku)?.id ?? null,
               sku: li.sku,
               description: li.description,
               countryOfOrigin: toCoo(li.country_of_origin),
@@ -803,7 +811,7 @@ export async function linkExtraction(
           .delete(schema.invoiceLineItems)
           .where(eq(schema.invoiceLineItems.invoiceId, invoiceId));
         if (f.line_items.length > 0) {
-          const partIdBySku = await partIdsBySku(
+          const partIndex = await partIndexBySku(
             f.line_items.map((li) => li.sku),
           );
 
@@ -812,7 +820,7 @@ export async function linkExtraction(
               orgId,
               invoiceId,
               lineNumber: li.line_number,
-              partId: li.sku ? (partIdBySku.get(li.sku) ?? null) : null,
+              partId: resolveSku(partIndex, li.sku)?.id ?? null,
               sku: li.sku,
               description: li.description,
               countryOfOrigin: toCoo(li.country_of_origin),
@@ -920,26 +928,30 @@ export async function adoptEntryLinesForParts(
   if (ids.length === 0) return { linkedLines: 0, auditedEntries: 0 };
 
   // Chunked: a whole-catalog import passes tens of thousands of ids.
-  const partIdBySku = new Map<string, string>();
+  const partRefs: { id: string; sku: string }[] = [];
   for (let i = 0; i < ids.length; i += 5000) {
-    const chunk = await tx.query.parts.findMany({
-      where: and(
-        eq(schema.parts.orgId, orgId),
-        inArray(schema.parts.id, ids.slice(i, i + 5000)),
-      ),
-      columns: { id: true, sku: true },
-    });
-    for (const p of chunk) partIdBySku.set(p.sku, p.id);
+    partRefs.push(
+      ...(await tx.query.parts.findMany({
+        where: and(
+          eq(schema.parts.orgId, orgId),
+          inArray(schema.parts.id, ids.slice(i, i + 5000)),
+        ),
+        columns: { id: true, sku: true },
+      })),
+    );
   }
+  const partIndex = buildSkuIndex(partRefs);
 
-  const skus = [...partIdBySku.keys()];
+  // Orphans match on the normalized key (parts/sku.ts) — same rule as the
+  // processing-time lookup, so a line orphaned only by casing heals here.
+  const keys = [...partIndex.keys()];
   const orphans: { id: string; entryId: string; sku: string | null }[] = [];
-  for (let i = 0; i < skus.length; i += 5000) {
+  for (let i = 0; i < keys.length; i += 5000) {
     const chunk = await tx.query.entryLineItems.findMany({
       where: and(
         eq(schema.entryLineItems.orgId, orgId),
         isNull(schema.entryLineItems.partId),
-        inArray(schema.entryLineItems.sku, skus.slice(i, i + 5000)),
+        inArray(skuKeySql(schema.entryLineItems.sku), keys.slice(i, i + 5000)),
       ),
       columns: { id: true, entryId: true, sku: true },
     });
@@ -948,13 +960,20 @@ export async function adoptEntryLinesForParts(
   if (orphans.length === 0) return { linkedLines: 0, auditedEntries: 0 };
 
   const lineIdsByPart = new Map<string, string[]>();
+  const linkedEntryIds = new Set<string>();
+  let linkedLines = 0;
   for (const line of orphans) {
-    const partId = line.sku ? partIdBySku.get(line.sku) : undefined;
-    if (partId === undefined) continue; // unreachable: matched by inArray
-    const bucket = lineIdsByPart.get(partId);
+    // Null only for case-twin parts with no exact spelling match — leave
+    // those unlinked rather than guess which twin the line means.
+    const part = resolveSku(partIndex, line.sku);
+    if (part === null) continue;
+    const bucket = lineIdsByPart.get(part.id);
     if (bucket) bucket.push(line.id);
-    else lineIdsByPart.set(partId, [line.id]);
+    else lineIdsByPart.set(part.id, [line.id]);
+    linkedEntryIds.add(line.entryId);
+    linkedLines++;
   }
+  if (linkedLines === 0) return { linkedLines: 0, auditedEntries: 0 };
   for (const [partId, lineIds] of lineIdsByPart) {
     for (let i = 0; i < lineIds.length; i += 5000) {
       await tx
@@ -964,9 +983,9 @@ export async function adoptEntryLinesForParts(
     }
   }
 
-  const entryIds = [...new Set(orphans.map((l) => l.entryId))];
+  const entryIds = [...linkedEntryIds];
   for (const entryId of entryIds) {
     await auditEntry(tx, orgId, entryId);
   }
-  return { linkedLines: orphans.length, auditedEntries: entryIds.length };
+  return { linkedLines, auditedEntries: entryIds.length };
 }

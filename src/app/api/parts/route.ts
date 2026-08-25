@@ -4,6 +4,8 @@ import { z } from "zod";
 
 import { db, schema } from "@/lib/db";
 import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
+import { normalizeSku } from "@/lib/parts/sku";
+import { skuKeySql } from "@/lib/parts/sku-sql";
 import { adoptEntryLinesForParts } from "@/lib/processing/linker";
 import { findOrCreateVendor } from "@/lib/vendors/service";
 
@@ -51,15 +53,17 @@ export async function POST(request: Request) {
   }
   const input = parsed.data;
 
+  // Duplicate check on the normalized key (parts/sku.ts): "abc" and "ABC"
+  // are the same part — case twins would make entry-line linking ambiguous.
   const existing = await db.query.parts.findFirst({
     where: and(
       eq(schema.parts.orgId, orgId),
-      eq(schema.parts.sku, input.sku),
+      eq(skuKeySql(schema.parts.sku), normalizeSku(input.sku)),
     ),
   });
   if (existing) {
     return NextResponse.json(
-      { error: `A part with SKU "${input.sku}" already exists.` },
+      { error: `A part with SKU "${existing.sku}" already exists.` },
       { status: 409 },
     );
   }

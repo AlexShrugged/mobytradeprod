@@ -3,6 +3,8 @@
 // and no schema imports — XLSX decoding (exceljs) lives in import-xlsx.ts,
 // database writes in import-service.ts. Tests colocated.
 
+import { normalizeSku } from "./sku";
+
 // ------------------------------------------------------------------- CSV
 
 /** RFC 4180 parse: quoted fields, escaped quotes, embedded commas/newlines,
@@ -450,8 +452,11 @@ export function extractCatalogItems(table: string[][]): ExtractResult {
     }
 
     // Later rows for the same SKU override earlier ones field-by-field —
-    // last write wins, matching the import's overwrite semantics.
-    const item = bySku.get(sku) ?? {
+    // last write wins, matching the import's overwrite semantics. Keyed on
+    // the normalized SKU (./sku): case-variant spellings are one SKU, and
+    // the first spelling seen is the one stored.
+    const skuKey = normalizeSku(sku);
+    const item = bySku.get(skuKey) ?? {
       sku,
       name: null,
       description: null,
@@ -475,7 +480,7 @@ export function extractCatalogItems(table: string[][]): ExtractResult {
         item.sources.push({ vendorName, countryOfOrigin, unitCost });
       }
     }
-    bySku.set(sku, item);
+    bySku.set(skuKey, item);
   }
 
   return {

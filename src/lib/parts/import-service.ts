@@ -10,6 +10,8 @@ import { normalizeHts } from "@/lib/duty/calculator";
 import { adoptEntryLinesForParts } from "@/lib/processing/linker";
 import { normalizeVendorName } from "@/lib/vendors/normalize";
 import { findOrCreateVendor, type ResolvedVendor } from "@/lib/vendors/service";
+import { buildSkuIndex, normalizeSku, resolveSku } from "./sku";
+import { skuKeySql } from "./sku-sql";
 
 import type {
   CatalogField,
@@ -76,20 +78,24 @@ export async function applyCatalogImport(opts: {
 
   return db.transaction(async (tx) => {
     // Chunked: a whole-catalog file carries tens of thousands of SKUs, and
-    // one bound parameter each would crowd the 65535-parameter cap.
-    const partBySku = new Map<string, schema.Part>();
+    // one bound parameter each would crowd the 65535-parameter cap. Matched
+    // on the normalized key (./sku) so a re-import spelling difference
+    // updates the live part instead of minting a case-variant duplicate.
+    const existingParts: schema.Part[] = [];
     for (let i = 0; i < items.length; i += 5000) {
-      const chunk = await tx.query.parts.findMany({
-        where: and(
-          eq(schema.parts.orgId, orgId),
-          inArray(
-            schema.parts.sku,
-            items.slice(i, i + 5000).map((item) => item.sku),
+      existingParts.push(
+        ...(await tx.query.parts.findMany({
+          where: and(
+            eq(schema.parts.orgId, orgId),
+            inArray(
+              skuKeySql(schema.parts.sku),
+              items.slice(i, i + 5000).map((item) => normalizeSku(item.sku)),
+            ),
           ),
-        ),
-      });
-      for (const part of chunk) partBySku.set(part.sku, part);
+        })),
+      );
     }
+    const partIndex = buildSkuIndex(existingParts);
 
     let updated = 0;
     let unchanged = 0;
@@ -145,7 +151,9 @@ export async function applyCatalogImport(opts: {
     // the per-part machinery has nothing to do; per-field field_changes
     // are also skipped (provenance lives on the classification window,
     // the part_created event, and the document link).
-    const newItems = items.filter((i) => !partBySku.has(i.sku));
+    // Parse yields one item per normalized key, so "no candidates" is the
+    // whole new-part test.
+    const newItems = items.filter((i) => !partIndex.has(normalizeSku(i.sku)));
     for (let i = 0; i < newItems.length; i += 500) {
       const chunk = newItems.slice(i, i + 500);
       const inserted = await tx
@@ -212,7 +220,9 @@ export async function applyCatalogImport(opts: {
     // field_changes per overwrite — the history the future conflict-
     // resolution flow builds on.
     for (const item of items) {
-      let part = partBySku.get(item.sku);
+      // Case twins with no exact spelling match resolve to null — leave
+      // those rows untouched rather than guess which twin the file means.
+      let part = resolveSku(partIndex, item.sku) ?? undefined;
       if (!part) continue;
       let changed = false;
 

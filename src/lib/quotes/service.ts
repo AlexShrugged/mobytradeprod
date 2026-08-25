@@ -25,6 +25,8 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { DbClient } from "../db";
 import * as schema from "../db/schema";
 import { planCommitWindow } from "../effective-dating";
+import { buildSkuIndex, normalizeSku, resolveSku } from "../parts/sku";
+import { skuKeySql } from "../parts/sku-sql";
 import { findOrCreateVendor } from "../vendors/service";
 import {
   diffQuoteAgainstSource,
@@ -107,9 +109,16 @@ export async function ingestQuoteSheet(
     const description = line.description?.trim() || null;
     const countryOfOrigin = line.countryOfOrigin?.trim().toUpperCase() || null;
 
-    let part = await db.query.parts.findFirst({
-      where: and(eq(schema.parts.orgId, orgId), eq(schema.parts.sku, sku)),
+    // Resolved on the normalized key (../parts/sku) so a quote's casing
+    // reuses the existing part instead of minting a case-variant draft;
+    // among pre-existing case twins the exact spelling wins.
+    const candidates = await db.query.parts.findMany({
+      where: and(
+        eq(schema.parts.orgId, orgId),
+        eq(skuKeySql(schema.parts.sku), normalizeSku(sku)),
+      ),
     });
+    let part = resolveSku(buildSkuIndex(candidates), sku) ?? undefined;
     let partCreated = false;
 
     if (!part) {
