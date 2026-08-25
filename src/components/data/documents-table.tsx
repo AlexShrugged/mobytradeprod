@@ -195,9 +195,15 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
                           <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" />
                         ) : null}
                         <div className="min-w-0">
-                          <div className="truncate font-medium">
+                          <a
+                            href={`/api/documents/${doc.id}/file?disposition=inline`}
+                            target="_blank"
+                            rel="noopener"
+                            title={`Open ${doc.fileName}`}
+                            className="block truncate font-medium hover:underline"
+                          >
                             {doc.fileName}
-                          </div>
+                          </a>
                           {isChild && doc.packetRole ? (
                             <div className="text-xs text-muted-foreground">
                               {packetRoleLabel(doc.packetRole)}
