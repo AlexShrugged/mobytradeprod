@@ -822,10 +822,13 @@ async function main() {
   // INVISIBLE to the deterministic engine — their defects live in fee
   // bounds, document extracted_data, and the description-vs-code axis, which
   // only the AI entry analyst reads. A key appearing here means a plant
-  // leaked into deterministic territory.
+  // leaked into deterministic territory. The one expected key: the
+  // misclassified battery's SKU is deliberately absent from the catalog,
+  // which rule 16 flags as a coverage gap — the defect itself (wrong code
+  // for the description) stays analyst-only.
   assertExactKeys("231-4501352-6", []);
   assertExactKeys("231-4501358-3", []);
-  assertExactKeys("231-4501364-1", []);
+  assertExactKeys("231-4501364-1", ["unknown_sku:line2"]);
 
   // -------------------------------------------------------------- summary
   const count = async (table: Parameters<typeof db.$count>[0]) => db.$count(table);

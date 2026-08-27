@@ -184,7 +184,8 @@ export function computeAlertImpact(
     // rules already ran on; a counterfactual under the catalog origin needs
     // human evidence before a dollar is claimable. The remaining types —
     // data_unreconciled, sail_date_assumption, quantity_discrepancy,
-    // invoice_sku_missing, invoice_comparison_skipped, and
+    // invoice_sku_missing, invoice_comparison_skipped, unknown_sku (no
+    // catalog part means no expectation to price a diff against), and
     // invoice_hts_mismatch (a supplier's printed code is not authoritative
     // enough to ground a duty counterfactual) — carry no directional claim
     // either.

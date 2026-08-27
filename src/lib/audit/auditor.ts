@@ -119,8 +119,15 @@ export async function loadAuditableSnapshot(
   });
   if (!entry) return null;
 
+  // Rule 16's gate: any part at all makes the catalog axis live.
+  const anyPart = await db.query.parts.findFirst({
+    where: eq(schema.parts.orgId, orgId),
+    columns: { id: true },
+  });
+
   const auditable: AuditableEntry = {
     entryDate: entry.entryDate,
+    orgHasCatalog: anyPart !== undefined,
     totalEnteredValue: entry.totalEnteredValue,
     totalDuty: entry.totalDuty,
     sail: resolveSailInfo(entry.entryShipments.map((es) => es.shipment)),
@@ -128,6 +135,7 @@ export async function loadAuditableSnapshot(
       id: li.id,
       lineNumber: li.lineNumber,
       sku: li.sku,
+      partId: li.partId,
       htsCode: li.htsCode,
       htsCodeDigits: li.htsCodeDigits,
       countryOfOrigin: li.countryOfOrigin,

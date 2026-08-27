@@ -171,6 +171,16 @@ function ExpectedVsFiled({ row }: { row: VarianceQueueRow }) {
           <span className="text-amber-700 dark:text-amber-400">not found</span>
         </span>
       );
+    case "unknown_sku":
+      return (
+        <span className="inline-flex items-center gap-2">
+          <Muted>in catalog</Muted>
+          <Arrow />
+          <span className="text-amber-700 dark:text-amber-400">
+            {str("sku") ?? "not found"}
+          </span>
+        </span>
+      );
     case "invoice_comparison_skipped":
       return <Muted>{str("currency") ?? "non-USD"} invoice, skipped</Muted>;
     default:

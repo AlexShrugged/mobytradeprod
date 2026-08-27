@@ -48,6 +48,7 @@ const ALERT_TYPES: { value: string; label: string }[] = [
   { value: "invoice_hts_mismatch", label: "Invoice HTS mismatch" },
   { value: "invoice_sku_missing", label: "Invoice SKU missing" },
   { value: "invoice_comparison_skipped", label: "Invoice comparison skipped" },
+  { value: "unknown_sku", label: "Unknown SKU" },
 ];
 
 const typeLabel = (value: string) =>

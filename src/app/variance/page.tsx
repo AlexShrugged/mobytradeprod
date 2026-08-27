@@ -62,6 +62,7 @@ const TYPE_FILTERS: Record<string, { label: string; types: string[] }> = {
       "sail_date_assumption",
       "invoice_sku_missing",
       "invoice_comparison_skipped",
+      "unknown_sku",
     ],
   },
 };

@@ -75,6 +75,7 @@ const statusMeta: Record<string, { label: string; tone: Tone }> = {
   value_mismatch: { label: "Value mismatch", tone: "blue" },
   data_unreconciled: { label: "Unreconciled", tone: "neutral" },
   sail_date_assumption: { label: "Sail assumed", tone: "blue" },
+  unknown_sku: { label: "Unknown SKU", tone: "amber" },
   // CI-vs-entry document comparisons
   quantity_discrepancy: { label: "Quantity mismatch", tone: "amber" },
   invoice_hts_mismatch: { label: "CI HTS mismatch", tone: "amber" },

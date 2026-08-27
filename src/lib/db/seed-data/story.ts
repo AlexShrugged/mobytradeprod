@@ -57,8 +57,10 @@
 //   lithium battery ("48V 10Ah Range-Extender Lithium Battery") but filed
 //   under the saddle code 8714.95.0000 (301 List 3 at 7.5% instead of the
 //   battery heading's 25%). The SKU (EB-PWR-EXT) is not in the catalog, so
-//   no catalog rule fires, and the charges are self-consistent under the
-//   declared code.
+//   no catalog comparison fires and the charges are self-consistent under
+//   the declared code — the DEFECT stays analyst-only. Rule 16 does flag
+//   the coverage gap itself (unknown_sku:line2, asserted in seed.ts): a
+//   deliberate demo of the unknown-SKU variance, not a leak of the plant.
 
 import type {
   ChargeTypeValue,

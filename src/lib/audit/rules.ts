@@ -38,6 +38,11 @@ export type AuditableLine = {
   htsCode: string;
   htsCodeDigits: string;
   countryOfOrigin: string | null;
+  /** The linked catalog part (draft included — a draft SKU is known, its
+   *  facts just aren't committed); null = the catalog has no part for this
+   *  SKU. Feeds rule 16 only. Optional so rule-test fixtures stay
+   *  untouched. */
+  partId?: string | null;
   /** Resolved per-line vendor; null when the 7501 named no supplier. */
   vendorId: string | null;
   enteredValue: string;
@@ -97,6 +102,10 @@ export type AuditableInvoice = {
 
 export type AuditableEntry = {
   entryDate: string | null;
+  /** Whether the org has ANY catalog part — the gate on rule 16 (unknown
+   *  SKU). Optional so rule-test fixtures stay untouched (omitted = no
+   *  catalog, rule dormant). */
+  orgHasCatalog?: boolean;
   totalEnteredValue: string | null;
   totalDuty: string | null;
   /** Resolved sail window of the linked shipments (resolveSailInfo);
@@ -300,6 +309,38 @@ export function computeEntryAlerts(
           lineItemId: line.id,
         });
       }
+    }
+  }
+
+  // ---- Rule 16: SKU vs catalog (runs regardless of the trust gate) -------
+  // A declared SKU with no catalog part behind it. The linker and adopter
+  // match on the normalized SKU key, so by audit time an unlinked SKU is
+  // genuinely absent from the catalog, not a spelling difference — either
+  // the catalog has a gap or the filing carries a bad SKU, and rules 5/10
+  // silently skip the line either way. Gated on the org having a catalog at
+  // all: before the first part exists the whole catalog axis is dormant,
+  // and flagging every line would bury a new org in noise. A draft
+  // (quote-created) part counts as known — its facts are uncommitted, not
+  // missing.
+  if (entry.orgHasCatalog) {
+    for (const line of entry.lines) {
+      if (line.sku === null || line.partId != null) continue;
+      alerts.push({
+        alertKey: `unknown_sku:line${line.lineNumber}`,
+        alertType: "unknown_sku",
+        severity: "warning",
+        label: "SKU not in catalog",
+        message: `Line ${line.lineNumber} is declared with SKU ${line.sku}, which is not in the parts catalog. Catalog checks (HTS, origin) cannot run on this line until the part exists.`,
+        details: {
+          sku: line.sku,
+          line_number: line.lineNumber,
+          declared_hts: line.htsCode,
+          declared_coo: line.countryOfOrigin,
+          description: line.description ?? null,
+          supplier_name: line.supplierName ?? null,
+        },
+        lineItemId: line.id,
+      });
     }
   }
 

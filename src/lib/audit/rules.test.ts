@@ -506,6 +506,43 @@ describe("rule 10: COO vs catalog", () => {
   });
 });
 
+describe("rule 16: SKU vs catalog (unknown SKU)", () => {
+  it("warns on a declared SKU with no catalog part when the org has a catalog", () => {
+    const line = cleanMotorLine({ sku: "EB-UNKNOWN-1", partId: null });
+    const alerts = computeEntryAlerts(
+      entry({ orgHasCatalog: true, lines: [line] }),
+      ref,
+    );
+    expect(keys(alerts)).toContain("unknown_sku:line1");
+    const alert = alerts.find((a) => a.alertType === "unknown_sku")!;
+    expect(alert.severity).toBe("warning");
+    expect(alert.message).toContain("EB-UNKNOWN-1");
+    expect(alert.details?.sku).toBe("EB-UNKNOWN-1");
+    expect(alert.lineItemId).toBe(line.id);
+  });
+
+  it("stays dormant when the org has no catalog at all", () => {
+    const line = cleanMotorLine({ partId: null });
+    const alerts = computeEntryAlerts(entry({ lines: [line] }), ref);
+    expect(keys(alerts)).not.toContain("unknown_sku:line1");
+    const gated = computeEntryAlerts(
+      entry({ orgHasCatalog: false, lines: [line] }),
+      ref,
+    );
+    expect(keys(gated)).not.toContain("unknown_sku:line1");
+  });
+
+  it("does not fire for a linked part (draft included) or a SKU-less line", () => {
+    const linked = cleanMotorLine({ partId: "part-1" });
+    const skuless = cleanMotorLine({ lineNumber: 2, sku: null, partId: null });
+    const alerts = computeEntryAlerts(
+      entry({ orgHasCatalog: true, lines: [linked, skuless] }),
+      ref,
+    );
+    expect(keys(alerts).filter((k) => k.startsWith("unknown_sku"))).toEqual([]);
+  });
+});
+
 describe("rule 6: header entered value vs line sum", () => {
   it("flags header entered value diverging from the line sum", () => {
     const alerts = computeEntryAlerts(

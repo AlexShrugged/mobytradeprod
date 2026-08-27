@@ -103,6 +103,12 @@ export function fieldIssue(a: {
         expected: "on a linked invoice",
         filed: "not on any linked invoice",
       };
+    case "unknown_sku":
+      return {
+        field: "Catalog coverage",
+        expected: "in the parts catalog",
+        filed: s("sku") ?? "not in the catalog",
+      };
     default: {
       // AI findings carry their own filed-vs-expected rows in
       // details.fields; the first row speaks for the finding wherever a

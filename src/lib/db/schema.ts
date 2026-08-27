@@ -184,6 +184,10 @@ export const auditAlertType = pgEnum("audit_alert_type", [
   "invoice_sku_missing",
   // CI comparison was skipped (e.g. non-USD invoice — no FX support).
   "invoice_comparison_skipped",
+  // A declared line SKU with no catalog part (part_id null) while the org
+  // HAS a catalog — either a catalog gap or a bad SKU on the filing, and
+  // the catalog checks (HTS, origin) silently skip the line until fixed.
+  "unknown_sku",
 ]);
 export const auditSeverity = pgEnum("audit_severity", [
   "error",

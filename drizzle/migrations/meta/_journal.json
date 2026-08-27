@@ -134,6 +134,13 @@
       "when": 1787180054907,
       "tag": "0018_blue_banshee",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787694185569,
+      "tag": "0019_bouncy_clint_barton",
+      "breakpoints": true
     }
   ]
 }
