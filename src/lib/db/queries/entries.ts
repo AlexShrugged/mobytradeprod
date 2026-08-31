@@ -829,6 +829,8 @@ export type LineItemDetail = {
   sku: string | null;
   description: string | null;
   htsCode: string;
+  /** Declared SPI preference claim ("KR", "A") prefixing the HTS number. */
+  spi: string | null;
   countryOfOrigin: string | null;
   /** Per-line supplier as declared on the 7501 — entries can span vendors. */
   supplierName: string | null;
@@ -1170,6 +1172,7 @@ export async function getEntryDetail(
               countryOfOrigin: li.countryOfOrigin,
               enteredValueCents: enteredCents,
               entryDate: entry.entryDate,
+              spi: li.spi,
               sail,
             },
             ref,
@@ -1318,6 +1321,7 @@ export async function getEntryDetail(
       sku: li.sku,
       description: li.description,
       htsCode: li.htsCode,
+      spi: li.spi,
       countryOfOrigin: li.countryOfOrigin,
       supplierName: li.supplierName,
       quantity: li.quantity,

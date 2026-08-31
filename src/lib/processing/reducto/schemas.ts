@@ -153,7 +153,18 @@ const ENTRY_LINE_ITEM_SCHEMA = {
       type: "string",
       description:
         "The 10-digit HTS classification the line is entered under, " +
-        "formatted like 8714.91.3000. Not a Chapter 99 code.",
+        "formatted like 8714.91.3000. Not a Chapter 99 code, and never " +
+        "including a letter prefix — a leading SPI code like KR or A " +
+        "belongs in the spi field, not here.",
+    },
+    spi: {
+      type: ["string", "null"],
+      description:
+        "The Special Program Indicator prefixed to the HTS number in " +
+        "column 27 — a short letter code like KR, A, A+, AU, S+ printed " +
+        "immediately before or above the tariff number, claiming " +
+        "preferential (FTA/GSP) treatment. Null when the tariff number " +
+        "carries no letter prefix.",
     },
     country_of_origin: {
       type: ["string", "null"],
@@ -661,7 +672,10 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "printed ad-valorem duty amount equals its rate times that line's own " +
     "entered value. Capture EVERY " +
     "Chapter 99 code in the stack as its own charge, including FREE/$0 " +
-    "exclusion claims; never collapse the stack. PO# references printed " +
+    "exclusion claims; never collapse the stack. A short letter code " +
+    "prefixed to the 10-digit classification (KR, A, AU) is the Special " +
+    "Program Indicator — report it in the line's spi field, never as part " +
+    "of the HTS number. PO# references printed " +
     "between rows do not start a new line.",
   cargo_release:
     "This is a US CBP Form 3461 (Entry/Immediate Delivery) or a broker's " +

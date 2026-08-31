@@ -37,6 +37,9 @@ export type AuditableLine = {
   sku: string | null;
   htsCode: string;
   htsCodeDigits: string;
+  /** Special Program Indicator declared on the line (claimed FTA/GSP
+   *  preference). Optional so rule-test fixtures stay untouched. */
+  spi?: string | null;
   countryOfOrigin: string | null;
   /** The linked catalog part (draft included — a draft SKU is known, its
    *  facts just aren't committed); null = the catalog has no part for this
@@ -401,6 +404,7 @@ export function computeEntryAlerts(
           countryOfOrigin: line.countryOfOrigin,
           enteredValueCents: enteredCents,
           entryDate: entry.entryDate,
+          spi: line.spi ?? null,
           sail: entry.sail,
         },
         ref,
@@ -456,27 +460,45 @@ export function computeEntryAlerts(
         });
       }
 
-      // Rule 1b: dutiable schedule rate with no base duty charge.
+      // Rule 1b: dutiable schedule rate with no base duty charge. A
+      // declared SPI is a preference claim: schedule-supported claims
+      // already priced the special rate into expected.baseDuty (a Free
+      // rate never reaches this alert), an unverifiable claim silences
+      // the rule (a claim is never turned into duty owed without
+      // affirmative grounds — the analyst contests substance), and only
+      // an SPI the special column affirmatively does not list leaves the
+      // general-rate expectation standing, with the rejected claim named.
       const hasBaseCharge = line.charges.some(
         (c) => c.chargeType === "base_duty",
       );
+      const claim = expected.baseDutyClaim;
       if (
         !hasBaseCharge &&
+        claim?.status !== "unverifiable" &&
         expected.baseDuty !== null &&
         expected.baseDuty.rate !== null &&
         expected.baseDuty.rate > 0 &&
         expected.baseDuty.amountCents !== null &&
         expected.baseDuty.amountCents > 0
       ) {
+        const rateClause =
+          claim?.status === "eligible"
+            ? `a ${pctLabel(expected.baseDuty.rate)} special rate under SPI ${claim.spi}`
+            : `a ${pctLabel(expected.baseDuty.rate)} general rate`;
+        const claimClause =
+          claim?.status === "ineligible"
+            ? ` The declared SPI ${claim.spi} is not among this code's special-rate programs.`
+            : "";
         alerts.push({
           alertKey: `missing_base_duty:line${line.lineNumber}`,
           alertType: "missing_measure",
           severity: "warning",
           label: "Missing base duty",
-          message: `Line ${line.lineNumber} (${line.htsCode}) has a ${pctLabel(expected.baseDuty.rate)} general rate (expected ${fmt(expected.baseDuty.amountCents)}), but no base duty charge was declared.`,
+          message: `Line ${line.lineNumber} (${line.htsCode}) has ${rateClause} (expected ${fmt(expected.baseDuty.amountCents)}), but no base duty charge was declared.${claimClause}`,
           details: {
             expected_rate: expected.baseDuty.rate,
             expected_amount: dollars(expected.baseDuty.amountCents),
+            claimed_spi: claim?.spi ?? null,
             line_number: line.lineNumber,
             sku: line.sku,
           },
@@ -592,7 +614,14 @@ export function computeEntryAlerts(
         if (expectedRate === null || expectedAmountCents === null || !chargeRefKey)
           continue;
 
-        // Rule 3: declared rate deviates from the official rate.
+        // Rule 3: declared rate deviates from the official rate. When an
+        // eligible SPI claim set the base expectation, say so — "official
+        // rate" alone would misread as the general rate.
+        const spiClause =
+          c.chargeType === "base_duty" &&
+          expected.baseDutyClaim?.status === "eligible"
+            ? ` under SPI ${expected.baseDutyClaim.spi}`
+            : "";
         const declaredRate = c.rate === null ? null : Number(c.rate);
         if (declaredRate !== null && Math.abs(declaredRate - expectedRate) > 0.00005) {
           const impliedDiff = Math.round(
@@ -603,7 +632,7 @@ export function computeEntryAlerts(
             alertType: "rate_mismatch",
             severity: moneySeverity(impliedDiff, expectedAmountCents),
             label: "Rate mismatch",
-            message: `Line ${line.lineNumber} ${c.htsCode ?? "base duty"} is declared at ${pctLabel(declaredRate)}; the official rate is ${pctLabel(expectedRate)}.`,
+            message: `Line ${line.lineNumber} ${c.htsCode ?? "base duty"} is declared at ${pctLabel(declaredRate)}; the official rate${spiClause} is ${pctLabel(expectedRate)}.`,
             details: {
               expected_rate: expectedRate,
               actual_rate: declaredRate,

@@ -193,6 +193,16 @@ Stop only stops rendering — the turn finishes via `after()` and
   (dry-run default). Null program =
   lineage unknown: never deduped — sync-created measures stay null until a human
   assigns the program.
+- **SPI preference claims are claim-aware, like $0 exclusions.**
+  `entry_line_items.spi` (the 7501's column-27 prefix — "KR", "A") is the broker's
+  declared FTA/GSP claim; `duty/special-rates.ts` parses `hts_codes.col1_special` on
+  read and the calculator prices a schedule-supported claim's special rate into
+  expected base duty (`baseDutyClaim` on `ExpectedLineCharges`). The missing-base-duty
+  rule fires only when the special column affirmatively does NOT list the claimed SPI;
+  an unverifiable claim (no/unparseable special text) stays silent — the deterministic
+  layer never turns a claim into duty owed without affirmative grounds. Substantive
+  eligibility (originating-goods rules, certificates) is the AI analyst's job, per the
+  exclusion-claim doctrine in its prompt.
 - **MPF/HMF are ingested facts** on entries — never computed (CBP per-entry mins/caps).
   Nominal rates appear only in estimates, labeled as such.
 - **Catalog import overwrites, for now.** The Parts page CSV/XLSX import

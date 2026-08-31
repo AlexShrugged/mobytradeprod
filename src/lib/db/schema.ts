@@ -1187,6 +1187,11 @@ export const entryLineItems = pgTable(
     description: text("description"),
     htsCode: varchar("hts_code", { length: 12 }).notNull(), // as declared
     htsCodeDigits: varchar("hts_code_digits", { length: 10 }).notNull(),
+    // Special Program Indicator prefixed to the HTS number on the 7501
+    // ("KR", "A", "AU"): the broker's claimed FTA/GSP preference. A declared
+    // fact — the calculator resolves it against the schedule's special-rates
+    // column on read (duty/special-rates.ts). Null = no claim.
+    spi: varchar("spi", { length: 8 }),
     countryOfOrigin: varchar("country_of_origin", { length: 2 }),
     // Per-line supplier as declared on the 7501 (entries can span vendors) +
     // the resolved vendor — feeds the COO-vs-catalog audit rule.

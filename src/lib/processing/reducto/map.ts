@@ -97,6 +97,13 @@ function toCountry(v: unknown): string | null {
   return toStr(v)?.toUpperCase() ?? null;
 }
 
+/** SPI codes are 1-2 letters plus an optional marker ("KR", "A+"); anything
+ *  longer is extraction noise, not a claim — drop it rather than persist it. */
+function toSpi(v: unknown): string | null {
+  const s = toStr(v)?.toUpperCase() ?? null;
+  return s && /^[A-Z]{1,2}[*+#]?$/.test(s) ? s : null;
+}
+
 /** Normalize to YYYY-MM-DD; accepts ISO datetimes and MM/DD/YYYY. */
 const MONTHS: Record<string, string> = {
   jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
@@ -197,6 +204,7 @@ function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
       sku: toStr(line.sku),
       description: toStr(line.description),
       hts_code: toStr(line.hts_code) as string,
+      spi: toSpi(line.spi),
       country_of_origin: toCountry(line.country_of_origin),
       supplier_name: toStr(line.supplier_name),
       quantity: toNum(line.quantity),

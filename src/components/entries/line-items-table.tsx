@@ -171,6 +171,15 @@ export function LineItemsTable({
               code={row.original.htsCode}
               compareTo={row.original.catalogHtsCode}
             />
+            {row.original.spi ? (
+              <Badge
+                variant="outline"
+                className="w-fit font-normal text-muted-foreground"
+                title="Special Program Indicator declared on the 7501: a claimed preferential rate"
+              >
+                SPI {row.original.spi}
+              </Badge>
+            ) : null}
             {row.original.htsMismatch && row.original.catalogHtsCode ? (
               row.original.partId ? (
                 <Badge

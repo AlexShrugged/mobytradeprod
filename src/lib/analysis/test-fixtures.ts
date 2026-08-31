@@ -33,6 +33,7 @@ export function fixtureSibling(): BundleSiblingEntry {
         sku: "EB-MTR-500W",
         description: "500W hub motors",
         htsCode: "8501.31.4000",
+        spi: null,
         countryOfOrigin: "CN",
         supplierName: "Shenzhen Drivetrain Co",
         quantity: "50.0000",

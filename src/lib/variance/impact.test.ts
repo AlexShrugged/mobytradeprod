@@ -214,6 +214,7 @@ describe("computeCatalogExpected / expectedTotalCents", () => {
         measures: [],
         suppressed: [],
         baseDutyZeroedBy: null,
+        baseDutyClaim: null,
         sailBasis: null,
       }),
     ).toBeNull();
@@ -223,6 +224,7 @@ describe("computeCatalogExpected / expectedTotalCents", () => {
         measures: [],
         suppressed: [],
         baseDutyZeroedBy: null,
+        baseDutyClaim: null,
         sailBasis: null,
       }),
     ).toBeNull();

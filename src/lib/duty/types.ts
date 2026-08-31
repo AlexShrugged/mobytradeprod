@@ -15,6 +15,10 @@ export type HtsRef = {
   chapter: number;
   rateType: HtsRateTypeValue;
   rate: number | null; // null = specific/compound, not computable in v1
+  // Raw column-1 special-rates text ("Free (A*, AU, ... KR, ...)") — parsed
+  // on read by duty/special-rates.ts when a line claims an SPI. Optional so
+  // in-memory test refs stay untouched; absent = no special rates known.
+  col1Special?: string | null;
   exemption: boolean;
   tradeMeasureId: string | null;
   // Base-schedule change-tiling window (hts_codes.valid_from/valid_to);
@@ -148,6 +152,10 @@ export type ExpectedLineInput = {
   countryOfOrigin: string | null;
   enteredValueCents: number;
   entryDate: string; // ISO date
+  // Special Program Indicator declared on the line (the prefix before the
+  // HTS number on the 7501 — "KR", "A", "AU"): a claimed FTA/GSP
+  // preference. Omitted/null = no claim; the general rate governs.
+  spi?: string | null;
   // Omitted/null = sail dates unknown; sail-conditioned measures then
   // resolve conservatively (duty owed) and report sailBasis "assumed".
   sail?: SailInfo | null;
@@ -165,5 +173,17 @@ export type ExpectedLineCharges = {
   measures: (MeasureRef & { amountCents: number | null })[];
   suppressed: SuppressedMeasure[];
   baseDutyZeroedBy: MeasureAuthorityValue | null;
+  // The line's SPI preference claim, resolved against the schedule's
+  // special-rates column. "eligible" = the claim is schedule-supported and
+  // baseDuty above already carries the special rate; "ineligible" = the
+  // special column exists and does not list the SPI (general rate stands);
+  // "unverifiable" = no special text to check — claims-bias says the audit
+  // stays silent rather than turning a claim into duty owed. Null = no SPI
+  // declared (or the code is absent from reference entirely).
+  baseDutyClaim: {
+    spi: string;
+    status: "eligible" | "ineligible" | "unverifiable";
+    rateText: string | null;
+  } | null;
   sailBasis: SailBasis;
 };

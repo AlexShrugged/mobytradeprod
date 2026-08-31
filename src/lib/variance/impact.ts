@@ -14,6 +14,9 @@ import type {
 
 export type ImpactLineSnapshot = {
   htsCodeDigits: string;
+  /** Declared SPI preference claim — carried into counterfactuals so a
+   *  KORUS-claimed line prices its catalog code under the same claim. */
+  spi?: string | null;
   countryOfOrigin: string | null;
   enteredValueCents: number;
   /** Catalog code the auditor compares against, AS OF the entry date —
@@ -73,6 +76,7 @@ export function computeCatalogExpected(
       countryOfOrigin: line.countryOfOrigin,
       enteredValueCents: line.enteredValueCents,
       entryDate: ctx.entryDate,
+      spi: line.spi ?? null,
       sail: ctx.sail,
     },
     ctx.ref,

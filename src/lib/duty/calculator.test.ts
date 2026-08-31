@@ -315,6 +315,96 @@ describe("in-lieu-of base duty", () => {
   });
 });
 
+describe("SPI preference claims", () => {
+  // The CN motor row (4% general) with a KORUS-style special-rates cell.
+  const digits = "8501314000";
+  const motor = ref.htsByDigits.get(digits)!;
+  const withSpecial = (col1Special: string | null): ReferenceData => ({
+    htsByDigits: new Map(ref.htsByDigits).set(digits, {
+      ...motor,
+      col1Special,
+    }),
+    measures: [],
+    stackingRules: [],
+  });
+  const KORUS = "Free (A*, AU, BH, CL, CO, IL, JO, KR, MA, OM, S, SG)";
+  const spiLine = (spi: string | null) => ({
+    ...line("8501.31.4000", "KR"),
+    spi,
+  });
+
+  it("a schedule-supported Free claim zeroes the expected base duty", () => {
+    const result = computeExpectedCharges(spiLine("KR"), withSpecial(KORUS));
+    expect(result.baseDuty).toEqual({
+      rate: 0,
+      amountCents: 0,
+      rateType: "free",
+    });
+    expect(result.baseDutyClaim).toEqual({
+      spi: "KR",
+      status: "eligible",
+      rateText: "Free",
+    });
+  });
+
+  it("a supported percent special rate prices at that rate", () => {
+    const result = computeExpectedCharges(
+      spiLine("KR"),
+      withSpecial("2.8% (KR)"),
+    );
+    expect(result.baseDuty).toEqual({
+      rate: 0.028,
+      amountCents: 280_000,
+      rateType: "ad_valorem",
+    });
+  });
+
+  it("a supported specific special rate is expected but not computable", () => {
+    const result = computeExpectedCharges(
+      spiLine("KR"),
+      withSpecial("0.51¢/kg (KR)"),
+    );
+    expect(result.baseDuty).toEqual({
+      rate: null,
+      amountCents: null,
+      rateType: "other",
+    });
+  });
+
+  it("an unlisted SPI leaves the general rate standing, marked ineligible", () => {
+    const result = computeExpectedCharges(
+      spiLine("CA"),
+      withSpecial(KORUS),
+    );
+    expect(result.baseDuty).toEqual({
+      rate: 0.04,
+      amountCents: 400_000,
+      rateType: "ad_valorem",
+    });
+    expect(result.baseDutyClaim).toEqual({
+      spi: "CA",
+      status: "ineligible",
+      rateText: null,
+    });
+  });
+
+  it("a claim against a blank special cell is unverifiable, general rate kept", () => {
+    const result = computeExpectedCharges(spiLine("KR"), withSpecial(null));
+    expect(result.baseDuty?.rate).toBe(0.04);
+    expect(result.baseDutyClaim).toEqual({
+      spi: "KR",
+      status: "unverifiable",
+      rateText: null,
+    });
+  });
+
+  it("no SPI means no claim — behavior identical to before", () => {
+    const result = computeExpectedCharges(spiLine(null), withSpecial(KORUS));
+    expect(result.baseDuty?.rate).toBe(0.04);
+    expect(result.baseDutyClaim).toBeNull();
+  });
+});
+
 describe("exclusionPrefixes carve-outs", () => {
   it("removes the measure before stacking, so its suppression never fires", () => {
     const alu = measure({

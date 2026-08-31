@@ -18,6 +18,10 @@ export type EntryLineItemExtraction = {
   sku: string | null;
   description: string | null;
   hts_code: string;
+  // Special Program Indicator prefixed to the HTS number ("KR", "A", "AU")
+  // — a claimed FTA/GSP preference. Optional so pre-widening writers (stub,
+  // fixtures) stay valid; the Reducto mapper always emits it.
+  spi?: string | null;
   country_of_origin: string | null;
   // Per-line supplier/manufacturer as shown on the entry — entries can span
   // vendors, and the (vendor, SKU) pair is what defines the expected origin.

@@ -88,6 +88,9 @@ export type BundleSiblingEntry = {
     sku: string | null;
     description: string | null;
     htsCode: string | null;
+    /** Declared SPI preference claim — cross-entry consistency checks
+     *  compare preference treatment the same way as Ch99 treatment. */
+    spi: string | null;
     countryOfOrigin: string | null;
     supplierName: string | null;
     quantity: string | null;

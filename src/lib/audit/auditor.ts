@@ -138,6 +138,7 @@ export async function loadAuditableSnapshot(
       partId: li.partId,
       htsCode: li.htsCode,
       htsCodeDigits: li.htsCodeDigits,
+      spi: li.spi,
       countryOfOrigin: li.countryOfOrigin,
       vendorId: li.vendorId,
       enteredValue: li.enteredValue,

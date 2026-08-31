@@ -1,0 +1,1 @@
+ALTER TABLE "entry_line_items" ADD COLUMN "spi" varchar(8);

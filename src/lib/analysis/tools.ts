@@ -123,6 +123,7 @@ export function buildAnalystTools(
           countryOfOrigin: line.countryOfOrigin,
           enteredValueCents,
           entryDate: auditable.entryDate,
+          spi: line.spi ?? null,
           sail: auditable.sail,
         },
         ref,

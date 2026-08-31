@@ -80,6 +80,7 @@ function catalogCodeAsOf(part: SnapshotPart, asOf: string | null): string | null
 function snapshotOf(
   li: {
     htsCodeDigits: string;
+    spi: string | null;
     countryOfOrigin: string | null;
     enteredValue: string;
     part: SnapshotPart;
@@ -93,6 +94,7 @@ function snapshotOf(
   const catalogDigits = catalog ? catalog.replace(/\D/g, "") : null;
   return {
     htsCodeDigits: li.htsCodeDigits,
+    spi: li.spi,
     countryOfOrigin: li.countryOfOrigin,
     enteredValueCents: Math.round(Number(li.enteredValue) * 100),
     catalogHtsDigits: catalogDigits,

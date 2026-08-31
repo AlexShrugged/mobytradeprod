@@ -184,6 +184,80 @@ describe("rule 1: missing measure", () => {
   });
 });
 
+describe("rule 1b: SPI preference claims", () => {
+  const KORUS = "Free (A*, AU, BH, CL, CO, IL, JO, KR, MA, OM, S, SG)";
+  const motorDigits = "8501314000";
+  // The seed ref with a KORUS-style special-rates cell on the motor row.
+  const refWithSpecial = {
+    ...ref,
+    htsByDigits: new Map(ref.htsByDigits).set(motorDigits, {
+      ...ref.htsByDigits.get(motorDigits)!,
+      col1Special: KORUS,
+    }),
+  };
+  // KR motor line claiming KORUS: no base duty declared, reciprocal paid.
+  function korusLine(over: Partial<AuditableLine> = {}): AuditableLine {
+    return cleanMotorLine({
+      countryOfOrigin: "KR",
+      spi: "KR",
+      charges: [
+        charge("additional_duty", "9903.01.25", 0.1, "1000.00"),
+        charge("mpf", "499", 0.003464, "34.64"),
+        charge("hmf", "501", 0.00125, "12.50"),
+      ],
+      ...over,
+    });
+  }
+
+  it("a schedule-supported claim silences the missing base duty alert", () => {
+    const alerts = computeEntryAlerts(
+      entry({ lines: [korusLine()], totalDuty: "1000.00" }),
+      refWithSpecial,
+    );
+    expect(keys(alerts)).toEqual([]);
+  });
+
+  it("an unverifiable claim (no special-rates text) also stays silent", () => {
+    // The plain seed ref carries no col1Special — the claim cannot be
+    // checked, and a claim is never turned into duty owed without grounds.
+    const alerts = computeEntryAlerts(
+      entry({ lines: [korusLine()], totalDuty: "1000.00" }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual([]);
+  });
+
+  it("an affirmatively unsupported claim fires, naming the rejected SPI", () => {
+    const alerts = computeEntryAlerts(
+      entry({ lines: [korusLine({ spi: "CA" })], totalDuty: "1000.00" }),
+      refWithSpecial,
+    );
+    expect(keys(alerts)).toEqual(["missing_base_duty:line1"]);
+    expect(alerts[0].message).toContain("SPI CA");
+    expect(alerts[0].details?.claimed_spi).toBe("CA");
+  });
+
+  it("base duty paid at the general rate under an eligible claim mismatches", () => {
+    const line = korusLine({
+      charges: [
+        charge("base_duty", "8501.31.4000", 0.04, "400.00"),
+        charge("additional_duty", "9903.01.25", 0.1, "1000.00"),
+        charge("mpf", "499", 0.003464, "34.64"),
+        charge("hmf", "501", 0.00125, "12.50"),
+      ],
+    });
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "1400.00" }),
+      refWithSpecial,
+    );
+    expect(keys(alerts)).toEqual([
+      "rate_mismatch:line1:base",
+      "amount_mismatch:line1:base",
+    ]);
+    expect(alerts[0].message).toContain("under SPI KR");
+  });
+});
+
 describe("rule 2: unexpected measure", () => {
   it("warns with the stacking reason when the measure was suppressed", () => {
     // TW aluminum frame: 232 expected, reciprocal suppressed — but declared.

@@ -2,6 +2,7 @@
 // and (per the roadmap's design principles) never an LLM output. Money is
 // integer cents throughout; rates are decimal fractions.
 
+import { resolveSpiEligibility } from "./special-rates";
 import type {
   ExpectedLineCharges,
   ExpectedLineInput,
@@ -332,20 +333,51 @@ export function computeExpectedCharges(
   const schedule = resolveBaseSchedule(line.htsDigits, line.entryDate, ref);
 
   let baseDuty: ExpectedLineCharges["baseDuty"] = null;
+  let baseDutyClaim: ExpectedLineCharges["baseDutyClaim"] = null;
   if (schedule && schedule.chapter < 98) {
-    if (schedule.rateType === "free") {
-      baseDuty = { rate: 0, amountCents: 0, rateType: "free" };
-    } else if (schedule.rateType === "ad_valorem" && schedule.rate !== null) {
-      baseDuty = {
-        rate: schedule.rate,
-        amountCents: inLieu
-          ? 0
-          : Math.round(schedule.rate * line.enteredValueCents),
-        rateType: "ad_valorem",
+    // A declared SPI is the broker claiming an FTA/GSP preference — the
+    // same claim doctrine as a $0 exclusion code. A schedule-supported
+    // claim swaps the special rate in as the expectation; an unsupported or
+    // unverifiable one leaves the general rate standing and lets the audit
+    // decide what the claim's status permits it to say.
+    const spi = line.spi?.trim() || null;
+    if (spi) {
+      const eligibility = resolveSpiEligibility(schedule.col1Special, spi);
+      baseDutyClaim = {
+        spi,
+        status: eligibility.status,
+        rateText: eligibility.status === "eligible" ? eligibility.rateText : null,
       };
-    } else {
-      // Specific/compound/other: known but not computable in v1.
-      baseDuty = { rate: null, amountCents: null, rateType: schedule.rateType };
+      if (eligibility.status === "eligible") {
+        baseDuty =
+          eligibility.rate === null
+            ? // Specific/compound special rate: known but not computable.
+              { rate: null, amountCents: null, rateType: "other" }
+            : {
+                rate: eligibility.rate,
+                amountCents:
+                  inLieu || eligibility.rate === 0
+                    ? 0
+                    : Math.round(eligibility.rate * line.enteredValueCents),
+                rateType: eligibility.rate === 0 ? "free" : "ad_valorem",
+              };
+      }
+    }
+    if (baseDuty === null) {
+      if (schedule.rateType === "free") {
+        baseDuty = { rate: 0, amountCents: 0, rateType: "free" };
+      } else if (schedule.rateType === "ad_valorem" && schedule.rate !== null) {
+        baseDuty = {
+          rate: schedule.rate,
+          amountCents: inLieu
+            ? 0
+            : Math.round(schedule.rate * line.enteredValueCents),
+          rateType: "ad_valorem",
+        };
+      } else {
+        // Specific/compound/other: known but not computable in v1.
+        baseDuty = { rate: null, amountCents: null, rateType: schedule.rateType };
+      }
     }
   }
 
@@ -361,6 +393,7 @@ export function computeExpectedCharges(
     })),
     suppressed,
     baseDutyZeroedBy: inLieu ? inLieu.authority : null,
+    baseDutyClaim,
     sailBasis,
   };
 }

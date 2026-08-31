@@ -174,6 +174,7 @@ export async function loadEntryBundle(
             sku: li.sku,
             description: li.description,
             htsCode: li.htsCode,
+            spi: li.spi,
             countryOfOrigin: li.countryOfOrigin,
             supplierName: li.supplierName,
             quantity: li.quantity,

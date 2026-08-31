@@ -159,6 +159,7 @@ export async function buildAgentToolDeps(opts: {
             countryOfOrigin: line.countryOfOrigin,
             enteredValueCents,
             entryDate: snapshot.auditable.entryDate,
+            spi: line.spi ?? null,
             sail: snapshot.auditable.sail,
           },
           ref,

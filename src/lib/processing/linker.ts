@@ -335,6 +335,7 @@ export async function linkExtraction(
                 description: li.description,
                 htsCode: li.hts_code,
                 htsCodeDigits: normalizeHts(li.hts_code),
+                spi: li.spi ?? null,
                 countryOfOrigin: toCoo(li.country_of_origin),
                 supplierName: li.supplier_name,
                 vendorId: li.supplier_name
