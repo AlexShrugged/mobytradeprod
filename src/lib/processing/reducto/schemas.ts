@@ -140,7 +140,15 @@ const ENTRY_LINE_ITEM_SCHEMA = {
       type: ["string", "null"],
       description: "The importer part number / SKU if shown on the line.",
     },
-    description: { type: ["string", "null"] },
+    description: {
+      type: ["string", "null"],
+      description:
+        "The goods description from the line's commodity row — the text " +
+        "printed with the 10-digit HTS classification (e.g. " +
+        "'TUBE/PIPE,CU-ZINC,THREAD'). Never the article text of a Chapter " +
+        "99 surcharge row ('ARTS ALU,STL,COP,DER...' describes a tariff " +
+        "heading, not the goods).",
+    },
     hts_code: {
       type: "string",
       description:
@@ -160,11 +168,12 @@ const ENTRY_LINE_ITEM_SCHEMA = {
     quantity: {
       type: ["number", "null"],
       description:
-        "The line's net quantity in HTSUS units — the column headed 'Net " +
-        "Quantity' (column numbering varies across broker printouts). Its " +
-        "figure is followed by a unit-of-measure code (NO, KG, PCS, DOZ, " +
-        "X). Extract only the number; the unit suffix is what marks it as " +
-        "a quantity rather than a dollar value.",
+        "The line's net quantity in HTSUS units, printed on the commodity " +
+        "row (the same row as the 10-digit HTS classification) and " +
+        "followed by a unit-of-measure code (NO, KG, PCS, DOZ, X). " +
+        "Extract only the number. Never copy the entered value — a figure " +
+        "without a unit code is a dollar amount, not a quantity. Null when " +
+        "the line prints no unit-suffixed figure.",
     },
     unit_value: money(
       "Per-unit value, only if the document explicitly prints one. 7501s " +
@@ -185,7 +194,12 @@ const ENTRY_LINE_ITEM_SCHEMA = {
       type: "array",
       description:
         "Every duty and fee declared on this line: base duty, each Chapter " +
-        "99 additional duty, MPF, HMF, AD/CVD.",
+        "99 additional duty, MPF, HMF, AD/CVD. A line may stack SEVERAL " +
+        "Chapter 99 tariff numbers above its classification code, and the " +
+        "stack can continue onto a continuation sheet under the same line " +
+        "number — every 99xx.xx.xx code in the stack is its own row here, " +
+        "including FREE/$0 exclusion declarations (e.g. 9903.82.01, " +
+        "9903.05.93). Never collapse the stack to one charge.",
       items: ENTRY_CHARGE_SCHEMA,
     },
     adcvd_case_number: {
@@ -624,7 +638,19 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "an HTS code, entered value, and one or more duty/fee charges: base duty " +
     "under the line's HTS code, Chapter 99 additional duties (Section " +
     "301/232, IEEPA, reciprocal), MPF under code 499, and HMF under code " +
-    "501. Capture every charge on every line.",
+    "501. Capture every charge on every line. A numbered line (001, 002, " +
+    "...) often prints as a STACK of rows in the merchandise column: one " +
+    "row per Chapter 99 surcharge first — each with its own article " +
+    "description (e.g. 'ARTS ALU,STL,COP,DER') and rate/amount — then the " +
+    "commodity row carrying the 10-digit classification, the goods " +
+    "description, the net quantity with its unit code, and the entered " +
+    "value. Read the line's own fields from the commodity row; the Chapter " +
+    "99 rows above it are that line's additional-duty charges. A line's " +
+    "stack may split across pages — a continuation sheet repeats the line " +
+    "number and continues the same line, not a new one. Capture EVERY " +
+    "Chapter 99 code in the stack as its own charge, including FREE/$0 " +
+    "exclusion claims; never collapse the stack. PO# references printed " +
+    "between rows do not start a new line.",
   cargo_release:
     "This is a US CBP Form 3461 (Entry/Immediate Delivery) or a broker's " +
     "cargo release notification. Capture only the entry number, the entry " +
