@@ -188,7 +188,11 @@ const ENTRY_LINE_ITEM_SCHEMA = {
         "printouts number the grid differently. It is a dollar figure, " +
         "usually whole dollars, never followed by a unit code — a number " +
         "trailed by NO, KG, PCS, or similar is the net quantity, not the " +
-        "entered value.",
+        "entered value. Take the figure printed on this line's own " +
+        "commodity row: an 'Invoice Value USD' / 'Entered Value USD' " +
+        "trailer printed after a group of lines is an invoice-block " +
+        "subtotal, never a line's entered value. Cross-check: the line's " +
+        "printed ad-valorem duty amounts equal rate times this value.",
     },
     charges: {
       type: "array",
@@ -647,7 +651,15 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "value. Read the line's own fields from the commodity row; the Chapter " +
     "99 rows above it are that line's additional-duty charges. A line's " +
     "stack may split across pages — a continuation sheet repeats the line " +
-    "number and continues the same line, not a new one. Capture EVERY " +
+    "number and continues the same line, not a new one. Broker printouts " +
+    "often group several numbered lines under one commercial invoice and " +
+    "print an 'Invoice Value USD' / 'Entered Value USD' trailer after the " +
+    "group: those are invoice-block subtotals, never a line's entered value " +
+    "and never a reason to merge lines — a page with lines 001 and 002 " +
+    "always yields two line_items, each with the entered value, quantity, " +
+    "and charge stack from its own rows. Sanity-check every line: each " +
+    "printed ad-valorem duty amount equals its rate times that line's own " +
+    "entered value. Capture EVERY " +
     "Chapter 99 code in the stack as its own charge, including FREE/$0 " +
     "exclusion claims; never collapse the stack. PO# references printed " +
     "between rows do not start a new line.",

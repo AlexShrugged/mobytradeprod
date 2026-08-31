@@ -23,7 +23,15 @@ refuses to boot on Vercel without them, see `src/lib/auth/config.ts`), everythin
 auth-open against the single seeded org exactly as before. Documents parse via Reducto
 when `REDUCTO_API_KEY` is set, otherwise a deterministic stub processor (refused on
 Vercel — every stub/secret fallback fails closed there, keyed on
-`isProdRuntime()` in `src/lib/env.ts`). Broker **entry packets** (one PDF
+`isProdRuntime()` in `src/lib/env.ts`). 7501 extractions are
+arithmetic-checked (`processing/reconcile.ts` — a 7501 is self-checking:
+rated duty charges print rate AND amount, headers print the totals):
+when ≥2 distinct ad-valorem charges agree on an implied basis that
+contradicts a line's entered value (the invoice-block "Entered Value USD"
+trailer misread), or line/duty sums miss the header totals, the processor
+re-extracts once with the findings spelled out, then fails the document
+closed — one legitimately dissenting charge (232 metal-content basis) is
+never a finding. Broker **entry packets** (one PDF
 bundling a 7501 + commercial invoice + supporting docs) split into child documents
 (parent-child rows on `documents`; children share the parent's file, page-scoped) that
 each run the normal per-doc pipeline.

@@ -16,6 +16,10 @@ import type {
   RawExtraction,
 } from "../types";
 import { ProcessingError } from "../types";
+import {
+  reconcilePortEntry,
+  reconcileRetryAddendum,
+} from "../reconcile";
 import { getReductoClient } from "./client";
 import {
   classifyFromResponse,
@@ -159,27 +163,58 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
           },
         };
       } else {
-        const extracted = await client.extract.run({
-          input: jobInput,
-          instructions: {
-            schema: EXTRACT_SCHEMAS[docType],
-            system_prompt: SYSTEM_PROMPTS[docType],
-          },
-          settings: {
-            citations: { enabled: true, numerical_confidence: true },
-          },
-        });
-        if (!("result" in extracted)) {
-          throw new ProcessingError(
-            "Reducto returned an async extract response for a sync request.",
-          );
-        }
-        extractPart = {
-          jobId: extracted.job_id ?? null,
-          usage: extracted.usage,
-          response: extracted.result,
+        const runExtract = async (systemPrompt: string) => {
+          const extracted = await client.extract.run({
+            input: jobInput,
+            instructions: {
+              schema: EXTRACT_SCHEMAS[docType],
+              system_prompt: systemPrompt,
+            },
+            settings: {
+              citations: { enabled: true, numerical_confidence: true },
+            },
+          });
+          if (!("result" in extracted)) {
+            throw new ProcessingError(
+              "Reducto returned an async extract response for a sync request.",
+            );
+          }
+          // The latest attempt's payload is the one retained — on a retry
+          // it supersedes the first, matching what mapped (or failed).
+          extractPart = {
+            jobId: extracted.job_id ?? null,
+            usage: extracted.usage,
+            response: extracted.result,
+          };
+          return mapExtractToResult(docType, extracted.result);
         };
-        extraction = mapExtractToResult(docType, extracted.result);
+        extraction = await runExtract(SYSTEM_PROMPTS[docType]);
+        // A 7501 is self-checking: rated duty charges print rate AND amount,
+        // and the header prints the totals the lines must sum to. When the
+        // mapped extraction contradicts that arithmetic (numbered lines
+        // merged, an invoice-block subtotal taken as a line's entered value,
+        // a dropped line), retry once with the findings spelled out, then
+        // fail closed — a provably wrong duty ledger cascades into false
+        // money variances if it persists as fact.
+        if (extraction.docType === "port_entry") {
+          const findings = reconcilePortEntry(extraction.fields);
+          if (findings.length > 0) {
+            extraction = await runExtract(
+              `${SYSTEM_PROMPTS[docType]}\n\n${reconcileRetryAddendum(findings)}`,
+            );
+            const persisting =
+              extraction.docType === "port_entry"
+                ? reconcilePortEntry(extraction.fields)
+                : [];
+            if (persisting.length > 0) {
+              throw new ProcessingError(
+                "Extraction contradicts the 7501's own printed duty math, " +
+                  "even after a corrective retry. " +
+                  persisting.map((f) => f.message).join(" "),
+              );
+            }
+          }
+        }
       }
 
       const raw = envelope();
