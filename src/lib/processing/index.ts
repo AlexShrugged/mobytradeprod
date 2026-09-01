@@ -43,6 +43,11 @@ export function inferDocType(fileName: string): DocumentTypeValue {
   // ("entry-immediate-delivery", "cargo-release-entry-...").
   if (name.includes("3461") || (name.includes("cargo") && name.includes("release")))
     return "cargo_release";
+  // Before the "entry" check: broker sheets are named "entry tariff code
+  // sheet", and a port_entry hint here would risk an authoritative 7501
+  // extraction wholesale-replacing the real entry's lines.
+  if (name.includes("tariff") && name.includes("code"))
+    return "tariff_code_sheet";
   if (name.includes("entry")) return "port_entry";
   if (name.includes("bol") || name.includes("shipment") || name.includes("awb"))
     return "shipment";

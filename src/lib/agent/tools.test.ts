@@ -87,6 +87,7 @@ const queueRow = (over: Partial<VarianceQueueRow>): VarianceQueueRow => ({
   sku: "SKU1",
   description: null,
   partId: null,
+  resolvedParts: [],
   declaredHts: null,
   catalogHts: null,
   impactCents: 1000,

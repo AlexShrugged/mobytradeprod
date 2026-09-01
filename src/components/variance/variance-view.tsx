@@ -103,6 +103,7 @@ export function VarianceView({
     g.members.some(
       (r) =>
         (r.sku ?? "").toLowerCase().includes(q) ||
+        r.resolvedParts.some((p) => p.sku.toLowerCase().includes(q)) ||
         (r.description ?? "").toLowerCase().includes(q) ||
         r.entryNumber.toLowerCase().includes(q) ||
         (r.declaredHts ?? "").includes(q) ||

@@ -20,6 +20,8 @@ import {
 } from "drizzle-orm";
 
 import type { OpenAlertCounts } from "@/components/entries/audit-badge";
+import { getResolvedLinePartsForEntries } from "./line-parts";
+import type { ResolvedLinePart } from "@/lib/parts/line-parts";
 import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 import {
@@ -855,6 +857,10 @@ export type LineItemDetail = {
   openAlerts: OpenAlertCounts;
   charges: LineChargeDetail[];
   missingMeasures: MissingMeasureDetail[];
+  /** Parts behind the line when the 7501 declares no SKU — resolved on read
+   *  from the broker tariff code sheet and/or the entry's single-entry
+   *  commercial invoices (parts/line-parts.ts). Empty when unknown. */
+  resolvedParts: ResolvedLinePart[];
 };
 
 export type AlertRow = {
@@ -1157,6 +1163,7 @@ export async function getEntryDetail(
       .filter((a) => a.status === "open")
       .map((a) => a.alertKey),
   );
+  const resolvedLineParts = await getResolvedLinePartsForEntries([entryId]);
   const sail = resolveSailInfo(
     entry.entryShipments.map((es) => es.shipment),
   );
@@ -1319,6 +1326,7 @@ export async function getEntryDetail(
       id: li.id,
       lineNumber: li.lineNumber,
       sku: li.sku,
+      resolvedParts: resolvedLineParts.get(li.id) ?? [],
       description: li.description,
       htsCode: li.htsCode,
       spi: li.spi,

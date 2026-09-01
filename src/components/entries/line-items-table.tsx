@@ -149,9 +149,27 @@ export function LineItemsTable({
       {
         accessorKey: "sku",
         header: "SKU",
-        cell: ({ row }) => (
-          <span className="font-medium">{row.original.sku ?? "—"}</span>
-        ),
+        cell: ({ row }) => {
+          const { sku, resolvedParts } = row.original;
+          // 7501s rarely print part numbers; fall back to the parts
+          // resolved from the tariff code sheet / commercial invoice.
+          if (sku !== null || resolvedParts.length === 0)
+            return <span className="font-medium">{sku ?? "—"}</span>;
+          return (
+            <span
+              className="font-medium"
+              title={
+                resolvedParts.length > 1
+                  ? resolvedParts.map((p) => p.sku).join(", ")
+                  : undefined
+              }
+            >
+              {resolvedParts.length === 1
+                ? resolvedParts[0].sku
+                : `${resolvedParts.length} parts`}
+            </span>
+          );
+        },
       },
       {
         accessorKey: "description",

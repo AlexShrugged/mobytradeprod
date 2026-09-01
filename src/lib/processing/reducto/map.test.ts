@@ -429,3 +429,72 @@ describe("refund_report mapping", () => {
     );
   });
 });
+
+describe("tariff_code_sheet mapping", () => {
+  const row = (over: Record<string, unknown>) => ({
+    entry_line_number: 1,
+    part_number: "0890073182",
+    po_number: "7043539618",
+    description: null,
+    ...over,
+  });
+
+  it("maps rows and collapses the stacked-Ch99 repetition", () => {
+    const result = mapExtractToResult("tariff_code_sheet", [
+      {
+        entry_number: "231-7379174-7",
+        broker_ref: "7077821743",
+        referenced_invoices: ["MD2610468"],
+        rows: [
+          row({}),
+          row({}), // same (line, part) printed once per tariff number
+          row({ part_number: "0890073182 " }), // padding twin dedupes too
+          row({ entry_line_number: 2, part_number: "0890071160" }),
+        ],
+      },
+    ]);
+    if (result.docType !== "tariff_code_sheet") throw new Error("wrong docType");
+    expect(result.fields.entry_number).toBe("231-7379174-7");
+    expect(result.fields.referenced_invoices).toEqual(["MD2610468"]);
+    expect(result.fields.rows).toEqual([
+      {
+        entry_line_number: 1,
+        part_number: "0890073182",
+        po_number: "7043539618",
+        description: null,
+      },
+      {
+        entry_line_number: 2,
+        part_number: "0890071160",
+        po_number: "7043539618",
+        description: null,
+      },
+    ]);
+  });
+
+  it("drops tariff numbers leaking into the part column and lineless rows", () => {
+    const result = mapExtractToResult("tariff_code_sheet", [
+      {
+        entry_number: "231-7379174-7",
+        rows: [
+          row({}),
+          row({ part_number: "9903.88.03" }),
+          row({ part_number: "7307.19.3040" }),
+          row({ entry_line_number: null, part_number: "REAL-PART" }),
+        ],
+      },
+    ]);
+    if (result.docType !== "tariff_code_sheet") throw new Error("wrong docType");
+    expect(result.fields.rows.map((r) => r.part_number)).toEqual([
+      "0890073182",
+    ]);
+  });
+
+  it("throws when no usable rows are found", () => {
+    expect(() =>
+      mapExtractToResult("tariff_code_sheet", [
+        { entry_number: "231-7379174-7", rows: [] },
+      ]),
+    ).toThrow(/line-to-part rows/);
+  });
+});

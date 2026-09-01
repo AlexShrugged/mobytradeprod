@@ -25,10 +25,13 @@ export const ASSIST_SHEET_PATTERNS = [/assist\s*sheet/i, /\bassist\b/i];
 // name/title wins. entry_summary_7501 first (the anchor, most specific
 // keywords); assist_sheet strictly BEFORE commercial_invoice (see above).
 const ROLE_PATTERNS: [PacketRoleValue, RegExp[]][] = [
-  [
-    "entry_summary_7501",
-    [/7501/i, /entry\s*summary/i, /entry\s*tariff\s*code\s*sheet/i],
-  ],
+  // "Entry tariff code sheet" deliberately does NOT belong here: that is
+  // the broker's line↔part mapping sheet (hts_code_list below), and routing
+  // it into the 7501 pipeline would wholesale-replace the real entry's
+  // lines with tariff-heading noise (same entry number, authoritative
+  // extraction). The bare "entry summary" pattern doesn't match it because
+  // the sheet's heading has no "summary".
+  ["entry_summary_7501", [/7501/i, /entry\s*summary/i]],
   // Strictly BEFORE transport_document: release notices often mention the
   // BOL, and a cargo release routed into the shipment pipeline would mint
   // shipment rows from a document that owns none.
@@ -95,7 +98,10 @@ const ROLE_TO_DOC_TYPE: Record<PacketRoleValue, DocumentTypeValue> = {
   packing_list: "packing_list",
   transport_document: "shipment",
   certificate_of_origin: "other",
-  hts_code_list: "other",
+  // ASC-style "entry tariff code sheets" land under this role: broker ABI
+  // output mapping each CI line (part number, PO) to its 7501 line — the
+  // only document that states the CI↔7501 join, so it extracts.
+  hts_code_list: "tariff_code_sheet",
   other: "other",
 };
 

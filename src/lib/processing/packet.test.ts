@@ -24,6 +24,10 @@ describe("normalizeRole", () => {
       "certificate_of_origin",
     );
     expect(normalizeRole("HTS Code List")).toBe("hts_code_list");
+    // The broker's line-to-part mapping sheet must NEVER route into the
+    // 7501 pipeline: an authoritative port_entry extraction of it would
+    // wholesale-replace the real entry's lines with tariff-heading noise.
+    expect(normalizeRole("Entry Tariff Code Sheet")).toBe("hts_code_list");
   });
 
   it("maps cargo releases to their own role, never the 7501's", () => {
@@ -66,11 +70,11 @@ describe("roleToDocType", () => {
     expect(roleToDocType("assist_sheet")).toBe("other");
     expect(roleToDocType("broker_invoice")).toBe("other");
     expect(roleToDocType("certificate_of_origin")).toBe("other");
-    expect(roleToDocType("hts_code_list")).toBe("other");
   });
 
   it("routes pipelined roles to their extraction docType", () => {
     expect(roleToDocType("entry_summary_7501")).toBe("port_entry");
+    expect(roleToDocType("hts_code_list")).toBe("tariff_code_sheet");
     expect(roleToDocType("commercial_invoice")).toBe("commercial_invoice");
     expect(roleToDocType("packing_list")).toBe("packing_list");
     expect(roleToDocType("transport_document")).toBe("shipment");

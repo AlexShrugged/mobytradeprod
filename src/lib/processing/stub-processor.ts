@@ -478,6 +478,36 @@ export class StubDocumentProcessor implements DocumentProcessor {
           },
         };
       }
+      case "tariff_code_sheet": {
+        // Attach-only downstream, like a release: reference an existing
+        // entry when the org has one so the mapping actually lands, and
+        // map catalog SKUs to low line numbers.
+        const fromName = input.fileName.match(/\d{3}-\d{7}-\d/)?.[0];
+        const rows = pickSome(
+          ctx.parts,
+          seed,
+          Math.min(2 + (seed % 3), ctx.parts.length),
+        ).map((part, i) => ({
+          entry_line_number: 1 + (i % 2),
+          part_number: part.sku,
+          po_number: ctx.poPool.length ? pick(ctx.poPool, seed, i) : null,
+          description: part.name ?? null,
+        }));
+        return {
+          docType: "tariff_code_sheet",
+          fields: {
+            entry_number:
+              fromName ??
+              (ctx.entryPool.length
+                ? pick(ctx.entryPool, seed)
+                : this.fabricateEntryNumber(seed)),
+            broker_ref: null,
+            referenced_invoices:
+              packetSeed !== null ? [stubInvoiceNumber(packetSeed)] : [],
+            rows,
+          },
+        };
+      }
       case "refund_report": {
         const fromName = input.fileName.match(/\d{3}-\d{7}-\d/)?.[0];
         const claimCount = 1 + (seed % 3);

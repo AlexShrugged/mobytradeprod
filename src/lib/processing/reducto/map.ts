@@ -13,6 +13,8 @@ import type {
   RefundClaimExtraction,
   RefundReportExtraction,
   ShipmentExtraction,
+  TariffCodeSheetExtraction,
+  TariffCodeSheetRowExtraction,
 } from "../types";
 import { ProcessingError } from "../types";
 import type { ExtractableDocType } from "./schemas";
@@ -381,6 +383,46 @@ function mapCommercialInvoice(
   };
 }
 
+function mapTariffCodeSheet(
+  data: Record<string, unknown>,
+): TariffCodeSheetExtraction {
+  // The printed table repeats a part once per tariff number in its line's
+  // Chapter 99 stack; the schema asks the extractor to collapse that, but
+  // dedupe here anyway — the linker upserts by (entry, line, sku) and a
+  // duplicate pair would be a conflict, not a fact. A row whose part number
+  // is tariff-heading noise or whose line number is missing maps nothing.
+  const seen = new Set<string>();
+  const rows: TariffCodeSheetRowExtraction[] = [];
+  for (const row of asRecordArray(data.rows)) {
+    const lineNumber = toInt(row.entry_line_number);
+    const partNumber = toStr(row.part_number);
+    if (lineNumber === null || partNumber === null) continue;
+    // Tariff numbers leaking into the part column (9903.88.03, 7307191030)
+    // are extraction noise, never part identity.
+    if (/^\d{4}\.\d{2}\.\d{2,4}$/.test(partNumber)) continue;
+    const key = `${lineNumber}:${partNumber.toUpperCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      entry_line_number: lineNumber,
+      part_number: partNumber,
+      po_number: toStr(row.po_number),
+      description: toStr(row.description),
+    });
+  }
+  if (rows.length === 0) {
+    throw new ProcessingError(
+      "Extraction did not find any line-to-part rows in the tariff code sheet.",
+    );
+  }
+  return {
+    entry_number: required(toStr(data.entry_number), "entry number"),
+    broker_ref: toStr(data.broker_ref),
+    referenced_invoices: toStrArray(data.referenced_invoices),
+    rows,
+  };
+}
+
 function mapPackingList(data: Record<string, unknown>): PackingListExtraction {
   return {
     bill_of_lading: toStr(data.bill_of_lading),
@@ -475,6 +517,8 @@ export function mapExtractToResult(
       return { docType, fields: mapCommercialInvoice(data) };
     case "packing_list":
       return { docType, fields: mapPackingList(data) };
+    case "tariff_code_sheet":
+      return { docType, fields: mapTariffCodeSheet(data) };
     case "quote_sheet":
       return { docType, fields: mapQuoteSheet(data) };
     case "refund_report":

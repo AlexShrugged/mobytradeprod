@@ -293,9 +293,25 @@ const columns: ColumnDef<QueueGroup>[] = [
     header: "Part / line",
     cell: ({ row }) => {
       const primary = row.original.members[0];
+      // 7501s rarely print part numbers; fall back to the parts resolved
+      // from the broker tariff code sheet / commercial invoice.
+      const resolved = primary.resolvedParts;
+      const partLabel =
+        primary.sku ??
+        (resolved.length === 1
+          ? resolved[0].sku
+          : resolved.length > 1
+            ? `${resolved.length} parts`
+            : null);
+      const partTitle =
+        primary.sku === null && resolved.length > 1
+          ? resolved.map((p) => p.sku).join(", ")
+          : undefined;
       return (
         <div>
-          <div className="font-medium">{primary.sku ?? "—"}</div>
+          <div className="font-medium" title={partTitle}>
+            {partLabel ?? "—"}
+          </div>
           <div className="max-w-56 truncate text-xs text-muted-foreground">
             {primary.lineNumber !== null
               ? `line ${primary.lineNumber}`

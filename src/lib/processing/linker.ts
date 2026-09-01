@@ -9,7 +9,11 @@ import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
 import { findOrCreateVendor } from "@/lib/vendors/service";
 import { normalizeBol, splitReferenceNumbers } from "./normalize";
-import type { EntryLineItemExtraction, ExtractionResult } from "./types";
+import type {
+  EntryLineItemExtraction,
+  ExtractionResult,
+  TariffCodeSheetRowExtraction,
+} from "./types";
 
 // ISO codes compare exact-match downstream (measure gating, COO audit rule).
 // The mappers normalize too — this is the write-side guarantee.
@@ -209,6 +213,34 @@ export async function linkExtraction(
       return buildSkuIndex(matched);
     };
 
+    // Wholesale-replace an entry's line↔part mapping from a tariff code
+    // sheet's rows (one sheet per entry; a newer sheet supersedes any
+    // earlier one, including rows a superseded child document left behind).
+    // The sheet's part numbers resolve against the catalog on the same
+    // normalized key every other seam uses.
+    const ingestTariffSheetRows = async (
+      entryId: string,
+      sourceDocumentId: string,
+      rows: TariffCodeSheetRowExtraction[],
+    ) => {
+      await tx
+        .delete(schema.entryLineParts)
+        .where(eq(schema.entryLineParts.entryId, entryId));
+      if (rows.length === 0) return;
+      const partIndex = await partIndexBySku(rows.map((r) => r.part_number));
+      await tx.insert(schema.entryLineParts).values(
+        rows.map((r) => ({
+          orgId,
+          entryId,
+          lineNumber: r.entry_line_number,
+          sku: r.part_number,
+          partId: resolveSku(partIndex, r.part_number)?.id ?? null,
+          poNumber: r.po_number,
+          sourceDocumentId,
+        })),
+      );
+    };
+
     switch (extraction.docType) {
       case "port_entry": {
         const f = extraction.fields;
@@ -393,6 +425,42 @@ export async function linkExtraction(
             ),
           );
         for (const stray of strayReleases) {
+          await tx
+            .insert(schema.documentLinks)
+            .values({
+              orgId,
+              documentId: stray.id,
+              entityType: "entry",
+              entityId: entryId,
+              created: false,
+            })
+            .onConflictDoNothing();
+        }
+
+        // Same adoption for tariff code sheets that processed before this
+        // 7501: their extracted rows are the entry's line↔part mapping,
+        // sitting in extracted_data waiting for the entry to exist.
+        const straySheets = await tx
+          .select({
+            id: schema.documents.id,
+            extractedData: schema.documents.extractedData,
+          })
+          .from(schema.documents)
+          .where(
+            and(
+              eq(schema.documents.orgId, orgId),
+              eq(schema.documents.docType, "tariff_code_sheet"),
+              ne(schema.documents.id, documentId),
+              sql`regexp_replace(${schema.documents.extractedData}->>'entry_number', '[^0-9]', '', 'g') = ${normalizeEntryNumber(f.entry_number)}`,
+            ),
+          );
+        for (const stray of straySheets) {
+          const sheet = stray.extractedData as {
+            rows?: TariffCodeSheetRowExtraction[];
+          } | null;
+          if (Array.isArray(sheet?.rows)) {
+            await ingestTariffSheetRows(entryId, stray.id, sheet.rows);
+          }
           await tx
             .insert(schema.documentLinks)
             .values({
@@ -882,6 +950,25 @@ export async function linkExtraction(
           if (existing) {
             links.push({ entityType: "shipment", entityId: existing.id, created: false });
           }
+        }
+        break;
+      }
+
+      // Attach-only, like a cargo release: the sheet maps invoice lines to
+      // 7501 lines for an entry the 7501 owns — it never creates entries or
+      // invoices. One that processes before its 7501 stays unlinked until
+      // the 7501's stray-adoption pass picks it up.
+      case "tariff_code_sheet": {
+        const f = extraction.fields;
+        const entry = await tx.query.entries.findFirst({
+          where: and(
+            eq(schema.entries.orgId, orgId),
+            sql`regexp_replace(${schema.entries.entryNumber}, '[^0-9]', '', 'g') = ${normalizeEntryNumber(f.entry_number)}`,
+          ),
+        });
+        if (entry) {
+          await ingestTariffSheetRows(entry.id, documentId, f.rows);
+          links.push({ entityType: "entry", entityId: entry.id, created: false });
         }
         break;
       }

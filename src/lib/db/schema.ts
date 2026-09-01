@@ -71,6 +71,11 @@ export const documentType = pgEnum("document_type", [
   // supporting docs in one PDF). Processing splits it into child documents;
   // the parent's extracted_data is the split manifest.
   "entry_packet",
+  // A broker "entry tariff code sheet" — ABI software output mapping each
+  // commercial-invoice line (part number, PO) to the 7501 line it was filed
+  // under. The only document that STATES the CI↔7501 join; its rows persist
+  // as entry_line_parts (declared broker facts, not inference).
+  "tariff_code_sheet",
   // A SKU list imported on the Parts page (CSV/XLSX). Applied by the parts
   // importer at upload time — these rows are born "processed" and never go
   // through the document pipeline (no Reducto/stub processor for them).
@@ -1241,6 +1246,41 @@ export const entryLineCharges = pgTable(
   ],
 );
 
+// Which catalog parts sit behind each 7501 line, as DECLARED by a broker
+// tariff code sheet (docType "tariff_code_sheet") — one row per (line, part
+// number) the sheet maps. Written only by processing/linker.ts, wholesale-
+// replaced per source document on reprocess. Keyed by (entry, line_number)
+// rather than entry_line_items.id because 7501 reprocessing replaces line
+// rows wholesale — the mapping is a fact about the filing, not the row.
+// This table holds declared facts only: the CI-derived line↔part inference
+// is computed on read (parts/line-parts.ts) and never stored.
+export const entryLineParts = pgTable(
+  "entry_line_parts",
+  {
+    id: id(),
+    orgId: orgId(),
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => entries.id, { onDelete: "cascade" }),
+    lineNumber: integer("line_number").notNull(),
+    // The part number as printed on the sheet + the resolved catalog part.
+    sku: varchar("sku", { length: 64 }).notNull(),
+    partId: uuid("part_id").references(() => parts.id, {
+      onDelete: "set null",
+    }),
+    poNumber: varchar("po_number", { length: 64 }),
+    sourceDocumentId: uuid("source_document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("elp_entry_line_sku_uq").on(t.entryId, t.lineNumber, t.sku),
+    index("elp_org_idx").on(t.orgId),
+    index("elp_part_idx").on(t.partId),
+  ],
+);
+
 // Commercial invoices as first-class records. Linked to a PO when the
 // document references one, and DIRECTLY to entries via entry_invoices —
 // the CI is the primary document an entry is checked against for variance.
@@ -1824,6 +1864,7 @@ export const entriesRelations = relations(entries, ({ many }) => ({
   entryPurchaseOrders: many(entryPurchaseOrders),
   entryInvoices: many(entryInvoices),
   lineItems: many(entryLineItems),
+  lineParts: many(entryLineParts),
   auditAlerts: many(auditAlerts),
   analysisFindings: many(analysisFindings),
   analysisRuns: many(analysisRuns),
@@ -2149,6 +2190,21 @@ export const entryLineChargesRelations = relations(
     }),
   }),
 );
+
+export const entryLinePartsRelations = relations(entryLineParts, ({ one }) => ({
+  entry: one(entries, {
+    fields: [entryLineParts.entryId],
+    references: [entries.id],
+  }),
+  part: one(parts, {
+    fields: [entryLineParts.partId],
+    references: [parts.id],
+  }),
+  sourceDocument: one(documents, {
+    fields: [entryLineParts.sourceDocumentId],
+    references: [documents.id],
+  }),
+}));
 
 export const auditAlertsRelations = relations(auditAlerts, ({ one }) => ({
   entry: one(entries, {

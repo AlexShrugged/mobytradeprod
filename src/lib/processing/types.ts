@@ -157,6 +157,28 @@ export type CommercialInvoiceExtraction = {
   related_party?: boolean | null;
 };
 
+// One row of a broker "entry tariff code sheet" — ABI software output that
+// maps each commercial-invoice line to the 7501 line it was filed under.
+// The mapper collapses the printed stacked-Ch99 repetition (one printed row
+// per tariff number) to one row per (7501 line, part number).
+export type TariffCodeSheetRowExtraction = {
+  /** The 7501 line number this part was filed under. */
+  entry_line_number: number;
+  /** The part number / SKU as printed. */
+  part_number: string;
+  po_number: string | null;
+  description: string | null;
+};
+
+export type TariffCodeSheetExtraction = {
+  entry_number: string;
+  /** The broker's own file/reference number, when printed. */
+  broker_ref: string | null;
+  /** Commercial invoice number(s) the sheet covers. */
+  referenced_invoices: string[];
+  rows: TariffCodeSheetRowExtraction[];
+};
+
 export type PackingListExtraction = {
   bill_of_lading: string | null;
   cartons: number | null;
@@ -232,6 +254,7 @@ export type ExtractionResult =
   | { docType: "purchase_order"; fields: PurchaseOrderExtraction }
   | { docType: "commercial_invoice"; fields: CommercialInvoiceExtraction }
   | { docType: "packing_list"; fields: PackingListExtraction }
+  | { docType: "tariff_code_sheet"; fields: TariffCodeSheetExtraction }
   | { docType: "quote_sheet"; fields: QuoteSheetExtraction }
   | { docType: "refund_report"; fields: RefundReportExtraction }
   | { docType: "entry_packet"; fields: EntryPacketExtraction }

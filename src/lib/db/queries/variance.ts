@@ -18,6 +18,8 @@ import {
   type ImpactLineSnapshot,
 } from "@/lib/variance/impact";
 import { hasActionableDiff } from "@/lib/variance/field-issue";
+import { getResolvedLinePartsForEntries } from "./line-parts";
+import type { ResolvedLinePart } from "@/lib/parts/line-parts";
 import { compareSiblingAlerts } from "@/lib/variance/grouping";
 import {
   liquidationWindow,
@@ -132,6 +134,10 @@ export type VarianceQueueRow = {
   sku: string | null;
   description: string | null;
   partId: string | null;
+  /** Parts behind the line when the 7501 itself declares no SKU — resolved
+   *  on read from the broker tariff code sheet and/or the entry's single-
+   *  entry commercial invoices (parts/line-parts.ts). Empty when unknown. */
+  resolvedParts: ResolvedLinePart[];
   /** Declared + committed-catalog codes for the HTS segment-diff cell;
    *  null outside classification variances' needs. */
   declaredHts: string | null;
@@ -168,7 +174,7 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
   });
 
   const entryIds = [...new Set(alerts.map((a) => a.entryId))];
-  const [ref, shipmentLinks] = await Promise.all([
+  const [ref, shipmentLinks, linePartsByLine] = await Promise.all([
     getReferenceDataForOrg(),
     // inArray rejects empty arrays.
     entryIds.length === 0
@@ -177,6 +183,7 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
           where: inArray(schema.entryShipments.entryId, entryIds),
           with: { shipment: true },
         }),
+    getResolvedLinePartsForEntries(entryIds),
   ]);
 
   const sailByEntry = new Map<string, SailInfo>();
@@ -250,6 +257,8 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
       sku: a.lineItem?.sku ?? detailStr("sku"),
       description: a.lineItem?.description ?? null,
       partId: a.lineItem?.partId ?? null,
+      resolvedParts:
+        (a.lineItemId ? linePartsByLine.get(a.lineItemId) : null) ?? [],
       declaredHts:
         a.lineItem?.htsCode ??
         (isHts
@@ -279,6 +288,9 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
       lineItem: true,
     },
   });
+  const findingLineParts = await getResolvedLinePartsForEntries(
+    findings.map((f) => f.entryId),
+  );
   for (const f of findings) {
     const related = Array.isArray(f.relatedAlertKeys)
       ? (f.relatedAlertKeys as string[])
@@ -313,6 +325,8 @@ export async function getVarianceQueue(): Promise<VarianceQueueRow[]> {
       sku: f.lineItem?.sku ?? null,
       description: f.lineItem?.description ?? null,
       partId: f.lineItem?.partId ?? null,
+      resolvedParts:
+        (f.lineItemId ? findingLineParts.get(f.lineItemId) : null) ?? [],
       declaredHts: f.lineItem?.htsCode ?? null,
       catalogHts: null,
       impactCents: null,

@@ -40,6 +40,7 @@ export const CLASSIFICATION_SCHEMA = {
         "quote_sheet",
         "refund_report",
         "entry_packet",
+        "tariff_code_sheet",
         "assist_sheet",
         "broker_invoice",
         "other",
@@ -64,7 +65,11 @@ export const CLASSIFICATION_SCHEMA = {
         "refund/liquidation report listing entry summary numbers with refund " +
         "amounts. entry_packet: a bundled multi-document broker packet — a " +
         "CBP 7501 entry summary PLUS supporting documents (commercial " +
-        "invoice, packing list, bill of lading...) in one file. assist_sheet: " +
+        "invoice, packing list, bill of lading...) in one file. " +
+        "tariff_code_sheet: a broker's ENTRY TARIFF CODE SHEET / HTS code " +
+        "worksheet mapping invoice lines (PO, part number) to 7501 line " +
+        "numbers and tariff numbers — it references an entry number but is " +
+        "NOT the 7501 form. assist_sheet: " +
         "a worksheet of statutory additions to customs value (tooling, " +
         "molds, furnished materials) — columnar like an invoice but NOT a " +
         "commercial invoice. broker_invoice: a customs broker's or freight " +
@@ -598,6 +603,69 @@ const QUOTE_SHEET_SCHEMA = {
   required: ["line_items"],
 } as const;
 
+const TARIFF_CODE_SHEET_SCHEMA = {
+  type: "object",
+  properties: {
+    entry_number: {
+      type: "string",
+      description: "The entry number in XXX-XXXXXXX-X format.",
+    },
+    broker_ref: {
+      type: ["string", "null"],
+      description: "The broker's own file/reference number, when printed.",
+    },
+    referenced_invoices: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Commercial invoice number(s) the sheet covers (e.g. next to " +
+        "'COMMERCIAL INVOICE:' or an INV# header).",
+    },
+    rows: {
+      type: "array",
+      description:
+        "One row per (7501 line, part number) pair the sheet maps. The " +
+        "printed table repeats a part across several rows — one per tariff " +
+        "number in the line's Chapter 99 stack, often with the 7501 SEQ " +
+        "printed only on the first row of the group. Collapse that " +
+        "repetition: report each (7501 line, part number) pair ONCE, " +
+        "carrying the group's 7501 SEQ forward onto rows that leave it " +
+        "blank. Never invent a line number — a row whose group has no " +
+        "printed 7501 SEQ at all is skipped.",
+      items: {
+        type: "object",
+        properties: {
+          entry_line_number: {
+            type: "integer",
+            description:
+              "The 7501 SEQ / line number the part was filed under — the " +
+              "group's printed value, carried forward onto continuation " +
+              "rows that leave the column blank.",
+          },
+          part_number: {
+            type: "string",
+            description:
+              "The part number / SKU as printed in the PART NUMBER column. " +
+              "Never the tariff number and never a description.",
+          },
+          po_number: {
+            type: ["string", "null"],
+            description: "The purchase order number printed for the row.",
+          },
+          description: {
+            type: ["string", "null"],
+            description:
+              "The goods description printed for the row, when it is a " +
+              "real description rather than tariff-heading text.",
+          },
+        },
+        required: ["entry_line_number", "part_number"],
+      },
+    },
+  },
+  required: ["entry_number", "rows"],
+} as const;
+
 const REFUND_REPORT_SCHEMA = {
   type: "object",
   properties: {
@@ -647,6 +715,7 @@ export const EXTRACT_SCHEMAS: Record<ExtractableDocType, unknown> = {
   purchase_order: PURCHASE_ORDER_SCHEMA,
   commercial_invoice: COMMERCIAL_INVOICE_SCHEMA,
   packing_list: PACKING_LIST_SCHEMA,
+  tariff_code_sheet: TARIFF_CODE_SHEET_SCHEMA,
   quote_sheet: QUOTE_SHEET_SCHEMA,
   refund_report: REFUND_REPORT_SCHEMA,
 };
@@ -705,6 +774,17 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
   packing_list:
     "This is a packing list for an export shipment. Capture the bill of " +
     "lading, carton count, gross weight, and purchase order references.",
+  tariff_code_sheet:
+    "This is a customs broker's entry tariff code sheet — ABI software " +
+    "output listing, for one entry, each commercial-invoice line with its " +
+    "PO number, part number, and the 7501 SEQ (entry line number) it was " +
+    "filed under, plus a tariff number per row. A part repeats across " +
+    "several printed rows, one per Chapter 99 tariff number in its line's " +
+    "stack, with the 7501 SEQ usually printed only on the group's first " +
+    "row. Report each (7501 line, part number) pair once, carrying the " +
+    "printed 7501 SEQ forward through its group. The PART NUMBER column is " +
+    "the importer's part number — never report a tariff number or " +
+    "tariff-heading text ('ARTS ALU, STL, COP...') as a part number.",
   quote_sheet:
     "This is a supplier pricing sheet (quotation) quoting a unit cost per " +
     "part number. Rows may also carry MOQ, lead time, country of origin, " +
@@ -777,7 +857,10 @@ export const SPLIT_CATEGORIES: SplitCategory[] = [
   {
     name: "HTS Code List",
     description:
-      "A tariff/HTS code worksheet listing classification codes per part.",
+      "A tariff/HTS code worksheet listing classification codes per part — " +
+      "e.g. a broker's ENTRY TARIFF CODE SHEET mapping invoice lines (PO, " +
+      "part number) to 7501 line numbers and tariff numbers. NOT the 7501 " +
+      "form itself.",
   },
   {
     name: "Other",
