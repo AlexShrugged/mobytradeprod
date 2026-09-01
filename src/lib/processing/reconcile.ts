@@ -33,6 +33,13 @@ const AD_VALOREM_DUTY_TYPES = new Set<EntryChargeExtraction["charge_type"]>([
   "countervailing",
 ]);
 
+// AD/CVD deposits are ad valorem (they join the line-basis consensus) but
+// the header may or may not count them as "duty" — see the totals check.
+const ADCVD_DUTY_TYPES = new Set<EntryChargeExtraction["charge_type"]>([
+  "antidumping",
+  "countervailing",
+]);
+
 const usd = (n: number): string =>
   `$${n.toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -156,20 +163,28 @@ export function reconcilePortEntry(
   }
 
   if (fields.total_duty !== null && fields.line_items.length > 0) {
-    const sum = fields.line_items.reduce(
-      (lineAcc, line) =>
-        lineAcc +
-        line.charges.reduce(
-          (acc, charge) =>
-            AD_VALOREM_DUTY_TYPES.has(charge.charge_type)
-              ? acc + charge.amount
-              : acc,
-          0,
-        ),
-      0,
-    );
+    // Block 37 "Duty" on the 7501 header is the Chapter 1-97 plus Chapter
+    // 99 duty; AD/CVD deposits belong to block 39 "Other" on the official
+    // form, though some broker printouts fold them into the duty total.
+    // Accept either convention: this check hunts dropped or misread
+    // charges, and a faithful extraction must never fail closed over which
+    // block the broker's software put the deposits in (231-7379174-7 and
+    // 231-7386016-1 did exactly that — the gap was the antidumping amount).
+    let duty = 0;
+    let adcvd = 0;
+    for (const line of fields.line_items) {
+      for (const charge of line.charges) {
+        if (ADCVD_DUTY_TYPES.has(charge.charge_type)) adcvd += charge.amount;
+        else if (AD_VALOREM_DUTY_TYPES.has(charge.charge_type)) {
+          duty += charge.amount;
+        }
+      }
+    }
     const tol = Math.max(2, 0.005 * fields.total_duty);
-    if (Math.abs(sum - fields.total_duty) > tol) {
+    const gapExcluding = Math.abs(duty - fields.total_duty);
+    const gapIncluding = Math.abs(duty + adcvd - fields.total_duty);
+    const sum = gapExcluding <= gapIncluding ? duty : duty + adcvd;
+    if (Math.min(gapExcluding, gapIncluding) > tol) {
       findings.push({
         kind: "duty_total",
         lineNumber: null,
@@ -198,7 +213,14 @@ export function reconcileRetryAddendum(
     "charge stack from its own rows — never merge numbered lines. An " +
     "'Invoice Value USD' / 'Entered Value USD' trailer printed after a " +
     "group of lines is an invoice-block subtotal, never a line's entered " +
-    "value. On every line, each printed ad-valorem duty amount must equal " +
-    "its rate times that line's entered value."
+    "value. The figure printed beside the FIRST tariff number of a line " +
+    "(column 34, Gross Weight / Manifest Qty — e.g. '9903.05.77  2297') " +
+    "is the line's gross weight in kilograms, never its entered value; " +
+    "the entered value is the column-36 dollar figure on the commodity " +
+    "row, where the Chapter 99 rows above print 0 and a 'C <n>' row " +
+    "prints charges. The net quantity is the unit-suffixed figure on the " +
+    "commodity row (2108 KG), never the entered value. On every line, " +
+    "each printed ad-valorem duty amount must equal its rate times that " +
+    "line's entered value — the gross weight never satisfies that check."
   );
 }
