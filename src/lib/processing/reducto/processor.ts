@@ -7,6 +7,7 @@ import {
 } from "reductoai";
 
 import { getFileStore } from "@/lib/storage";
+import { parseResultText, scrubEntryLineSkus } from "../line-sku";
 import { mapSplitToManifest } from "../packet";
 import type {
   DocumentProcessor,
@@ -101,6 +102,9 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
         result: parseResult,
       };
       const jobInput = `jobid://${parsed.job_id}`;
+      // The page text the extracts run over — lets the 7501 sku scrub
+      // recognise a bare reference by the label printed beside it.
+      const parseText = parseResultText(parseResult);
 
       let docType = input.docTypeHint;
       if (!isPacketChild && docType !== "entry_packet") {
@@ -188,7 +192,17 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
             usage: extracted.usage,
             response: extracted.result,
           };
-          return mapExtractToResult(docType, extracted.result);
+          const mapped = mapExtractToResult(docType, extracted.result);
+          // A 7501 line's sku is the extractor's weakest field (no part
+          // number is printed on a broker ABI 7501): drop the values that
+          // are provably a shipment/PO reference or Chapter 99 article
+          // text before they persist as declared facts.
+          if (mapped.docType !== "port_entry") return mapped;
+          const scrubbed: ExtractionResult = {
+            docType: "port_entry",
+            fields: scrubEntryLineSkus(mapped.fields, parseText),
+          };
+          return scrubbed;
         };
         extraction = await runExtract(SYSTEM_PROMPTS[docType]);
         // A 7501 is self-checking: rated duty charges print rate AND amount,

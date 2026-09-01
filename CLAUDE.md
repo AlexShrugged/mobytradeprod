@@ -39,7 +39,13 @@ shift): it joins the retry, and if it alone persists the quantity is
 blanked rather than persisted. Prompt wording was measured on real ASC
 packets (2026-09-01): naming the gross-weight column in the hints made
 quantity WORSE, so the deterministic checks carry the load — replay a
-suspect PDF locally before changing the prompt text. Broker **entry packets** (one PDF
+suspect PDF locally before changing the prompt text. The 7501 line `sku` is
+the extractor's weakest field (broker ABI printouts print no part number):
+`processing/line-sku.ts` blanks values that are provably a labeled or
+header-referenced shipment/PO/invoice number, a bare value the page prints
+after such a label, or a Chapter 99 article-text lead word ("ARTS") — a junk
+declared SKU outranks the parts resolved on read and raises false "Not on
+invoice" variances. Broker **entry packets** (one PDF
 bundling a 7501 + commercial invoice + supporting docs) split into child documents
 (parent-child rows on `documents`; children share the parent's file, page-scoped) that
 each run the normal per-doc pipeline.
