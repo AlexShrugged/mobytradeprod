@@ -85,9 +85,7 @@ export function AssistantWidget({ configured }: { configured: boolean }) {
         ) : (
           <span className="size-7" />
         )}
-        <span className="flex-1 text-center text-sm font-semibold">
-          MobyAI
-        </span>
+        <span className="flex-1 text-center text-sm font-semibold">MobyAI</span>
         <Button
           variant="ghost"
           size="icon"
@@ -113,7 +111,9 @@ export function AssistantWidget({ configured }: { configured: boolean }) {
           }}
         />
       ) : (
-        <div className="flex-1 overflow-y-auto px-3 py-3">
+        // No bottom padding: AgentChat's sticky composer footer owns it,
+        // so the composer pins flush to the panel's bottom edge.
+        <div className="flex-1 overflow-y-auto px-3 pt-3">
           <WidgetThread
             key={view.id}
             conversationId={view.id}

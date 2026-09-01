@@ -103,7 +103,11 @@ export function AgentChat({
   const liveVisible =
     live.userText !== null &&
     (live.userMessageId === null || !messageIds.has(live.userMessageId));
-  if (!live.active && live.userMessageId && messageIds.has(live.userMessageId)) {
+  if (
+    !live.active &&
+    live.userMessageId &&
+    messageIds.has(live.userMessageId)
+  ) {
     setLive(IDLE);
   }
 
@@ -355,54 +359,59 @@ export function AgentChat({
         <div ref={bottomRef} />
       </div>
 
-      {turnError ? (
-        <div className="rounded-md border border-red-300/60 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-400/30 dark:bg-red-950/40 dark:text-red-300">
-          {turnError}
-        </div>
-      ) : null}
+      {/* Sticky within whichever scroll container holds the thread (the
+          widget panel's overflow div, or the viewport on /assistant), so
+          the composer never scrolls away under a long transcript. */}
+      <div className="sticky bottom-0 flex flex-col gap-3 bg-background pb-3 pt-1">
+        {turnError ? (
+          <div className="rounded-md border border-red-300/60 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-400/30 dark:bg-red-950/40 dark:text-red-300">
+            {turnError}
+          </div>
+        ) : null}
 
-      {!configured ? (
-        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-200">
-          Assistant unavailable. Set ANTHROPIC_API_KEY to enable it.
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            placeholder="Write a message..."
-            rows={2}
-            disabled={busy}
-            className="max-h-48 border-border bg-field dark:bg-field"
-          />
-          {live.active ? (
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => abortRef.current?.abort()}
-              aria-label="Stop"
-              title="Stops rendering; the turn finishes in the background"
-            >
-              <Square />
-            </Button>
-          ) : draft.trim() !== "" ? (
-            <Button
-              size="icon"
-              onClick={submit}
+        {!configured ? (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-200">
+            Assistant unavailable. Set ANTHROPIC_API_KEY to enable it.
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder="Write a message..."
+              rows={2}
               disabled={busy}
-              aria-label="Send"
-            >
-              <ArrowUp />
-            </Button>
-          ) : null}
-        </div>
-      )}
+              className="max-h-48 border-border bg-field dark:bg-field"
+            />
+            {live.active ? (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => abortRef.current?.abort()}
+                aria-label="Stop"
+                title="Stops rendering; the turn finishes in the background"
+              >
+                <Square />
+              </Button>
+            ) : draft.trim() !== "" ? (
+              <Button
+                size="icon"
+                onClick={submit}
+                disabled={busy}
+                aria-label="Send"
+              >
+                <ArrowUp />
+              </Button>
+            ) : null}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
