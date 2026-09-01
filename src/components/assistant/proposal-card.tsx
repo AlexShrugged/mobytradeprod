@@ -154,64 +154,58 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
   }
 
   return (
-    <div className="rounded-md border bg-card px-4 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
-            {payload.kind === "alert_decision" ? (
-              <>
-                <span className="font-medium">
-                  {DECISION_LABEL[payload.decision]}
+    // Container query, not viewport: in the narrow widget panel the note
+    // spans the full card width below the buttons; on the wide /assistant
+    // page it keeps to the left column beside them.
+    <div className="@container rounded-md border bg-card px-4 py-3">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+          {payload.kind === "alert_decision" ? (
+            <>
+              <span className="font-medium">
+                {DECISION_LABEL[payload.decision]}
+              </span>
+              <Link
+                href={payload.href}
+                className="truncate font-medium text-blue-700 underline underline-offset-2 dark:text-blue-400"
+              >
+                {payload.label}
+              </Link>
+              <span className="text-muted-foreground">
+                entry {payload.entryNumber}
+              </span>
+              {payload.impactCents !== null ? (
+                <Money cents={payload.impactCents} />
+              ) : null}
+              {payload.unitIds.length > 1 ? (
+                <span className="text-xs text-muted-foreground">
+                  {payload.unitIds.length} rows
                 </span>
-                <Link
-                  href={payload.href}
-                  className="truncate font-medium text-blue-700 underline underline-offset-2 dark:text-blue-400"
-                >
-                  {payload.label}
-                </Link>
-                <span className="text-muted-foreground">
-                  entry {payload.entryNumber}
-                </span>
-                {payload.impactCents !== null ? (
-                  <Money cents={payload.impactCents} />
-                ) : null}
-                {payload.unitIds.length > 1 ? (
-                  <span className="text-xs text-muted-foreground">
-                    {payload.unitIds.length} rows
-                  </span>
-                ) : null}
-              </>
-            ) : payload.kind === "save_org_rule" ? (
-              <>
-                <span className="font-medium">Save rule</span>
-                {payload.suppression ? (
-                  <Badge variant="outline" className="font-normal">
-                    Hides matching alerts
-                  </Badge>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <span className="font-medium">Analyze</span>
-                <Link
-                  href={`/entries/${(payload as AnalyzeEntryPayload).entryId}`}
-                  className="font-medium text-blue-700 underline underline-offset-2 dark:text-blue-400"
-                >
-                  entry {(payload as AnalyzeEntryPayload).entryNumber}
-                </Link>
-              </>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {payload.kind === "alert_decision"
-              ? payload.note
-              : payload.kind === "save_org_rule"
-                ? payload.text
-                : (payload as AnalyzeEntryPayload).reason}
-          </p>
+              ) : null}
+            </>
+          ) : payload.kind === "save_org_rule" ? (
+            <>
+              <span className="font-medium">Save rule</span>
+              {payload.suppression ? (
+                <Badge variant="outline" className="font-normal">
+                  Hides matching alerts
+                </Badge>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <span className="font-medium">Analyze</span>
+              <Link
+                href={`/entries/${(payload as AnalyzeEntryPayload).entryId}`}
+                className="font-medium text-blue-700 underline underline-offset-2 dark:text-blue-400"
+              >
+                entry {(payload as AnalyzeEntryPayload).entryNumber}
+              </Link>
+            </>
+          )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 justify-self-end">
           {proposal.status === "proposed" && !stale ? (
             <>
               <Button size="sm" disabled={busy} onClick={() => void confirm()}>
@@ -247,6 +241,13 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
             </Badge>
           )}
         </div>
+        <p className="col-span-2 text-sm text-muted-foreground @md:col-span-1">
+          {payload.kind === "alert_decision"
+            ? payload.note
+            : payload.kind === "save_org_rule"
+              ? payload.text
+              : (payload as AnalyzeEntryPayload).reason}
+        </p>
       </div>
     </div>
   );
