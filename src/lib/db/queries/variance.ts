@@ -373,7 +373,12 @@ export type VarianceInvoice = {
   supplierName: string | null;
   invoiceDate: string | null;
   currency: string;
+  /** The final amount payable as printed, after any adjustments. */
   totalAmount: string | null;
+  /** Goods total before adjustments, when printed. */
+  subtotal: string | null;
+  /** Invoice-level rows between the goods lines and the total, signed. */
+  adjustments: { label: string; amount: string }[];
   lines: {
     lineNumber: number;
     sku: string | null;
@@ -530,6 +535,7 @@ export async function getVarianceDetail(
           ),
           with: {
             lineItems: { orderBy: (li, { asc }) => [asc(li.lineNumber)] },
+            adjustments: { orderBy: (a, { asc }) => [asc(a.position)] },
           },
           orderBy: (inv, { asc }) => [asc(inv.invoiceNumber)],
         });
@@ -540,6 +546,11 @@ export async function getVarianceDetail(
     invoiceDate: inv.invoiceDate,
     currency: inv.currency,
     totalAmount: inv.totalAmount,
+    subtotal: inv.subtotal,
+    adjustments: inv.adjustments.map((a) => ({
+      label: a.label,
+      amount: a.amount,
+    })),
     lines: inv.lineItems.map((li) => ({
       lineNumber: li.lineNumber,
       sku: li.sku,

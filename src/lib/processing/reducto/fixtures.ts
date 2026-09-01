@@ -257,6 +257,8 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
     invoice_date: cite("2026-06-20"),
     currency: cite("USD"),
     amount: cite("$41,900.00"),
+    subtotal: cite(null),
+    adjustments: [],
     incoterms: cite("FOB Yantian"),
     payment_terms: cite("T/T 30 days"),
     related_party: cite(false),
@@ -280,6 +282,51 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
         // No hts_code on the line — maps to null.
         sku: cite("EB-MTR-500W"),
         total_price: cite("$10,700.00"),
+      },
+    ],
+  },
+];
+
+// A real shape from an ASC packet: the supplier credits a prior-year rebate
+// against this invoice, so the printed "Total Amount" is the amount payable,
+// not the goods value the 7501 declares. The rebate row is an adjustment,
+// never a goods line and never a mismatch.
+export const COMMERCIAL_INVOICE_REBATE_RESPONSE = [
+  {
+    invoice_number: cite("HD2612043"),
+    po_number: cite("8123667"),
+    supplier_name: cite("SIAM FITTINGS CO.,LTD."),
+    invoice_date: cite("2026-07-23"),
+    currency: cite("USD"),
+    amount: cite("4731.80"),
+    subtotal: cite("6759.71"),
+    adjustments: [
+      {
+        label: cite("DEDUCE THE REBATE OF 2025"),
+        amount: cite("-2,027.91"),
+      },
+      // No amount — nothing to reconcile, dropped.
+      { label: cite("Total") },
+    ],
+    incoterms: cite("FCA BANGKOK, THAILAND"),
+    line_items: [
+      {
+        line_number: cite("1"),
+        sku: cite("0840002141"),
+        description: cite('120 BLK 45 ELBOWS 11/4"'),
+        hts_code: cite("7307.19.3060"),
+        quantity: cite("200"),
+        unit_price: cite("1.431"),
+        total_price: cite("286.2"),
+      },
+      {
+        line_number: cite("2"),
+        sku: cite("0840003172"),
+        description: cite('130 BLK TEE 1"'),
+        hts_code: cite("7307.19.3060"),
+        quantity: cite("1152"),
+        unit_price: cite("2.061"),
+        total_price: cite("2374.27"),
       },
     ],
   },

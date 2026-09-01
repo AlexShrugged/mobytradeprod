@@ -22,11 +22,67 @@
 import type {
   AuditableEntry,
   AuditableInvoice,
+  AuditableInvoiceAdjustment,
   AuditableLine,
   AuditConfig,
   DesiredAlert,
 } from "./rules";
 import { dollars, fmt, moneySeverity, toCents } from "./rules";
+
+// The money figures a commercial invoice prints. total is the final amount
+// payable; subtotal the goods total when printed; goods the total less the
+// adjustment rows (discounts, rebates, credits, freight) — the value the
+// 7501 declares when the adjustments are not part of the price paid for
+// these goods (a prior-year rebate credit). Exported for the read side,
+// which shows the goods value beside the payable one.
+export type InvoiceFigure = {
+  kind: "total" | "subtotal" | "goods";
+  cents: number;
+};
+
+type InvoiceMoney = Pick<
+  AuditableInvoice,
+  "totalAmount" | "subtotal" | "adjustments"
+>;
+
+export function sumAdjustmentCents(
+  adjustments: AuditableInvoiceAdjustment[],
+): number {
+  let cents = 0;
+  for (const a of adjustments) cents += toCents(a.amount) ?? 0;
+  return cents;
+}
+
+export function invoiceFigures(inv: InvoiceMoney): InvoiceFigure[] {
+  const figures: InvoiceFigure[] = [];
+  const total = toCents(inv.totalAmount);
+  const subtotal = toCents(inv.subtotal);
+  if (total !== null) figures.push({ kind: "total", cents: total });
+  if (subtotal !== null) figures.push({ kind: "subtotal", cents: subtotal });
+  if (total !== null && inv.adjustments.length > 0)
+    figures.push({
+      kind: "goods",
+      cents: total - sumAdjustmentCents(inv.adjustments),
+    });
+  return figures;
+}
+
+/** The goods value of an invoice: the printed subtotal, else the total less
+ *  its adjustments, else the total. Null when the invoice prints no money. */
+export function invoiceGoodsCents(inv: InvoiceMoney): number | null {
+  const figures = invoiceFigures(inv);
+  return (
+    figures.find((f) => f.kind === "subtotal")?.cents ??
+    figures.find((f) => f.kind === "goods")?.cents ??
+    figures.find((f) => f.kind === "total")?.cents ??
+    null
+  );
+}
+
+const fmtSigned = (cents: number) => `${cents < 0 ? "-" : "+"}${fmt(cents)}`;
+
+const adjustmentDetails = (adjustments: AuditableInvoiceAdjustment[]) =>
+  adjustments.map((a) => ({ label: a.label, amount: Number(a.amount) }));
 
 const DUTY_RATE_CHARGE_TYPES = new Set([
   "base_duty",
@@ -104,44 +160,80 @@ export function computeInvoiceAlerts(
   const alerts: DesiredAlert[] = [];
   if (entry.linkedInvoices.length === 0) return alerts;
 
-  // ---- Rule 8: invoice internal consistency (header vs own line sum) -----
-  // An invoice whose own lines don't add up poisons every entry-vs-invoice
-  // comparison. Runs for every linked invoice regardless of currency —
-  // internal consistency is currency-agnostic.
+  // ---- Rule 8: invoice internal consistency (own arithmetic) -------------
+  // A commercial invoice is self-checking the way a 7501 is: the goods lines
+  // sum to the printed subtotal, and the subtotal plus the invoice-level
+  // adjustment rows (discounts, rebates, credits, freight) reaches the final
+  // total. The lines pass when they close against ANY figure the document
+  // offers — the total itself, the subtotal, or the total less the
+  // adjustments — so a rebate credit that explains the gap is never a
+  // finding; only an invoice whose own rows do not add up is. An invoice
+  // that fails poisons every entry-vs-invoice comparison and gates the rules
+  // below. Runs for every linked invoice regardless of currency — internal
+  // consistency is currency-agnostic.
   const consistent = new Map<AuditableInvoice, boolean>();
   for (const inv of entry.linkedInvoices) {
-    const headerCents = toCents(inv.totalAmount);
-    if (headerCents === null || inv.lines.length === 0) {
+    const figures = invoiceFigures(inv);
+    if (figures.length === 0 || inv.lines.length === 0) {
       // Nothing to cross-check — not evidence of inconsistency.
       consistent.set(inv, true);
       continue;
     }
     let lineSumCents = 0;
     for (const line of inv.lines) lineSumCents += toCents(line.totalPrice) ?? 0;
-    const diff = Math.abs(lineSumCents - headerCents);
-    const tolerance = Math.max(
-      config.valueToleranceAbsCents,
-      Math.round(headerCents * config.valueTolerancePct),
+    const tolerance = (baseCents: number) =>
+      Math.max(
+        config.valueToleranceAbsCents,
+        Math.round(Math.abs(baseCents) * config.valueTolerancePct),
+      );
+    const closes = figures.some(
+      (f) => Math.abs(lineSumCents - f.cents) <= tolerance(f.cents),
     );
-    if (diff > tolerance) {
-      consistent.set(inv, false);
-      alerts.push({
-        alertKey: `value_mismatch:invoice:${inv.invoiceNumber}`,
-        alertType: "value_mismatch",
-        severity: moneySeverity(diff, headerCents),
-        label: "Invoice total mismatch",
-        message: `Invoice ${inv.invoiceNumber} reports ${fmt(headerCents)}, but its ${inv.lines.length} line(s) total ${fmt(lineSumCents)}.`,
-        details: {
-          invoice_number: inv.invoiceNumber,
-          expected_amount: dollars(headerCents),
-          actual_amount: dollars(lineSumCents),
-          difference_amount: dollars(diff),
-        },
-        lineItemId: null,
-      });
-    } else {
+    if (closes) {
       consistent.set(inv, true);
+      continue;
     }
+    // Report against the figure the lines came nearest to — the gap the
+    // document's own rows leave unexplained.
+    const nearest = figures.reduce((best, f) =>
+      Math.abs(lineSumCents - f.cents) < Math.abs(lineSumCents - best.cents)
+        ? f
+        : best,
+    );
+    const diff = Math.abs(lineSumCents - nearest.cents);
+    const totalCents = toCents(inv.totalAmount);
+    const subtotalCents = toCents(inv.subtotal);
+    const adjCents = sumAdjustmentCents(inv.adjustments);
+    const reports =
+      totalCents !== null
+        ? `reports ${fmt(totalCents)}${
+            inv.adjustments.length > 0
+              ? ` after ${inv.adjustments.length} adjustment(s) totaling ${fmtSigned(adjCents)}`
+              : ""
+          }`
+        : `prints a subtotal of ${fmt(nearest.cents)}`;
+    const expected =
+      nearest.kind === "total" ? "" : `, not ${fmt(nearest.cents)}`;
+    consistent.set(inv, false);
+    alerts.push({
+      alertKey: `value_mismatch:invoice:${inv.invoiceNumber}`,
+      alertType: "value_mismatch",
+      severity: moneySeverity(diff, Math.abs(nearest.cents)),
+      label: "Invoice total mismatch",
+      message: `Invoice ${inv.invoiceNumber} ${reports}, but its ${inv.lines.length} line(s) total ${fmt(lineSumCents)}${expected}.`,
+      details: {
+        invoice_number: inv.invoiceNumber,
+        expected_amount: dollars(nearest.cents),
+        actual_amount: dollars(lineSumCents),
+        difference_amount: dollars(diff),
+        ...(totalCents !== null ? { total_amount: dollars(totalCents) } : {}),
+        ...(subtotalCents !== null ? { subtotal: dollars(subtotalCents) } : {}),
+        ...(inv.adjustments.length > 0
+          ? { adjustments: adjustmentDetails(inv.adjustments) }
+          : {}),
+      },
+      lineItemId: null,
+    });
   }
 
   // Per-invoice eligibility. singleEntry failures skip SILENTLY (normal
@@ -275,12 +367,18 @@ export function computeInvoiceAlerts(
     }
   }
 
-  // ---- Rule 9: CI header value vs entered value --------------------------
-  // Real severity — the CI is the document of record for value. Gates:
-  // every linked invoice must be money-eligible with a header amount (one
-  // bad apple poisons the sum), and every entry line must carry a SKU the
-  // CIs cover — incomplete ingestion surfaces as rule 15, not as a fake
-  // value variance.
+  // ---- Rule 9: CI goods value vs entered value ---------------------------
+  // Real severity — the CI is the document of record for value. The figure
+  // compared is the invoice's GOODS value (subtotal, else total less the
+  // adjustment rows): a prior-year rebate credited on the invoice lowers
+  // what the importer pays, not the price of these goods, and the 7501
+  // declares the goods. When the entry instead matches the adjusted total,
+  // the document supports that reading too — whether the adjustment belongs
+  // in transaction value is a valuation judgment (the AI analyst's), so it
+  // surfaces as an info comparison with no dollar claim. Gates: every linked
+  // invoice must be money-eligible with a header amount (one bad apple
+  // poisons the sum), and every entry line must carry a SKU the CIs cover —
+  // incomplete ingestion surfaces as rule 15, not as a fake value variance.
   let rule9Fired = false;
   const allMoneyEligible =
     entry.linkedInvoices.length > 0 &&
@@ -294,18 +392,50 @@ export function computeInvoiceAlerts(
     ciHasRealSkus;
   if (headerValueCents !== null && allMoneyEligible && fullCoverage) {
     let invSumCents = 0;
-    for (const inv of entry.linkedInvoices)
-      invSumCents += toCents(inv.totalAmount) ?? 0;
+    let payableSumCents = 0;
+    const adjustments: AuditableInvoiceAdjustment[] = [];
+    for (const inv of entry.linkedInvoices) {
+      invSumCents += invoiceGoodsCents(inv) ?? 0;
+      payableSumCents += toCents(inv.totalAmount) ?? 0;
+      adjustments.push(...inv.adjustments);
+    }
     const diff = Math.abs(invSumCents - headerValueCents);
     const tolerance = Math.max(
       config.valueToleranceAbsCents,
       Math.round(invSumCents * config.valueTolerancePct),
     );
-    if (invSumCents > 0 && diff > tolerance) {
+    const payableDiff = Math.abs(payableSumCents - headerValueCents);
+    const payableTolerance = Math.max(
+      config.valueToleranceAbsCents,
+      Math.round(payableSumCents * config.valueTolerancePct),
+    );
+    const invoiceNumbers = entry.linkedInvoices
+      .map((i) => i.invoiceNumber)
+      .sort();
+    if (
+      invSumCents > 0 &&
+      diff > tolerance &&
+      adjustments.length > 0 &&
+      payableDiff <= payableTolerance
+    ) {
+      alerts.push({
+        alertKey: "value_mismatch:invoice_total",
+        alertType: "value_mismatch",
+        severity: "info",
+        label: "Entered value follows the adjusted invoice total",
+        message: `The linked commercial invoice(s) ${invoiceNumbers.join(", ")} bill ${fmt(invSumCents)} for the goods and ${fmt(payableSumCents)} after ${adjustments.map((a) => `${a.label} (${fmtSigned(toCents(a.amount) ?? 0)})`).join(", ")}; the entry declares ${fmt(headerValueCents)}, the adjusted total.`,
+        details: {
+          expected_amount: dollars(invSumCents),
+          actual_amount: dollars(headerValueCents),
+          difference_amount: dollars(diff),
+          adjusted_total: dollars(payableSumCents),
+          adjustments: adjustmentDetails(adjustments),
+          invoice_numbers: invoiceNumbers,
+        },
+        lineItemId: null,
+      });
+    } else if (invSumCents > 0 && diff > tolerance) {
       rule9Fired = true;
-      const invoiceNumbers = entry.linkedInvoices
-        .map((i) => i.invoiceNumber)
-        .sort();
       const rate = effectiveAdValoremRate(entry.lines);
       alerts.push({
         alertKey: "value_mismatch:invoice_total",

@@ -443,7 +443,48 @@ const COMMERCIAL_INVOICE_SCHEMA = {
       type: ["string", "null"],
       description: "ISO 4217 currency code, e.g. USD.",
     },
-    amount: money("Invoice total"),
+    amount: {
+      type: ["number", "null"],
+      description:
+        "The final total amount payable in US dollars, as printed — the " +
+        "last total on the invoice, after any discount, rebate, credit, " +
+        "freight, or insurance rows.",
+    },
+    subtotal: {
+      type: ["number", "null"],
+      description:
+        "The goods subtotal in US dollars, before any invoice-level " +
+        "adjustment rows, when the invoice prints one (a 'Subtotal' or a " +
+        "'Total' printed above a discount/rebate/credit row). Null when " +
+        "the invoice prints a single total.",
+    },
+    adjustments: {
+      type: "array",
+      description:
+        "Invoice-level rows printed between the goods lines and the final " +
+        "total that change the amount payable: discounts, rebates, " +
+        "credits, freight, insurance, packing, handling. Not goods lines, " +
+        "and never the subtotal or total rows themselves. Empty when the " +
+        "invoice has none.",
+      items: {
+        type: "object",
+        properties: {
+          label: {
+            type: "string",
+            description:
+              "The row's label as printed, e.g. 'DEDUCE THE REBATE OF " +
+              "2025' or 'Ocean freight'.",
+          },
+          amount: {
+            type: "number",
+            description:
+              "The row's amount in US dollars, signed as printed: a " +
+              "deduction is negative (-2027.91), an addition positive.",
+          },
+        },
+        required: ["label", "amount"],
+      },
+    },
     incoterms: {
       type: ["string", "null"],
       description: "Incoterms and named place, e.g. 'FOB Yantian'.",
@@ -760,8 +801,14 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "and unit price.",
   commercial_invoice:
     "This is a supplier's commercial invoice. Capture the invoice number, " +
-    "referenced purchase order, currency, total, incoterms, and every goods " +
-    "line — including any HTS/HS tariff code printed on the line, verbatim.",
+    "referenced purchase order, currency, incoterms, and every goods " +
+    "line — including any HTS/HS tariff code printed on the line, verbatim. " +
+    "Rows printed after the goods lines — subtotal, total, discount, " +
+    "rebate, credit, freight, insurance, packing — are never goods lines. " +
+    "Report the goods subtotal in subtotal, each discount/rebate/credit/" +
+    "freight-style row in adjustments with its amount signed as printed " +
+    "(a deduction negative), and the final amount payable in amount. The " +
+    "goods lines plus the adjustments should add up to amount.",
   packing_list:
     "This is a packing list for an export shipment. Capture the bill of " +
     "lading, carton count, gross weight, and purchase order references.",

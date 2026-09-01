@@ -362,10 +362,28 @@ export default async function EntryDetailPage({
                     key={inv.id}
                     title={inv.invoiceNumber}
                     meta={
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {inv.totalAmount
-                          ? formatMoney(inv.totalAmount, inv.currency)
-                          : null}
+                      <span
+                        className="text-xs text-muted-foreground tabular-nums"
+                        title={
+                          inv.adjustments.length > 0
+                            ? inv.adjustments
+                                .map(
+                                  (a) =>
+                                    `${a.label} ${formatMoney(a.amount, inv.currency)}`,
+                                )
+                                .join("\n")
+                            : undefined
+                        }
+                      >
+                        {/* An invoice with adjustment rows (a rebate credit,
+                            freight) prints two money figures: the goods
+                            value the 7501 declares and the amount payable.
+                            Show both; a plain invoice shows its one total. */}
+                        {inv.adjustments.length > 0 && inv.goodsAmount
+                          ? `${formatMoney(inv.goodsAmount, inv.currency)} goods · ${formatMoney(inv.totalAmount, inv.currency)} payable`
+                          : inv.totalAmount
+                            ? formatMoney(inv.totalAmount, inv.currency)
+                            : null}
                         {inv.entryCount > 1
                           ? `${inv.totalAmount ? " · " : ""}spans ${inv.entryCount} entries`
                           : null}

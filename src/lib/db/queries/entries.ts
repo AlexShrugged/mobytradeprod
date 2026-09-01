@@ -35,6 +35,7 @@ import { resolveSailInfo } from "@/lib/duty/sail";
 import type { ReferenceData, SailBasis } from "@/lib/duty/types";
 import { resolveWindow } from "@/lib/effective-dating";
 import { hasActionableDiff } from "@/lib/variance/field-issue";
+import { invoiceGoodsCents } from "@/lib/audit/invoice-rules";
 import {
   ENTRY_PHASES,
   SUBMISSION_WINDOW_DAYS,
@@ -1008,7 +1009,17 @@ export type EntryDetail = {
     invoiceNumber: string;
     supplierName: string | null;
     currency: string;
+    /** The final amount payable as printed, after any adjustments. */
     totalAmount: string | null;
+    /** Goods total before adjustments, when the invoice prints one. */
+    subtotal: string | null;
+    /** Invoice-level rows between the goods lines and the total (rebates,
+     *  discounts, freight), signed as printed. */
+    adjustments: { label: string; amount: string }[];
+    /** The goods value the 7501 declares against — derived on read: the
+     *  subtotal, else the total less the adjustments, else the total. Null
+     *  when the invoice prints no money. */
+    goodsAmount: string | null;
     invoiceDate: string | null;
     entryCount: number;
     documents: EntryDocument[];
@@ -1051,7 +1062,15 @@ export async function getEntryDetail(
       refundClaims: true,
       entryShipments: { with: { shipment: true } },
       entryPurchaseOrders: { with: { purchaseOrder: true } },
-      entryInvoices: { with: { invoice: true } },
+      entryInvoices: {
+        with: {
+          invoice: {
+            with: {
+              adjustments: { orderBy: (a, { asc }) => [asc(a.position)] },
+            },
+          },
+        },
+      },
     },
   });
   if (!entry || entry.orgId !== orgId) return null;
@@ -1534,6 +1553,15 @@ export async function getEntryDetail(
         supplierName: invoice.supplierName,
         currency: invoice.currency,
         totalAmount: invoice.totalAmount,
+        subtotal: invoice.subtotal,
+        adjustments: invoice.adjustments.map((a) => ({
+          label: a.label,
+          amount: a.amount,
+        })),
+        goodsAmount: (() => {
+          const cents = invoiceGoodsCents(invoice);
+          return cents === null ? null : (cents / 100).toFixed(2);
+        })(),
         invoiceDate: invoice.invoiceDate,
         entryCount: invoiceEntryCount.get(invoice.id) ?? 1,
         documents: homeDocs("invoice", invoice.id),

@@ -1302,7 +1302,13 @@ export const invoices = pgTable(
     }),
     invoiceDate: date("invoice_date"),
     currency: varchar("currency", { length: 3 }).notNull().default("USD"),
+    // The final amount payable as printed — after any invoice-level
+    // adjustment rows (see invoice_adjustments). The goods value the
+    // variance rules compare against is subtotal when the invoice prints
+    // one, else total less the adjustments.
     totalAmount: numeric("total_amount", { precision: 12, scale: 2 }),
+    // Goods total before invoice-level adjustments, when printed.
+    subtotal: numeric("subtotal", { precision: 12, scale: 2 }),
     incoterms: varchar("incoterms", { length: 64 }),
     ...timestamps,
   },
@@ -1343,6 +1349,36 @@ export const invoiceLineItems = pgTable(
     uniqueIndex("ili_invoice_line_uq").on(t.invoiceId, t.lineNumber),
     index("ili_org_idx").on(t.orgId),
     index("ili_part_idx").on(t.partId),
+  ],
+);
+
+// Invoice-level rows printed between the goods lines and the final total —
+// discounts, rebates, credits, freight, insurance, packing. Declared facts
+// (amount signed as printed, a deduction negative), rewritten wholesale by
+// processing/linker.ts with the invoice's line items. They make the invoice
+// self-checking the way a 7501 is: lines + adjustments = total. Whether a
+// given adjustment belongs in transaction value (a trade discount on these
+// goods does, a prior-period rebate credit does not) is a valuation
+// judgment the AI analyst makes — the deterministic rules only reconcile.
+export const invoiceAdjustments = pgTable(
+  "invoice_adjustments",
+  {
+    id: id(),
+    orgId: orgId(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    label: text("label").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("invoice_adjustments_invoice_position_uq").on(
+      t.invoiceId,
+      t.position,
+    ),
+    index("invoice_adjustments_org_idx").on(t.orgId),
   ],
 );
 
@@ -1914,8 +1950,19 @@ export const invoicesRelations = relations(invoices, ({ one, many }) => ({
     references: [vendors.id],
   }),
   lineItems: many(invoiceLineItems),
+  adjustments: many(invoiceAdjustments),
   entryInvoices: many(entryInvoices),
 }));
+
+export const invoiceAdjustmentsRelations = relations(
+  invoiceAdjustments,
+  ({ one }) => ({
+    invoice: one(invoices, {
+      fields: [invoiceAdjustments.invoiceId],
+      references: [invoices.id],
+    }),
+  }),
+);
 
 export const entryInvoicesRelations = relations(entryInvoices, ({ one }) => ({
   entry: one(entries, {

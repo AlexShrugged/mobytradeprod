@@ -141,13 +141,27 @@ export type InvoiceLineItemExtraction = {
   manufacturer_name?: string | null;
 };
 
+// An invoice-level row printed between the goods lines and the final total
+// — discount, rebate, credit, freight, insurance, packing. Amount signed as
+// printed (a deduction negative). Never a goods line.
+export type InvoiceAdjustmentExtraction = {
+  label: string;
+  amount: number;
+};
+
 export type CommercialInvoiceExtraction = {
   invoice_number: string;
   po_number: string | null;
   supplier_name: string | null;
   invoice_date: string | null;
   currency: string;
+  /** The final amount payable as printed — after any adjustments. */
   amount: number | null;
+  /** Goods total before invoice-level adjustments, when the invoice prints
+   *  one. Null on invoices with no such row (most of them). */
+  subtotal: number | null;
+  /** The adjustment rows, in printed order. Empty on a plain invoice. */
+  adjustments: InvoiceAdjustmentExtraction[];
   incoterms: string | null;
   line_items: InvoiceLineItemExtraction[];
   // Document-only compliance facts (see EntryLineItemExtraction note).

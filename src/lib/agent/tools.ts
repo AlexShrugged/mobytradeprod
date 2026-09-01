@@ -418,7 +418,12 @@ export function buildAgentTools(
               invoiceNumber: inv.invoiceNumber,
               supplierName: inv.supplierName,
               currency: inv.currency,
+              // totalAmount is the amount payable as printed; goodsAmount
+              // the value before the adjustment rows (rebates, discounts,
+              // freight) — the figure the 7501 declares against.
               totalAmount: inv.totalAmount,
+              goodsAmount: inv.goodsAmount,
+              adjustments: inv.adjustments,
               entryCount: inv.entryCount,
             })),
             refundClaims: e.refundClaims,

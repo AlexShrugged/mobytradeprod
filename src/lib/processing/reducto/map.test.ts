@@ -7,6 +7,7 @@ import {
   CLASSIFY_RESPONSE_ASSIST,
   CLASSIFY_RESPONSE_INVALID,
   CLASSIFY_RESPONSE_PACKET,
+  COMMERCIAL_INVOICE_REBATE_RESPONSE,
   COMMERCIAL_INVOICE_RESPONSE,
   PACKING_LIST_RESPONSE,
   PORT_ENTRY_RESPONSE,
@@ -306,6 +307,8 @@ describe("commercial_invoice mapping", () => {
       invoice_date: "2026-06-20",
       currency: "USD",
       amount: 41900,
+      subtotal: null,
+      adjustments: [],
       incoterms: "FOB Yantian",
       payment_terms: "T/T 30 days",
       related_party: false,
@@ -496,5 +499,25 @@ describe("tariff_code_sheet mapping", () => {
         { entry_number: "231-7379174-7", rows: [] },
       ]),
     ).toThrow(/line-to-part rows/);
+  });
+});
+
+describe("commercial_invoice adjustments", () => {
+  it("keeps the rebate row as a signed adjustment beside the goods subtotal", () => {
+    const result = mapExtractToResult(
+      "commercial_invoice",
+      COMMERCIAL_INVOICE_REBATE_RESPONSE,
+    );
+    if (result.docType !== "commercial_invoice")
+      throw new Error("wrong docType");
+    expect(result.fields.amount).toBe(4731.8);
+    expect(result.fields.subtotal).toBe(6759.71);
+    // The amount-less "Total" row is dropped; the rebate keeps its sign.
+    expect(result.fields.adjustments).toEqual([
+      { label: "DEDUCE THE REBATE OF 2025", amount: -2027.91 },
+    ]);
+    expect(result.fields.line_items.map((l) => l.total_price)).toEqual([
+      286.2, 2374.27,
+    ]);
   });
 });

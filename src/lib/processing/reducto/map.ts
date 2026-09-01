@@ -358,6 +358,17 @@ function mapCommercialInvoice(
     invoice_date: toDate(data.invoice_date),
     currency: toStr(data.currency) ?? "USD",
     amount: toNum(data.amount),
+    subtotal: toNum(data.subtotal),
+    // An adjustment without an amount reconciles nothing — dropped. One
+    // without a label is still a fact the arithmetic needs.
+    adjustments: asRecordArray(data.adjustments)
+      .map((row) => ({
+        label: toStr(row.label) ?? "Adjustment",
+        amount: toNum(row.amount),
+      }))
+      .filter(
+        (row): row is typeof row & { amount: number } => row.amount !== null,
+      ),
     incoterms: toStr(data.incoterms),
     payment_terms: toStr(data.payment_terms),
     related_party: toBool(data.related_party),

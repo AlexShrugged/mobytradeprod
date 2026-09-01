@@ -612,7 +612,9 @@ export class StubDocumentProcessor implements DocumentProcessor {
       case "commercial_invoice": {
         // Lines built from real catalog parts so SKUs match. Header amount
         // normally equals the line sum; seed % 4 === 0 shifts it ~2% so the
-        // invoice-total audit finding is exercised.
+        // invoice-total audit finding is exercised, and seed % 4 === 2
+        // credits a prior-year rebate below the goods subtotal — the
+        // amount payable drops, the goods value (and the audit) do not.
         const lineCount = Math.min(2 + (seed % 3), this.catalog.length);
         const lineItems = [];
         let sumCents = 0;
@@ -636,8 +638,9 @@ export class StubDocumentProcessor implements DocumentProcessor {
             total_price: centsToDollars(totalCents),
           });
         }
+        const rebateCents = seed % 4 === 2 ? Math.round(sumCents * 0.05) : 0;
         const headerCents =
-          seed % 4 === 0 ? Math.round(sumCents * 1.02) : sumCents;
+          seed % 4 === 0 ? Math.round(sumCents * 1.02) : sumCents - rebateCents;
         const [origin] = pick(LANES, seed);
         return {
           docType: "commercial_invoice",
@@ -658,6 +661,16 @@ export class StubDocumentProcessor implements DocumentProcessor {
             invoice_date: iso(10 + (seed % 30)),
             currency: "USD",
             amount: centsToDollars(headerCents),
+            subtotal: rebateCents > 0 ? centsToDollars(sumCents) : null,
+            adjustments:
+              rebateCents > 0
+                ? [
+                    {
+                      label: "LESS PRIOR-YEAR REBATE",
+                      amount: -centsToDollars(rebateCents),
+                    },
+                  ]
+                : [],
             incoterms: `FOB ${origin.split(",")[0]}`,
             line_items: lineItems,
           },

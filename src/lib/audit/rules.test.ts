@@ -105,6 +105,8 @@ function invoice(over: Partial<AuditableInvoice> = {}): AuditableInvoice {
     invoiceNumber: "INV-1001",
     currency: "USD",
     totalAmount: "10000.00",
+    subtotal: null,
+    adjustments: [],
     lines: [invoiceLine()],
     linkedEntryCount: 1,
     ...over,
@@ -660,6 +662,68 @@ describe("rule 8: invoice internal consistency", () => {
       computeEntryAlerts(entry({ linkedInvoices: [invoice()] }), ref),
     ).toEqual([]);
   });
+
+  it("a rebate credit that explains the header gap is not a mismatch", () => {
+    // The ASC shape: goods 10,000, "DEDUCE THE REBATE OF 2025" -2,000,
+    // total amount 8,000. The 7501 declares the goods (10,000) — clean.
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "8000.00",
+            subtotal: "10000.00",
+            adjustments: [
+              { label: "DEDUCE THE REBATE OF 2025", amount: "-2000.00" },
+            ],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("closes against the total less adjustments when no subtotal is printed", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "10350.00",
+            adjustments: [{ label: "Ocean freight", amount: "350.00" }],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("adjustments that do not explain the gap still fire, against the nearest figure", () => {
+    // Lines 10,000; total 7,500 after a -2,000 rebate → the document's own
+    // rows leave 500 unexplained.
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "7500.00",
+            adjustments: [{ label: "REBATE", amount: "-2000.00" }],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["value_mismatch:invoice:INV-1001"]);
+    expect(alerts[0].message).toBe(
+      "Invoice INV-1001 reports $7,500.00 after 1 adjustment(s) totaling -$2,000.00, but its 1 line(s) total $10,000.00, not $9,500.00.",
+    );
+    expect(alerts[0].details).toMatchObject({
+      expected_amount: 9500,
+      actual_amount: 10000,
+      difference_amount: 500,
+      total_amount: 7500,
+      adjustments: [{ label: "REBATE", amount: -2000 }],
+    });
+  });
 });
 
 describe("rule 9: CI header value vs entered value", () => {
@@ -717,6 +781,67 @@ describe("rule 9: CI header value vs entered value", () => {
     expect(keys(computeEntryAlerts(over, ref))).toContain(
       "value_mismatch:invoice_total",
     );
+  });
+
+  it("compares the goods value, not the amount payable after a rebate", () => {
+    // Goods 12,500 less a 2,500 rebate = 10,000 payable; the entry declares
+    // 10,000. The document supports that figure too, so this is an info
+    // comparison with no dollar claim — and the per-SKU rule stays closed.
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "10000.00",
+            subtotal: "12500.00",
+            adjustments: [
+              { label: "DEDUCE THE REBATE OF 2025", amount: "-2500.00" },
+            ],
+            lines: [invoiceLine({ totalPrice: "12500.00" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["value_mismatch:invoice_total"]);
+    expect(alerts[0].severity).toBe("info");
+    expect(alerts[0].message).toBe(
+      "The linked commercial invoice(s) INV-1001 bill $12,500.00 for the goods and $10,000.00 after DEDUCE THE REBATE OF 2025 (-$2,500.00); the entry declares $10,000.00, the adjusted total.",
+    );
+    expect(alerts[0].details).toMatchObject({
+      expected_amount: 12500,
+      actual_amount: 10000,
+      adjusted_total: 10000,
+      adjustments: [{ label: "DEDUCE THE REBATE OF 2025", amount: -2500 }],
+    });
+    expect(alerts[0].details).not.toHaveProperty("effective_duty_rate");
+  });
+
+  it("an entry matching neither the goods value nor the adjusted total is a real variance", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        linkedInvoices: [
+          invoice({
+            totalAmount: "11500.00",
+            subtotal: "12500.00",
+            adjustments: [{ label: "REBATE", amount: "-1000.00" }],
+            lines: [invoiceLine({ totalPrice: "12500.00" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "value_mismatch:invoice_sku:EB-MTR-500W",
+      "value_mismatch:invoice_total",
+    ]);
+    const total = alerts.find(
+      (a) => a.alertKey === "value_mismatch:invoice_total",
+    )!;
+    expect(total.severity).toBe("error");
+    expect(total.details).toMatchObject({
+      expected_amount: 12500, // the goods value, not the 11,500 payable
+      actual_amount: 10000,
+    });
   });
 
   it("skips silently when the invoice spans multiple entries", () => {

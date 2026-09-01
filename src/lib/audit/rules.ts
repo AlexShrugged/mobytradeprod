@@ -90,12 +90,24 @@ export type AuditableInvoiceLine = {
   totalPrice: string;
 };
 
+/** An invoice-level row between the goods lines and the final total —
+ *  discount, rebate, credit, freight. Amount signed as printed. */
+export type AuditableInvoiceAdjustment = {
+  label: string;
+  amount: string;
+};
+
 export type AuditableInvoice = {
   invoiceNumber: string;
   /** ISO 4217. Money comparisons gate on USD — there is no FX support, and
    *  comparing a EUR invoice against USD entered value fabricates variance. */
   currency: string;
+  /** The final amount payable as printed, after any adjustments. */
   totalAmount: string | null;
+  /** Goods total before adjustments, when the invoice prints one. */
+  subtotal: string | null;
+  /** Adjustment rows in printed order; empty on a plain invoice. */
+  adjustments: AuditableInvoiceAdjustment[];
   lines: AuditableInvoiceLine[];
   /** How many entries this invoice links to via entry_invoices. SKU and
    *  header checks require exactly 1 — an invoice spanning entries cannot

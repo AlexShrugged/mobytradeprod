@@ -198,6 +198,7 @@ export async function loadAuditableSnapshot(
       invoice: {
         with: {
           lineItems: { orderBy: (li, { asc }) => [asc(li.lineNumber)] },
+          adjustments: { orderBy: (a, { asc }) => [asc(a.position)] },
         },
       },
     },
@@ -216,6 +217,11 @@ export async function loadAuditableSnapshot(
         invoiceNumber: invoice.invoiceNumber,
         currency: invoice.currency,
         totalAmount: invoice.totalAmount,
+        subtotal: invoice.subtotal,
+        adjustments: invoice.adjustments.map((a) => ({
+          label: a.label,
+          amount: a.amount,
+        })),
         lines: invoice.lineItems.map((li) => ({
           sku: li.sku,
           htsCode: li.htsCode,

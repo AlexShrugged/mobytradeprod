@@ -852,6 +852,7 @@ export async function linkExtraction(
           invoiceDate: f.invoice_date,
           currency: f.currency,
           totalAmount: f.amount?.toFixed(2) ?? null,
+          subtotal: f.subtotal?.toFixed(2) ?? null,
           incoterms: f.incoterms,
         };
         const existing = await tx.query.invoices.findFirst({
@@ -898,6 +899,24 @@ export async function linkExtraction(
               quantity: li.quantity?.toFixed(4) ?? null,
               unitPrice: li.unit_price?.toFixed(4) ?? null,
               totalPrice: li.total_price.toFixed(2),
+            })),
+          );
+        }
+
+        // Invoice-level adjustment rows (rebates, discounts, freight) —
+        // replaced wholesale with the lines; the invoice's own arithmetic
+        // (lines + adjustments = total) is reconciled on read by the audit.
+        await tx
+          .delete(schema.invoiceAdjustments)
+          .where(eq(schema.invoiceAdjustments.invoiceId, invoiceId));
+        if (f.adjustments.length > 0) {
+          await tx.insert(schema.invoiceAdjustments).values(
+            f.adjustments.map((a, i) => ({
+              orgId,
+              invoiceId,
+              position: i + 1,
+              label: a.label,
+              amount: a.amount.toFixed(2),
             })),
           );
         }

@@ -262,6 +262,28 @@ export default async function VarianceDetailPage({
                         </TableCell>
                       </TableRow>
                     ))}
+                    {/* The invoice's own arithmetic below the goods: the
+                        adjustment rows it prints (a rebate credit, freight)
+                        and the amount payable they lead to. */}
+                    {inv.adjustments.map((a, i) => (
+                      <TableRow
+                        key={`adjustment-${i}`}
+                        className="text-muted-foreground"
+                      >
+                        <TableCell colSpan={4}>{a.label}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatMoney(Number(a.amount))}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {inv.adjustments.length > 0 && inv.totalAmount ? (
+                      <TableRow className="font-medium">
+                        <TableCell colSpan={4}>Total payable</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatMoney(Number(inv.totalAmount))}
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
                   </TableBody>
                 </Table>
               </CardContent>

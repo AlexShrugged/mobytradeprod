@@ -185,7 +185,17 @@ Stop only stops rendering — the turn finishes via `after()` and
   scope never matched entry scope. Catalog comparisons (HTS/COO vs parts) remain: they
   check against master data, a different axis. CI money checks gate on USD (no FX) and
   on an invoice mapping to exactly one entry; comparisons are SKU-grouped
-  (pairing-invariant), never per-line-paired.
+  (pairing-invariant), never per-line-paired. A CI is self-checking like a 7501:
+  the extraction captures `subtotal` and the invoice-level `adjustments` rows
+  (rebates, discounts, credits, freight — `invoice_adjustments`, signed as
+  printed) beside `amount` (the total payable), and rule 8 passes when the goods
+  lines close against ANY printed figure (total, subtotal, total less
+  adjustments), so a "DEDUCE THE REBATE OF 2025" credit is never a mismatch.
+  Rule 9 compares entered value against the GOODS value (`invoiceGoodsCents`);
+  an entry matching the adjusted total instead is an info comparison with no
+  dollar claim — whether an adjustment belongs in transaction value (a trade
+  discount does, a prior-year rebate credit does not) is the AI analyst's
+  valuation call, per its prompt.
 - **Pure calculators**: integer cents, decimal-fraction rates, no IO; db handle passed as
   a parameter (`DbClient`). Tests colocated (`*.test.ts`).
 - **One charge per program.** `trade_measures.program` is the stable legal-program
