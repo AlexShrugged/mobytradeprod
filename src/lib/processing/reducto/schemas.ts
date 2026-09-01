@@ -205,11 +205,7 @@ const ENTRY_LINE_ITEM_SCHEMA = {
         "usually whole dollars, never followed by a unit code — a number " +
         "trailed by NO, KG, PCS, or similar is the net quantity, not the " +
         "entered value. Take the figure printed on this line's own " +
-        "commodity row, in the same column where the Chapter 99 rows " +
-        "above print 0. The unsuffixed figure printed beside the line's " +
-        "FIRST tariff number (column 34, Gross Weight / Manifest Qty — " +
-        "'9903.05.77  2297') is the gross weight in kilograms, never the " +
-        "entered value. An 'Invoice Value USD' / 'Entered Value USD' " +
+        "commodity row: an 'Invoice Value USD' / 'Entered Value USD' " +
         "trailer printed after a group of lines is an invoice-block " +
         "subtotal, never a line's entered value. Cross-check: the line's " +
         "printed ad-valorem duty amounts equal rate times this value.",
@@ -733,12 +729,7 @@ export const SYSTEM_PROMPTS: Record<ExtractableDocType, string> = {
     "commodity row carrying the 10-digit classification, the goods " +
     "description, the net quantity with its unit code, and the entered " +
     "value. Read the line's own fields from the commodity row; the Chapter " +
-    "99 rows above it are that line's additional-duty charges. The " +
-    "unsuffixed figure printed beside the line's first tariff number is " +
-    "column 34, the gross weight in kilograms — never the entered value " +
-    "and never the net quantity; the entered value is the column-36 " +
-    "dollar figure on the commodity row, where the Chapter 99 rows print " +
-    "0 and a 'C <n>' row prints charges. A line's " +
+    "99 rows above it are that line's additional-duty charges. A line's " +
     "stack may split across pages — a continuation sheet repeats the line " +
     "number and continues the same line, not a new one. Broker printouts " +
     "often group several numbered lines under one commercial invoice and " +
