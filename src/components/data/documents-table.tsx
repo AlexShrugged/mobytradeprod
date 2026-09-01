@@ -84,7 +84,20 @@ function orderWithChildren(documents: DocumentRow[]): DocumentRow[] {
   return ordered;
 }
 
-export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
+export function DocumentsTable({
+  documents,
+  totalCount,
+  filteredCount,
+  pageStart,
+}: {
+  documents: DocumentRow[];
+  /** All documents in the org, filter-independent. */
+  totalCount: number;
+  /** Documents matching the search across all pages. */
+  filteredCount: number;
+  /** Offset of this page's first row within the filtered set. */
+  pageStart: number;
+}) {
   const router = useRouter();
   const [viewing, setViewing] = React.useState<DocumentRow | null>(null);
   const [processingId, setProcessingId] = React.useState<string | null>(null);
@@ -122,7 +135,7 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
   };
 
   return (
-    <>
+    <div className="flex flex-col gap-2">
       <div className="rounded-md border">
         <Table>
           <TableHeader>
@@ -173,7 +186,9 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
                   colSpan={8}
                   className="h-24 text-center text-muted-foreground"
                 >
-                  No documents yet. Drop files above.
+                  {totalCount === 0
+                    ? "No documents yet. Drop files above."
+                    : "No documents match the filter."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -294,6 +309,11 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
           </TableBody>
         </Table>
       </div>
+      <p className="text-xs text-muted-foreground">
+        {documents.length === 0
+          ? `0 of ${filteredCount} documents`
+          : `${pageStart + 1}–${pageStart + documents.length} of ${filteredCount} documents`}
+      </p>
 
       <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
         <DialogContent className="max-w-2xl">
@@ -308,6 +328,6 @@ export function DocumentsTable({ documents }: { documents: DocumentRow[] }) {
           </pre>
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }

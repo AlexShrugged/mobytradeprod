@@ -18,7 +18,7 @@ import type {
 // One propose-and-confirm card. Confirm executes through the EXISTING
 // decision routes - PATCH /api/alerts/:id per unit id (the agent's note
 // lands as resolutionNote), POST /api/entries/:id/analyze, or POST
-// /api/org-rules (the same write path the Data page uses) - then records
+// /api/org-rules (the same write path the Settings page uses) - then records
 // the outcome on the proposal. The card itself never writes domain data.
 
 const DECISION_LABEL: Record<AlertDecisionPayload["decision"], string> = {

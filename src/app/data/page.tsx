@@ -1,6 +1,5 @@
 import { AutoRefresh } from "@/components/data/auto-refresh";
-import { DocumentsTable } from "@/components/data/documents-table";
-import { OrgRulesCard } from "@/components/data/org-rules-card";
+import { DocumentsView } from "@/components/data/documents-view";
 import { PageHeader } from "@/components/page-header";
 import { SourceCards } from "@/components/data/source-cards";
 import { UploadDropzone } from "@/components/data/upload-dropzone";
@@ -12,18 +11,28 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { getDocuments } from "@/lib/db/queries/documents";
+import { getDocumentsPage } from "@/lib/db/queries/documents";
 import { getIntegrationSources } from "@/lib/db/queries/integrations";
-import { getOrgRules } from "@/lib/db/queries/org-rules";
+import { parsePageParams } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
 
-export default async function DataPage() {
-  const [documents, sources, rules] = await Promise.all([
-    getDocuments(),
-    getIntegrationSources(),
-    getOrgRules(),
-  ]);
+// Search (?q=) and pagination (?page=, ?per=) are server-side — only one
+// page of documents is ever assembled.
+export default async function DataPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; page?: string; per?: string }>;
+}) {
+  const params = await searchParams;
+  const { page: requestedPage, per } = parsePageParams(params);
+  const q = (params.q ?? "").trim() || null;
+
+  const [{ rows: documents, totalCount, filteredCount, page }, sources] =
+    await Promise.all([
+      getDocumentsPage({ page: requestedPage, per, q }),
+      getIntegrationSources(),
+    ]);
   // The manual-upload source IS the dropzone; the cards show the automated
   // intake seams we support (SFTP / email inbox). Allowlisted, not
   // denylisted, so retired kinds still present in existing rows never render.
@@ -69,18 +78,14 @@ export default async function DataPage() {
             Everything brought into MobyTrade, with processing status.
           </p>
         </div>
-        <DocumentsTable documents={documents} />
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">Org rules</h2>
-          <p className="text-sm text-muted-foreground">
-            Standing instructions. Suppression rules hide matching variance
-            alerts; every rule guides the AI.
-          </p>
-        </div>
-        <OrgRulesCard rules={rules} />
+        <DocumentsView
+          documents={documents}
+          totalCount={totalCount}
+          filteredCount={filteredCount}
+          page={page}
+          per={per}
+          initialQuery={q ?? ""}
+        />
       </div>
       </div>
     </UploadStatusProvider>

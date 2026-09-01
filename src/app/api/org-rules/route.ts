@@ -18,7 +18,7 @@ export async function GET() {
   return NextResponse.json({ rules });
 }
 
-// The single write path for new org rules: the Data page add dialog and the
+// The single write path for new org rules: the Settings page add dialog and the
 // assistant's confirmed save_org_rule card both POST here. A suppression
 // rule re-sweeps the org synchronously so the response carries the cleared
 // count; a sweep that dies heals on the next one (alert_key idempotency).

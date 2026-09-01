@@ -45,7 +45,7 @@ export type AnalyzeEntryPayload = {
 };
 
 /** An org rule awaiting human confirmation. Confirm POSTs /api/org-rules —
- *  the same write path the Data page uses; the agent never writes rules. */
+ *  the same write path the Settings page uses; the agent never writes rules. */
 export type SaveOrgRulePayload = {
   kind: "save_org_rule";
   /** The cleaned one-sentence rule. */

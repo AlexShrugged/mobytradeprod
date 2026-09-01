@@ -868,14 +868,14 @@ export const integrationSources = pgTable(
 
 // ---------------------------------------------------------------- org rules
 //
-// Standing instructions an importer records, shown on the Data page. Tier 1:
+// Standing instructions an importer records, shown on the Settings page. Tier 1:
 // a rule may carry a structured suppression spec (alert types + optional
 // supplier/COO/HTS-prefix scope, zod-validated in the routes) that filters
 // the auditor's desired alerts before reconcile — rule changes trigger an
 // org sweep so open alerts clear/reappear; resolved and dismissed rows are
 // never touched. Tier 2: every enabled rule's text injects into the entry
 // analyst's and assistant's prompts as standing instructions. Written ONLY
-// by the org-rules routes (manual Data-page CRUD and assistant-confirmed
+// by the org-rules routes (manual Settings-page CRUD and assistant-confirmed
 // save_org_rule proposals both execute through them). Rule kind (suppression
 // vs guidance) derives from spec presence on read — never stored. Suppression
 // narrows alerting, never duty math; no custom deterministic checks live here.

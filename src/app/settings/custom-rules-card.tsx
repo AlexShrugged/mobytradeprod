@@ -7,7 +7,12 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -72,7 +77,7 @@ function reauditNote(reaudit: Reaudit): string {
   return bits.length > 0 ? ` ${bits.join(", ")}.` : "";
 }
 
-export function OrgRulesCard({ rules }: { rules: OrgRule[] }) {
+export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -119,6 +124,9 @@ export function OrgRulesCard({ rules }: { rules: OrgRule[] }) {
 
   return (
     <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Custom rules</CardTitle>
+      </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {rules.length === 0 ? (
           <p className="text-muted-foreground">
