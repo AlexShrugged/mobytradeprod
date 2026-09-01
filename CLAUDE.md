@@ -28,10 +28,18 @@ arithmetic-checked (`processing/reconcile.ts` — a 7501 is self-checking:
 rated duty charges print rate AND amount, headers print the totals):
 when ≥2 distinct ad-valorem charges agree on an implied basis that
 contradicts a line's entered value (the invoice-block "Entered Value USD"
-trailer misread), or line/duty sums miss the header totals, the processor
-re-extracts once with the findings spelled out, then fails the document
-closed — one legitimately dissenting charge (232 metal-content basis) is
-never a finding. Broker **entry packets** (one PDF
+trailer misread, the column-34 gross weight taken as the value), or
+line/duty sums miss the header totals (the duty total reconciles under
+either AD/CVD convention: block 37 "Duty" usually leaves deposits to block
+39), the processor re-extracts once with the findings spelled out, then
+fails the document closed — one legitimately dissenting charge (232
+metal-content basis) is never a finding. The one SOFT finding is a net
+quantity identical to a ≥$100 entered value (the extractor's column
+shift): it joins the retry, and if it alone persists the quantity is
+blanked rather than persisted. Prompt wording was measured on real ASC
+packets (2026-09-01): naming the gross-weight column in the hints made
+quantity WORSE, so the deterministic checks carry the load — replay a
+suspect PDF locally before changing the prompt text. Broker **entry packets** (one PDF
 bundling a 7501 + commercial invoice + supporting docs) split into child documents
 (parent-child rows on `documents`; children share the parent's file, page-scoped) that
 each run the normal per-doc pipeline.
