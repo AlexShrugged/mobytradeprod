@@ -67,13 +67,16 @@ function scopeSummary(s: Suppression): string {
   return parts.join(" · ");
 }
 
-function reauditNote(reaudit: Reaudit): string {
-  if (!reaudit) return "";
+function changeNote(reaudit: Reaudit, analysesQueued: number): string {
   const bits: string[] = [];
-  if (reaudit.cleared > 0)
+  if (reaudit && reaudit.cleared > 0)
     bits.push(`${reaudit.cleared} alert${reaudit.cleared === 1 ? "" : "s"} cleared`);
-  if (reaudit.created > 0)
+  if (reaudit && reaudit.created > 0)
     bits.push(`${reaudit.created} alert${reaudit.created === 1 ? "" : "s"} surfaced`);
+  if (analysesQueued > 0)
+    bits.push(
+      `${analysesQueued} entr${analysesQueued === 1 ? "y" : "ies"} queued for re-analysis`,
+    );
   return bits.length > 0 ? ` ${bits.join(", ")}.` : "";
 }
 
@@ -88,7 +91,7 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
     method: "PATCH" | "DELETE",
     ruleId: string,
     body: Record<string, unknown> | null,
-    success: (reaudit: Reaudit) => string,
+    success: (note: string) => string,
   ) {
     setBusy(true);
     try {
@@ -103,7 +106,11 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
       });
       const payload = await res.json().catch(() => null);
       if (!res.ok) throw new Error(payload?.error ?? "Update failed.");
-      toast.success(success(payload?.reaudit ?? null));
+      toast.success(
+        success(
+          changeNote(payload?.reaudit ?? null, payload?.analysesQueued ?? 0),
+        ),
+      );
       setEditingId(null);
       router.refresh();
     } catch (err) {
@@ -119,7 +126,7 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
       setEditingId(null);
       return;
     }
-    await call("PATCH", rule.id, { text }, () => "Rule updated.");
+    await call("PATCH", rule.id, { text }, (note) => "Rule updated." + note);
   }
 
   return (
@@ -148,10 +155,10 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
                         "PATCH",
                         rule.id,
                         { enabled: checked === true },
-                        (reaudit) =>
+                        (note) =>
                           (checked === true
                             ? "Rule enabled."
-                            : "Rule disabled.") + reauditNote(reaudit),
+                            : "Rule disabled.") + note,
                       )
                     }
                   />
@@ -242,7 +249,7 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
                             "DELETE",
                             rule.id,
                             null,
-                            (reaudit) => "Rule deleted." + reauditNote(reaudit),
+                            (note) => "Rule deleted." + note,
                           )
                         }
                       >
@@ -320,7 +327,10 @@ function AddRuleDialog({
       });
       const payload = await res.json().catch(() => null);
       if (!res.ok) throw new Error(payload?.error ?? "Save failed.");
-      toast.success("Rule saved." + reauditNote(payload?.reaudit ?? null));
+      toast.success(
+        "Rule saved." +
+          changeNote(payload?.reaudit ?? null, payload?.analysesQueued ?? 0),
+      );
       onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Save failed.");

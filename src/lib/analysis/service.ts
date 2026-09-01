@@ -16,7 +16,9 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 import * as schema from "../db/schema";
+import { isUnscoped, lineMatchesScope } from "../audit/suppression";
 import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
+import type { SuppressionSpec } from "../org-rules";
 import { getEntryAnalyst } from "./index";
 import { loadEntryBundle } from "./bundle";
 import { findingCategorySchema, type Finding } from "./findings";
@@ -371,11 +373,83 @@ export async function queueReanalysesForEntries(
   return queueForAnalyzed(db, analyzed);
 }
 
+/**
+ * Org-rule sibling of the tariff-apply queues: an org rule changed, so the
+ * analyst's standing instructions moved and its prior judgments on this
+ * org's entries need re-deriving — a clean re-run withdraws findings the
+ * rule now covers (they clear via the finding_key reconcile) and can
+ * surface new ones the rule demands. Still filtered to entries the analyst
+ * has cleanly analyzed: analysis stays opt-in per entry.
+ *
+ * `scopes` bounds the blast radius (each re-run is a real model
+ * investigation): one element per rule state the change touched — the
+ * before spec and/or the after spec on an edit, one spec on create/delete.
+ * A guidance rule (null) or an unscoped spec has no structured scope, so
+ * the whole analyzed set queues; a scoped spec queues only entries with a
+ * line matching its axes, via the auditor's own lineMatchesScope so the
+ * two layers can never disagree. alertTypes are deliberately ignored here:
+ * they name audit alert types, and the analyst re-judges the entry
+ * holistically anyway.
+ */
+export async function queueReanalysesForOrgRule(
+  db: DbClient,
+  orgId: string,
+  scopes: (SuppressionSpec | null)[],
+): Promise<number> {
+  if (scopes.length === 0) return 0;
+
+  const analyzed = await db
+    .selectDistinct({
+      entryId: schema.analysisRuns.entryId,
+      orgId: schema.analysisRuns.orgId,
+    })
+    .from(schema.analysisRuns)
+    .where(
+      and(
+        eq(schema.analysisRuns.orgId, orgId),
+        eq(schema.analysisRuns.status, "succeeded"),
+      ),
+    );
+  if (analyzed.length === 0) return 0;
+
+  const specs = scopes.filter((s): s is SuppressionSpec => s !== null);
+  const everything =
+    specs.length < scopes.length || specs.some(isUnscoped);
+
+  let targets = analyzed;
+  if (!everything) {
+    const matched = new Set<string>();
+    const ids = analyzed.map((a) => a.entryId);
+    for (let i = 0; i < ids.length; i += 500) {
+      const lines = await db.query.entryLineItems.findMany({
+        where: and(
+          eq(schema.entryLineItems.orgId, orgId),
+          inArray(schema.entryLineItems.entryId, ids.slice(i, i + 500)),
+        ),
+        columns: {
+          entryId: true,
+          supplierName: true,
+          countryOfOrigin: true,
+          htsCodeDigits: true,
+        },
+      });
+      for (const line of lines) {
+        if (specs.some((spec) => lineMatchesScope(line, spec))) {
+          matched.add(line.entryId);
+        }
+      }
+    }
+    targets = analyzed.filter((a) => matched.has(a.entryId));
+  }
+  return queueForAnalyzed(db, targets, "org_rule");
+}
+
 /** Shared tail: drop entries already pending, insert the rest. Chunked —
  *  the analyzed set can span the whole book. */
 async function queueForAnalyzed(
   db: DbClient,
   analyzed: { entryId: string; orgId: string }[],
+  trigger: "tariff_apply" | "org_rule" = "tariff_apply",
 ): Promise<number> {
   if (analyzed.length === 0) return 0;
 
@@ -403,7 +477,7 @@ async function queueForAnalyzed(
         orgId: a.orgId,
         entryId: a.entryId,
         status: "pending" as const,
-        trigger: "tariff_apply" as const,
+        trigger,
       })),
     );
   }

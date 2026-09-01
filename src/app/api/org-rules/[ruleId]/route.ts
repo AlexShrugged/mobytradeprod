@@ -1,14 +1,41 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
+import {
+  processPendingAnalyses,
+  queueReanalysesForOrgRule,
+} from "@/lib/analysis/service";
 import { sweepAudits } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 import {
+  sameAnalystSemantics,
   sameSuppressionSemantics,
   suppressionSpecSchema,
+  type SuppressionSpec,
 } from "@/lib/org-rules";
+
+/** Queue re-analysis for the entries a rule change touches and drain after
+ *  the response. `scopes` carries every rule state involved (before and/or
+ *  after) — see queueReanalysesForOrgRule for the blast-radius rules. */
+async function queueAndDrain(
+  orgId: string,
+  scopes: (SuppressionSpec | null)[],
+): Promise<number> {
+  const queued = await queueReanalysesForOrgRule(db, orgId, scopes);
+  if (queued > 0) {
+    after(async () => {
+      await processPendingAnalyses(db).catch((err) => {
+        console.error("re-analysis after org rule change failed:", err);
+      });
+    });
+  }
+  return queued;
+}
+
+const specOf = (rule: { suppression: unknown }): SuppressionSpec | null =>
+  (rule.suppression as SuppressionSpec | null) ?? null;
 
 const bodySchema = z
   .object({
@@ -74,7 +101,19 @@ export async function PATCH(
     ? null
     : await sweepAudits(db, orgId);
 
-  return NextResponse.json({ rule, reaudit });
+  // The analyst sees more than the auditor (text, guidance rules), so this
+  // gate is wider than the sweep's. Scope by whichever rule states were
+  // live: the before spec covers entries the rule stops applying to, the
+  // after spec covers ones it starts applying to.
+  let analysesQueued = 0;
+  if (!sameAnalystSemantics(existing, rule)) {
+    const scopes: (SuppressionSpec | null)[] = [];
+    if (existing.enabled) scopes.push(specOf(existing));
+    if (rule.enabled) scopes.push(specOf(rule));
+    analysesQueued = await queueAndDrain(orgId, scopes);
+  }
+
+  return NextResponse.json({ rule, reaudit, analysesQueued });
 }
 
 export async function DELETE(
@@ -101,5 +140,11 @@ export async function DELETE(
       ? await sweepAudits(db, orgId)
       : null;
 
-  return NextResponse.json({ ok: true, reaudit });
+  // Deleting an enabled rule (guidance included) changes the analyst's
+  // instructions; a disabled rule was already invisible to it.
+  const analysesQueued = existing.enabled
+    ? await queueAndDrain(orgId, [specOf(existing)])
+    : 0;
+
+  return NextResponse.json({ ok: true, reaudit, analysesQueued });
 }

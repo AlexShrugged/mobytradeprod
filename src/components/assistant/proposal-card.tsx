@@ -108,10 +108,17 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
         ]);
         if (res.ok) {
           const cleared: number = body?.reaudit?.cleared ?? 0;
-          toast.success(
+          const queued: number = body?.analysesQueued ?? 0;
+          const bits = [
             cleared > 0
-              ? `Rule saved. ${cleared} alert${cleared === 1 ? "" : "s"} cleared.`
-              : "Rule saved.",
+              ? `${cleared} alert${cleared === 1 ? "" : "s"} cleared`
+              : null,
+            queued > 0
+              ? `${queued} entr${queued === 1 ? "y" : "ies"} queued for re-analysis`
+              : null,
+          ].filter(Boolean);
+          toast.success(
+            bits.length > 0 ? `Rule saved. ${bits.join(", ")}.` : "Rule saved.",
           );
         } else {
           toast.error(body?.error ?? "Saving the rule failed.");

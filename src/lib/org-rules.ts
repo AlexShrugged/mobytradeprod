@@ -99,3 +99,23 @@ export const sameSuppressionSemantics = (
   before: { enabled: boolean; suppression: unknown },
   after: { enabled: boolean; suppression: unknown },
 ): boolean => suppressionSemantics(before) === suppressionSemantics(after);
+
+// The ANALYST sees more of a rule than the auditor does: every enabled
+// rule's text reaches its prompt (guidance and suppression alike), so text
+// edits and guidance toggles change analyst behavior even though they skip
+// the audit sweep. Disabled rules are invisible to it.
+const analystSemantics = (rule: {
+  enabled: boolean;
+  text: string;
+  suppression: unknown;
+}): string | null =>
+  rule.enabled
+    ? `${stableStringify(rule.suppression ?? null)}|${rule.text}`
+    : null;
+
+/** True when a mutation left the rule's effect on the AI analyst unchanged —
+ *  the routes skip re-analysis queueing in that case. */
+export const sameAnalystSemantics = (
+  before: { enabled: boolean; text: string; suppression: unknown },
+  after: { enabled: boolean; text: string; suppression: unknown },
+): boolean => analystSemantics(before) === analystSemantics(after);

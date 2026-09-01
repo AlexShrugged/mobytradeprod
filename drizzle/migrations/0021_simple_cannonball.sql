@@ -1,0 +1,1 @@
+ALTER TYPE "public"."analysis_run_trigger" ADD VALUE 'org_rule';

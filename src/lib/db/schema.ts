@@ -314,6 +314,9 @@ export const analysisRunStatus = pgEnum("analysis_run_status", [
 export const analysisRunTrigger = pgEnum("analysis_run_trigger", [
   "manual",
   "tariff_apply",
+  // An org rule changed (created, edited, toggled, deleted) — the analyst's
+  // standing instructions moved, so its prior judgments need re-deriving.
+  "org_rule",
 ]);
 export const adcvdOrderStatus = pgEnum("adcvd_order_status", [
   "active",

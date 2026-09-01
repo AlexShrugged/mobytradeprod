@@ -30,12 +30,25 @@ export type SuppressionOutcome = {
 
 const casefold = (s: string) => s.trim().toLowerCase();
 
-const isUnscoped = (spec: SuppressionSpec): boolean =>
+/** No scope axes at all — the rule claims its alert types org-wide.
+ *  Exported for the analysis queue's blast-radius math. */
+export const isUnscoped = (spec: SuppressionSpec): boolean =>
   spec.supplierName === null &&
   spec.countryOfOrigin === null &&
   spec.htsPrefix === null;
 
-function lineMatchesScope(line: AuditableLine, spec: SuppressionSpec): boolean {
+/** The line facts the scope axes read — a structural subset of
+ *  AuditableLine, so entry_line_items rows qualify directly. */
+export type ScopeFacts = {
+  supplierName?: string | null;
+  countryOfOrigin: string | null;
+  htsCodeDigits: string;
+};
+
+/** Exported alongside isUnscoped: the analysis queue scopes re-analysis to
+ *  entries with a matching line using the SAME axis semantics the auditor
+ *  suppresses with, so the two layers can never disagree on scope. */
+export function lineMatchesScope(line: ScopeFacts, spec: SuppressionSpec): boolean {
   if (spec.supplierName !== null) {
     if (!line.supplierName) return false;
     if (casefold(line.supplierName) !== casefold(spec.supplierName)) return false;

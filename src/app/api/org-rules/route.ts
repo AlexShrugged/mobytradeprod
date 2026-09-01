@@ -1,10 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { z } from "zod";
 
+import {
+  processPendingAnalyses,
+  queueReanalysesForOrgRule,
+} from "@/lib/analysis/service";
 import { sweepAudits } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
-import { loadOrgRules, suppressionSpecSchema } from "@/lib/org-rules";
+import {
+  loadOrgRules,
+  suppressionSpecSchema,
+  type SuppressionSpec,
+} from "@/lib/org-rules";
 
 const bodySchema = z.object({
   text: z.string().trim().min(1).max(300),
@@ -54,5 +62,20 @@ export async function POST(request: Request) {
 
   const reaudit = rule.suppression ? await sweepAudits(db, orgId) : null;
 
-  return NextResponse.json({ rule, reaudit }, { status: 201 });
+  // Rule alerts cleared synchronously above; AI findings need real model
+  // runs, so they queue (scoped by the spec's axes when present) and drain
+  // after the response — the tariff-apply pattern. Guidance rules queue
+  // too: every enabled rule reaches the analyst's prompt.
+  const analysesQueued = await queueReanalysesForOrgRule(db, orgId, [
+    (rule.suppression as SuppressionSpec | null) ?? null,
+  ]);
+  if (analysesQueued > 0) {
+    after(async () => {
+      await processPendingAnalyses(db).catch((err) => {
+        console.error("re-analysis after org rule save failed:", err);
+      });
+    });
+  }
+
+  return NextResponse.json({ rule, reaudit, analysesQueued }, { status: 201 });
 }

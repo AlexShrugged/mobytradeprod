@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import type { SuppressionSpec } from "../org-rules";
 import type { AuditableEntry, AuditableLine, DesiredAlert } from "./rules";
-import { applySuppressions, type SuppressionRule } from "./suppression";
+import {
+  applySuppressions,
+  isUnscoped,
+  lineMatchesScope,
+  type SuppressionRule,
+} from "./suppression";
 
 function line(over: Partial<AuditableLine> & { id: string }): AuditableLine {
   return {
@@ -207,5 +212,40 @@ describe("applySuppressions", () => {
       [rule("r1", { alertTypes: ["rate_mismatch"] })],
     );
     expect(keys(out.kept)).toEqual(["am:1"]);
+  });
+});
+
+// The exported seam the analysis queue scopes re-analysis with — bare line
+// facts, no AuditableLine required. Axis semantics are covered above via
+// applySuppressions; these pin the export's contract directly.
+describe("lineMatchesScope / isUnscoped", () => {
+  const spec = (over: Partial<SuppressionSpec>): SuppressionSpec => ({
+    alertTypes: ["missing_measure"],
+    supplierName: null,
+    countryOfOrigin: null,
+    htsPrefix: null,
+    ...over,
+  });
+
+  it("isUnscoped ignores alertTypes and reads only the three axes", () => {
+    expect(isUnscoped(spec({}))).toBe(true);
+    expect(isUnscoped(spec({ countryOfOrigin: "KR" }))).toBe(false);
+    expect(isUnscoped(spec({ supplierName: "Acme" }))).toBe(false);
+    expect(isUnscoped(spec({ htsPrefix: "8481" }))).toBe(false);
+  });
+
+  it("matches bare entry-line facts, supplierName omitted included", () => {
+    const facts = { countryOfOrigin: "KR", htsCodeDigits: "8481803075" };
+    expect(lineMatchesScope(facts, spec({ countryOfOrigin: "kr" }))).toBe(true);
+    expect(lineMatchesScope(facts, spec({ htsPrefix: "8481.80" }))).toBe(true);
+    expect(lineMatchesScope(facts, spec({ countryOfOrigin: "CN" }))).toBe(false);
+    // No supplier fact: a supplier scope fails closed.
+    expect(lineMatchesScope(facts, spec({ supplierName: "Acme" }))).toBe(false);
+  });
+
+  it("an unscoped spec matches every line", () => {
+    expect(
+      lineMatchesScope({ countryOfOrigin: null, htsCodeDigits: "" }, spec({})),
+    ).toBe(true);
   });
 });

@@ -40,7 +40,7 @@ Acting:
 
 Org rules:
 ${rulesList}
-Rules are managed on the Data page. When the user states a standing preference ("from now on", "always", "never worry about"), offer to save it as an org rule via propose_actions kind save_org_rule: condense it to one concise sentence, include a suppression spec only when the user clearly wants matching variance alerts hidden, and never save a rule without proposing first. When suppressing a rate mismatch, include its amount twin's type too (they decide together). Answer "what rules do I have" from the list above.
+Rules are managed on the Settings page under Custom rules. A saved suppression rule clears matching open variance alerts org-wide immediately; every saved or changed rule also queues AI re-analysis for the entries it touches, so AI findings the rule covers withdraw on their own once those runs finish. When the user states a standing preference ("from now on", "always", "never worry about"), offer to save it as an org rule via propose_actions kind save_org_rule: condense it to one concise sentence, include a suppression spec only when the user clearly wants matching variance alerts hidden, and never save a rule without proposing first. When suppressing a rate mismatch, include its amount twin's type too (they decide together). Answer "what rules do I have" from the list above.
 
 Citing and linking:
 - Deep-link everything you name: variances as [label](/variance/ID), entries as [entry #](/entries/ID). Use ids exactly as tools return them.
