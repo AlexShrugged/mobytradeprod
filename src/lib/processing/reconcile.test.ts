@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  dropMirroredQuantities,
+  isLedgerFinding,
   reconcilePortEntry,
   reconcileRetryAddendum,
 } from "./reconcile";
@@ -394,6 +396,80 @@ describe("reconcilePortEntry totals", () => {
       total_duty: 1689.68,
     });
     expect(reconcilePortEntry(clean)).toEqual([]);
+  });
+});
+
+describe("reconcilePortEntry quantity mirror", () => {
+  it("flags a net quantity that mirrors the line's entered value", () => {
+    // The column shift on 231-7387976-5 after reprocessing: money right,
+    // quantities 5908/6471/5960 where the form prints 1924/2108/1942 KG.
+    const shifted = entry({
+      line_items: [
+        { ...ascLine1(), quantity: 3039 },
+        { ...ascLine2(), quantity: 1602 },
+      ],
+    });
+    const findings = reconcilePortEntry(shifted);
+    expect(findings.map((f) => [f.kind, f.lineNumber])).toEqual([
+      ["quantity_mirror", 1],
+    ]);
+    expect(findings[0].message).toContain("3039");
+    expect(findings[0].message).toContain("$3,039.00");
+    expect(isLedgerFinding(findings[0])).toBe(false);
+  });
+
+  it("lets a small value coincide with its quantity", () => {
+    // Five valves entered at $5 — or any sub-$100 line — is not a shift.
+    const small = entry({
+      line_items: [line({ entered_value: 5, quantity: 5, charges: [] })],
+    });
+    expect(reconcilePortEntry(small)).toEqual([]);
+  });
+
+  it("ignores lines without a quantity", () => {
+    expect(reconcilePortEntry(entry({ line_items: [ascLine1()] }))).toEqual(
+      [],
+    );
+  });
+
+  it("keeps the ledger findings hard and the quantity finding soft", () => {
+    const merged = entry({
+      line_items: [{ ...ascLine1(), entered_value: 8070, quantity: 8070 }],
+    });
+    const findings = reconcilePortEntry(merged);
+    expect(findings.map((f) => f.kind)).toEqual([
+      "line_basis",
+      "quantity_mirror",
+    ]);
+    expect(findings.filter(isLedgerFinding).map((f) => f.kind)).toEqual([
+      "line_basis",
+    ]);
+  });
+});
+
+describe("dropMirroredQuantities", () => {
+  it("blanks only the indicted lines' quantities and leaves the rest intact", () => {
+    const shifted = entry({
+      total_entered_value: 8070,
+      line_items: [{ ...ascLine1(), quantity: 3039 }, ascLine2()],
+    });
+    const findings = reconcilePortEntry(shifted);
+    const cleaned = dropMirroredQuantities(shifted, findings);
+    expect(cleaned.line_items.map((l) => l.quantity)).toEqual([null, 1602]);
+    expect(cleaned.line_items.map((l) => l.entered_value)).toEqual([
+      3039, 5031,
+    ]);
+    expect(cleaned.total_entered_value).toBe(8070);
+    // The input is untouched.
+    expect(shifted.line_items[0].quantity).toBe(3039);
+    expect(reconcilePortEntry(cleaned)).toEqual([]);
+  });
+
+  it("returns the extraction as-is without quantity findings", () => {
+    const clean = entry({ line_items: [ascLine1()] });
+    expect(dropMirroredQuantities(clean, reconcilePortEntry(clean))).toBe(
+      clean,
+    );
   });
 });
 

@@ -18,10 +18,72 @@ import type {
 // trailer, raising false duty variances equal to line 002's real duties).
 
 export type PortEntryReconcileFinding = {
-  kind: "line_basis" | "entered_value_total" | "duty_total";
+  kind:
+    | "line_basis"
+    | "entered_value_total"
+    | "duty_total"
+    | "quantity_mirror";
   lineNumber: number | null;
   message: string;
 };
+
+/** Findings that prove the duty ledger wrong. A quantity_mirror finding is
+ *  the one soft kind: it proves the quantity wrong, never the money. */
+export function isLedgerFinding(finding: PortEntryReconcileFinding): boolean {
+  return finding.kind !== "quantity_mirror";
+}
+
+// Below this a quantity and a whole-dollar value can coincide by chance
+// (5 valves for $5 is not a misread). At $100 and up an exact match is
+// the column shift, not a coincidence.
+const QUANTITY_MIRROR_FLOOR = 100;
+
+/**
+ * The 7501's other systematic misread: the extractor slides the line's
+ * columns one to the right, so the net quantity (a unit-suffixed figure —
+ * "2108 KG") comes back as the entered value's dollar figure. Nothing on
+ * the form multiplies a quantity, so the arithmetic cannot prove it the
+ * way it proves the duty basis; but a quantity that equals a
+ * three-digit-plus dollar value to the unit is that shift, not a fact
+ * (12 of 73 prod 7501s carried it before this check existed).
+ */
+function reconcileQuantity(
+  line: EntryLineItemExtraction,
+): PortEntryReconcileFinding | null {
+  if (line.quantity === null) return null;
+  if (line.entered_value < QUANTITY_MIRROR_FLOOR) return null;
+  if (Math.abs(line.quantity - line.entered_value) >= 0.5) return null;
+  return {
+    kind: "quantity_mirror",
+    lineNumber: line.line_number,
+    message:
+      `Line ${line.line_number} (HTS ${line.hts_code}): net quantity ` +
+      `extracted as ${line.quantity}, identical to its entered value ` +
+      `${usd(line.entered_value)} — the unit-suffixed quantity on the ` +
+      `commodity row was replaced by the dollar figure.`,
+  };
+}
+
+/** Blank the quantities a persisting quantity_mirror finding indicts: an
+ *  unknown quantity is honest, a mirrored one is a fabricated fact. Pure —
+ *  returns a new extraction. */
+export function dropMirroredQuantities(
+  fields: PortEntryExtraction,
+  findings: PortEntryReconcileFinding[],
+): PortEntryExtraction {
+  const indicted = new Set(
+    findings
+      .filter((f) => f.kind === "quantity_mirror")
+      .map((f) => f.lineNumber),
+  );
+  if (indicted.size === 0) return fields;
+  return {
+    ...fields,
+    line_items: fields.line_items.map((line) =>
+      indicted.has(line.line_number) ? { ...line, quantity: null } : line,
+    ),
+  };
+}
 
 // Only ad-valorem duty types obey amount = rate × entered value. MPF/HMF
 // carry per-entry minimums and caps (ingested facts, never computed — see
@@ -137,6 +199,8 @@ export function reconcilePortEntry(
   for (const line of fields.line_items) {
     const finding = reconcileLineBasis(line);
     if (finding) findings.push(finding);
+    const quantity = reconcileQuantity(line);
+    if (quantity) findings.push(quantity);
   }
 
   if (fields.total_entered_value !== null && fields.line_items.length > 0) {

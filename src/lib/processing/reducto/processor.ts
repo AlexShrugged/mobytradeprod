@@ -17,6 +17,8 @@ import type {
 } from "../types";
 import { ProcessingError } from "../types";
 import {
+  dropMirroredQuantities,
+  isLedgerFinding,
   reconcilePortEntry,
   reconcileRetryAddendum,
 } from "../reconcile";
@@ -206,12 +208,21 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
               extraction.docType === "port_entry"
                 ? reconcilePortEntry(extraction.fields)
                 : [];
-            if (persisting.length > 0) {
+            if (persisting.some(isLedgerFinding)) {
               throw new ProcessingError(
                 "Extraction contradicts the 7501's own printed duty math, " +
                   "even after a corrective retry. " +
                   persisting.map((f) => f.message).join(" "),
               );
+            }
+            // Only the soft finding survived: the money reconciles, and a
+            // quantity that still mirrors the dollar value is blanked
+            // rather than persisted as fact — unknown beats fabricated.
+            if (persisting.length > 0 && extraction.docType === "port_entry") {
+              extraction = {
+                docType: "port_entry",
+                fields: dropMirroredQuantities(extraction.fields, persisting),
+              };
             }
           }
         }
