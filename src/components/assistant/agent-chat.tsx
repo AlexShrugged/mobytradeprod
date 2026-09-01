@@ -322,7 +322,11 @@ export function AgentChat({
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    // min-h-full + the footer's mt-auto keep the composer at the bottom of
+    // the widget panel even when the thread is shorter than the viewport
+    // (sticky alone only pins once content overflows). On /assistant the
+    // parent height is indefinite, so min-h-full resolves to auto - no-op.
+    <div className="mx-auto flex min-h-full max-w-3xl flex-col gap-4">
       <h1 className="truncate text-center text-base font-semibold">
         {liveTitle ?? title}
       </h1>
@@ -362,7 +366,7 @@ export function AgentChat({
       {/* Sticky within whichever scroll container holds the thread (the
           widget panel's overflow div, or the viewport on /assistant), so
           the composer never scrolls away under a long transcript. */}
-      <div className="sticky bottom-0 flex flex-col gap-3 bg-background pb-3 pt-1">
+      <div className="sticky bottom-0 mt-auto flex flex-col gap-3 bg-background pb-3 pt-1">
         {turnError ? (
           <div className="rounded-md border border-red-300/60 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-400/30 dark:bg-red-950/40 dark:text-red-300">
             {turnError}
