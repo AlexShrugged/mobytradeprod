@@ -220,16 +220,20 @@ export function AlertActions({
           </Link>
         </Button>
       ) : null}
-      <Button
-        variant="outline"
-        size="sm"
-        className="ml-auto"
-        aria-label="Chat about this variance"
-        title="Chat about this variance"
-        onClick={() => openAssistant({ subtitle: "Chat about this variance." })}
-      >
-        <Sparkles />
-      </Button>
+      {compact ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto"
+          aria-label="Chat about this variance"
+          title="Chat about this variance"
+          onClick={() =>
+            openAssistant({ subtitle: "Chat about this variance." })
+          }
+        >
+          <Sparkles />
+        </Button>
+      ) : null}
     </div>
   );
 }
