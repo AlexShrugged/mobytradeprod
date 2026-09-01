@@ -7,6 +7,7 @@ import { ChevronLeft, Sparkles, X } from "lucide-react";
 import { WidgetConversationList } from "@/components/assistant/widget-conversation-list";
 import { WidgetNewConversation } from "@/components/assistant/widget-new-conversation";
 import { WidgetThread } from "@/components/assistant/widget-thread";
+import { onAssistantOpen } from "@/components/assistant/widget-bus";
 import { Button } from "@/components/ui/button";
 
 // The embedded MobyAI panel: a bottom-right launcher on org-facing pages
@@ -35,6 +36,19 @@ export function AssistantWidget({ configured }: { configured: boolean }) {
   const pathname = usePathname();
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<View>({ kind: "new" });
+  // Composer prompt-line override for a programmatic open (the variance
+  // card's chat button); the launcher path always resets to the default.
+  const [subtitle, setSubtitle] = React.useState<string | null>(null);
+
+  React.useEffect(
+    () =>
+      onAssistantOpen((detail) => {
+        setSubtitle(detail.subtitle ?? null);
+        setView({ kind: "new" });
+        setOpen(true);
+      }),
+    [],
+  );
 
   if (HIDDEN_PREFIXES.some((p) => pathname.startsWith(p))) return null;
 
@@ -45,6 +59,7 @@ export function AssistantWidget({ configured }: { configured: boolean }) {
         className="fixed bottom-4 right-4 z-40 size-11 rounded-full shadow-lg"
         aria-label="Open MobyAI"
         onClick={() => {
+          setSubtitle(null);
           setView({ kind: "new" });
           setOpen(true);
         }}
@@ -86,12 +101,16 @@ export function AssistantWidget({ configured }: { configured: boolean }) {
       {view.kind === "new" ? (
         <WidgetNewConversation
           configured={configured}
+          subtitle={subtitle}
           onCreated={(id) => setView({ kind: "thread", id, fresh: true })}
         />
       ) : view.kind === "list" ? (
         <WidgetConversationList
           onSelect={(id) => setView({ kind: "thread", id, fresh: false })}
-          onNew={() => setView({ kind: "new" })}
+          onNew={() => {
+            setSubtitle(null);
+            setView({ kind: "new" });
+          }}
         />
       ) : (
         <div className="flex-1 overflow-y-auto px-3 py-3">

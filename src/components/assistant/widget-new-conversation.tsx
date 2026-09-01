@@ -14,9 +14,12 @@ import { Textarea } from "@/components/ui/textarea";
 // at; the server derives the prompt description from it.
 export function WidgetNewConversation({
   configured,
+  subtitle = null,
   onCreated,
 }: {
   configured: boolean;
+  /** Prompt-line override for a programmatic open (variance chat button). */
+  subtitle?: string | null;
   onCreated: (conversationId: string) => void;
 }) {
   const pathname = usePathname();
@@ -65,7 +68,7 @@ export function WidgetNewConversation({
   return (
     <div className="flex h-full flex-col justify-end gap-3 p-3">
       <p className="text-sm text-muted-foreground">
-        Ask about this page or anything else.
+        {subtitle ?? "Ask about this page or anything else."}
       </p>
       <div className="flex items-center gap-2">
         <Textarea

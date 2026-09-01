@@ -64,7 +64,7 @@ export function describePageContext(path: string | null): string | null {
   const detail = path.match(/^\/(variance|entries)\/([^/]+)$/);
   if (detail) {
     return detail[1] === "variance"
-      ? `the variance detail page for alert or finding id ${detail[2]} (use get_variance_detail)`
+      ? `the variance detail page for alert or finding id ${detail[2]}. Before answering, call get_variance_detail with that id so you have the full picture: the flagged line, expected vs filed, impact, and for AI findings the analyst's explanation and evidence for why it was flagged. If the user states a standing preference about cases like this, offer a save_org_rule proposal`
       : `the entry detail page for entry id ${detail[2]} (use get_entry)`;
   }
   const pages: Record<string, string> = {

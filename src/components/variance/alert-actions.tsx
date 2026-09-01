@@ -3,9 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { RotateCcw, Undo2 } from "lucide-react";
+import { RotateCcw, Sparkles, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { openAssistant } from "@/components/assistant/widget-bus";
 import { Button } from "@/components/ui/button";
 
 type AlertStatus = "open" | "resolved" | "dismissed";
@@ -177,7 +178,7 @@ export function AlertActions({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" disabled={busy} onClick={() => setStatus("resolved")}>
-        Accept
+        Correct
       </Button>
       <Button
         variant="outline"
@@ -219,6 +220,16 @@ export function AlertActions({
           </Link>
         </Button>
       ) : null}
+      <Button
+        variant="outline"
+        size="sm"
+        className="ml-auto"
+        aria-label="Chat about this variance"
+        title="Chat about this variance"
+        onClick={() => openAssistant({ subtitle: "Chat about this variance." })}
+      >
+        <Sparkles />
+      </Button>
     </div>
   );
 }

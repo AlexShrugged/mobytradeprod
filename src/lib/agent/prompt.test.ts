@@ -12,8 +12,14 @@ describe("describePageContext", () => {
   });
 
   it("detail pages name the id and the tool to use", () => {
-    expect(describePageContext("/variance/abc-123")).toBe(
-      "the variance detail page for alert or finding id abc-123 (use get_variance_detail)",
+    expect(describePageContext("/variance/abc-123")).toContain(
+      "the variance detail page for alert or finding id abc-123",
+    );
+    expect(describePageContext("/variance/abc-123")).toContain(
+      "get_variance_detail",
+    );
+    expect(describePageContext("/variance/abc-123")).toContain(
+      "save_org_rule",
     );
     expect(describePageContext("/entries/e-9")).toBe(
       "the entry detail page for entry id e-9 (use get_entry)",
