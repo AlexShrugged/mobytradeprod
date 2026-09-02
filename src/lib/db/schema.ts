@@ -319,6 +319,12 @@ export const analysisRunStatus = pgEnum("analysis_run_status", [
 export const analysisRunTrigger = pgEnum("analysis_run_trigger", [
   "manual",
   "tariff_apply",
+  // A primary document (7501 or commercial invoice) landed in the entry's
+  // orbit — the declared facts changed under the analyst's last look.
+  "entry_change",
+  // The analysis sweep found an entry with a processed 7501 but no run at
+  // all and seeded its first analysis (rows from before the hook existed).
+  "backfill",
   // An org rule changed (created, edited, toggled, deleted) — the analyst's
   // standing instructions moved, so its prior judgments need re-deriving.
   "org_rule",

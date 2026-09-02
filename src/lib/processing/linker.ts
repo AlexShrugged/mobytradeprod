@@ -1094,5 +1094,8 @@ export async function adoptEntryLinesForParts(
   for (const entryId of entryIds) {
     await auditEntry(tx, orgId, entryId);
   }
+  // Deliberately no AI re-queue here: the deterministic audit above owns
+  // the catalog comparisons, and a catalog import must not re-analyze the
+  // whole book. Only primary-document changes re-queue (processing/run.ts).
   return { linkedLines, auditedEntries: entryIds.length };
 }

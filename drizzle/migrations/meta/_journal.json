@@ -169,6 +169,13 @@
       "when": 1788288853411,
       "tag": "0023_futuristic_sharon_ventura",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788304612318,
+      "tag": "0024_salty_nekra",
+      "breakpoints": true
     }
   ]
 }

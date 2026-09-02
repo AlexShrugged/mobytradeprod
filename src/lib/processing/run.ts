@@ -1,5 +1,9 @@
 import { and, eq, lt, ne, or } from "drizzle-orm";
 
+import {
+  findEntriesForDocument,
+  queueAnalysesForEntries,
+} from "@/lib/analysis/service";
 import { db, schema } from "@/lib/db";
 import type { Document } from "@/lib/db/schema";
 
@@ -7,6 +11,11 @@ import { getProcessor } from "./index";
 import { linkExtraction } from "./linker";
 import { childFileName, orderPacketParts } from "./packet";
 import { ProcessingError } from "./types";
+
+const ANALYSIS_TRIGGER_DOC_TYPES = new Set<Document["docType"]>([
+  "port_entry",
+  "commercial_invoice",
+]);
 
 export type ProcessRunOutcome =
   | { claimed: false }
@@ -107,6 +116,23 @@ export async function processDocumentRow(
     await linkExtraction(doc.orgId, doc.id, extraction, {
       parentDocumentId: doc.parentDocumentId,
     });
+
+    // Only the two primary documents change what the analyst reasons
+    // about: the 7501 (the entry's declared facts) and the commercial
+    // invoice (the one document class compared against it). Those queue an
+    // AI analysis for every entry whose bundle includes them; supporting
+    // docs (cargo release, packing list, refund report) link but never
+    // queue, so an entry gets one analysis unless its primary facts change.
+    // The sweep drains after a settle window, so a packet's 7501 and CI
+    // both land before the analyst starts (each touches the same pending
+    // row).
+    if (ANALYSIS_TRIGGER_DOC_TYPES.has(extraction.docType)) {
+      await queueAnalysesForEntries(
+        db,
+        await findEntriesForDocument(db, doc.orgId, doc.id),
+        "entry_change",
+      );
+    }
 
     const [updated] = await db
       .update(schema.documents)

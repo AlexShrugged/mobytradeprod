@@ -125,11 +125,33 @@ cross-entity split shape where asserting expected would pick a winner;
 comparison-less observations like "could not verify" are not variances) — and
 reconcile at `/variance/[id]` exactly like rule alerts (the alerts PATCH
 route decides both kinds, so mixed-line review flows work); corroborations
-and diff-less observations render only on the entry page's AI card. Tariff approvals enqueue re-analysis (pending
-`analysis_runs` rows, one per previously analyzed entry the changed codes
-touch) inside the apply transaction and drain the queue after the response
-(`after()`); with no API
-key the queue stays visibly queued rather than being stub-drained.
+and diff-less observations render only on the entry page's AI card.
+**Analysis is automatic** (since 2026-09-01), under two principles: one
+analysis per entry unless its primary facts change, and never before the
+customs summary is in. Document processing (`processing/run.ts`, right
+after the linker) queues an `entry_change` run for every entry whose
+bundle the document touches — but ONLY for a processed 7501 or commercial
+invoice; supporting docs (cargo release, packing list, refund report) and
+part adoption link without queueing, so a catalog import never re-analyzes
+the book. Tariff approvals and org-rule changes queue
+`tariff_apply`/`org_rule` re-runs for the previously analyzed entries they
+touch (inside the apply transaction); and the analysis sweep
+(`GET /api/analysis/sweep`, Vercel cron every 10 min under `CRON_SECRET`;
+`POST` = super-admin trigger) is the queue's runner: it reclaims abandoned
+`running` rows (>20 min, re-queued up to twice), seeds a `backfill` run
+for any entry with a processed 7501 but no run at all, then drains oldest-first within a claim
+budget (claims only in the first 150s, concurrency 3, so every
+investigation finishes inside `maxDuration` 800) behind a 3-minute settle
+window so a packet's parts all land before the analyst looks. The queue
+holds one pending row per entry (partial unique index; re-queueing touches
+it and restarts the settle window) and claims are guarded UPDATEs, so
+overlapping drains never double-run. The apply/rule routes still drain in
+`after()` but only `AFTER_RESPONSE_DRAIN` (three claims in the first 60s,
+`maxDuration` 800 — the default 300s killed the drain mid-run and orphaned
+the queue); the sweep takes the rest. With no API key the queue stays
+visibly queued rather than being stub-drained.
+`scripts/analyze-all-entries.ts` is the bulk backfill (dry-run default,
+`--run`; ran against prod 2026-09-01).
 `scripts/analyze-entry.ts` is the read-only eval harness (planted defects in
 `seed-data/analysis-defects.ts` — deterministic-rule-invisible by design, the
 seed asserts those entries audit clean). `scripts/hts-savings.ts` runs the

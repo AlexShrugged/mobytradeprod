@@ -20,7 +20,9 @@ function isPublicRoute(req: NextRequest): boolean {
   }
   return (
     req.method === "GET" &&
-    (pathname === "/api/tariff-sync" || pathname === "/api/documents/sweep")
+    (pathname === "/api/tariff-sync" ||
+      pathname === "/api/documents/sweep" ||
+      pathname === "/api/analysis/sweep")
   );
 }
 
@@ -32,6 +34,7 @@ function isOrgExempt(pathname: string): boolean {
   return (
     pathname.startsWith("/api/tariff-sync") ||
     pathname === "/api/documents/sweep" ||
+    pathname === "/api/analysis/sweep" ||
     pathname.startsWith("/admin") ||
     pathname.startsWith("/org-selection")
   );

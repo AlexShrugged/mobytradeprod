@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { getSuperAdminActorName, requireSuperAdmin } from "@/lib/admin";
 import {
+  AFTER_RESPONSE_DRAIN,
   processPendingAnalyses,
   queueReanalysesAllOrgs,
   queueReanalysesForEntries,
@@ -216,7 +217,7 @@ export async function PATCH(
 
     if (result.analysesQueued > 0) {
       after(async () => {
-        await processPendingAnalyses(db).catch((err) => {
+        await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
           console.error("re-analysis after tariff apply failed:", err);
         });
       });

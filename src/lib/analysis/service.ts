@@ -13,7 +13,17 @@
 // Relative imports + DbClient parameter on purpose — this module must stay
 // reachable from tsx scripts.
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  like,
+  lt,
+  sql,
+} from "drizzle-orm";
 
 import * as schema from "../db/schema";
 import { isUnscoped, lineMatchesScope } from "../audit/suppression";
@@ -220,39 +230,19 @@ export async function runEntryAnalysis(
   trigger: schema.AnalysisRunTriggerValue,
   opts: { analyst?: EntryAnalyst } = {},
 ): Promise<RunAnalysisOutcome> {
-  // An injected analyst (tests, scripts) is trusted; the env-selected one
-  // must be the real model — the stub's output never persists.
-  if (!opts.analyst && !process.env.ANTHROPIC_API_KEY) {
-    throw new AnalysisNotConfiguredError(
-      "AI analysis needs ANTHROPIC_API_KEY. The stub analyst never persists findings.",
-    );
-  }
-  const analyst = opts.analyst ?? getEntryAnalyst();
-  const model =
-    "model" in analyst && typeof analyst.model === "string"
-      ? analyst.model
-      : null;
+  const analyst = requireAnalyst(opts.analyst);
 
   const pending = await db.query.analysisRuns.findFirst({
     where: and(
       eq(schema.analysisRuns.entryId, entryId),
       eq(schema.analysisRuns.status, "pending"),
     ),
+    columns: { id: true },
   });
-  let runId: string;
-  if (pending) {
-    runId = pending.id;
-    await db
-      .update(schema.analysisRuns)
-      .set({
-        status: "running",
-        analyst: "claude",
-        model,
-        startedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.analysisRuns.id, pending.id));
-  } else {
+  // A manual run always runs: if the sweep claimed the pending row between
+  // our read and our claim, this run simply gets its own row.
+  let runId = pending ? await claimPendingRun(db, pending.id, analyst) : null;
+  if (!runId) {
     const [inserted] = await db
       .insert(schema.analysisRuns)
       .values({
@@ -261,13 +251,69 @@ export async function runEntryAnalysis(
         status: "running",
         trigger,
         analyst: "claude",
-        model,
+        model: modelOf(analyst),
         startedAt: new Date(),
       })
       .returning({ id: schema.analysisRuns.id });
     runId = inserted.id;
   }
 
+  return executeRun(db, orgId, entryId, runId, analyst);
+}
+
+/** An injected analyst (tests, scripts) is trusted; the env-selected one
+ *  must be the real model — the stub's output never persists. */
+function requireAnalyst(injected?: EntryAnalyst): EntryAnalyst {
+  if (!injected && !process.env.ANTHROPIC_API_KEY) {
+    throw new AnalysisNotConfiguredError(
+      "AI analysis needs ANTHROPIC_API_KEY. The stub analyst never persists findings.",
+    );
+  }
+  return injected ?? getEntryAnalyst();
+}
+
+function modelOf(analyst: EntryAnalyst): string | null {
+  return "model" in analyst && typeof analyst.model === "string"
+    ? analyst.model
+    : null;
+}
+
+/** Guarded claim of one pending row: status flips to running only if it is
+ *  still pending, so two drains racing for the same row (overlapping sweep
+ *  invocations, a manual run beside the sweep) resolve to exactly one
+ *  runner. Returns the run id on success, null if someone else won. */
+async function claimPendingRun(
+  db: DbClient,
+  runId: string,
+  analyst: EntryAnalyst,
+): Promise<string | null> {
+  const [claimed] = await db
+    .update(schema.analysisRuns)
+    .set({
+      status: "running",
+      analyst: "claude",
+      model: modelOf(analyst),
+      startedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.analysisRuns.id, runId),
+        eq(schema.analysisRuns.status, "pending"),
+      ),
+    )
+    .returning({ id: schema.analysisRuns.id });
+  return claimed?.id ?? null;
+}
+
+/** Investigate against a claimed (running) row and persist the outcome. */
+async function executeRun(
+  db: DbClient,
+  orgId: string,
+  entryId: string,
+  runId: string,
+  analyst: EntryAnalyst,
+): Promise<RunAnalysisOutcome> {
   let result: AnalystResult;
   try {
     const bundle = await loadEntryBundle(db, orgId, entryId);
@@ -325,9 +371,10 @@ export async function recordAnalysisResult(
 /**
  * Enqueue a re-analysis for every entry (all orgs) the analyst has ever
  * cleanly analyzed — the analysis sibling of sweepAuditsAllOrgs, called
- * inside the tariff-apply transaction. Entries never analyzed are not
- * enqueued: analysis is opt-in per entry, and a global apply must not mint
- * a bill for the whole book. Returns the number queued.
+ * inside the tariff-apply transaction. Entries never analyzed are left to
+ * the sweep's backfill leg (they get a first run regardless), so an apply
+ * only ever pays for the re-runs it actually invalidates. Returns the
+ * number queued.
  */
 export async function queueReanalysesAllOrgs(db: DbClient): Promise<number> {
   const analyzed = await db
@@ -337,15 +384,15 @@ export async function queueReanalysesAllOrgs(db: DbClient): Promise<number> {
     })
     .from(schema.analysisRuns)
     .where(eq(schema.analysisRuns.status, "succeeded"));
-  return queueForAnalyzed(db, analyzed);
+  return queueAnalysesForEntries(db, analyzed, "tariff_apply");
 }
 
 /**
  * Scoped variant: enqueue re-analysis only for the entries a tariff change
  * actually touches (still filtered to entries the analyst has cleanly
- * analyzed — analysis stays opt-in per entry). The apply routes compute the
- * touched set from the changed codes and pass it here inside the apply
- * transaction.
+ * analyzed — the sweep's backfill covers the rest). The apply routes
+ * compute the touched set from the changed codes and pass it here inside
+ * the apply transaction.
  */
 export async function queueReanalysesForEntries(
   db: DbClient,
@@ -370,7 +417,7 @@ export async function queueReanalysesForEntries(
         )),
     );
   }
-  return queueForAnalyzed(db, analyzed);
+  return queueAnalysesForEntries(db, analyzed, "tariff_apply");
 }
 
 /**
@@ -379,7 +426,8 @@ export async function queueReanalysesForEntries(
  * org's entries need re-deriving — a clean re-run withdraws findings the
  * rule now covers (they clear via the finding_key reconcile) and can
  * surface new ones the rule demands. Still filtered to entries the analyst
- * has cleanly analyzed: analysis stays opt-in per entry.
+ * has cleanly analyzed: never-analyzed entries get their first run from
+ * the sweep's backfill leg, under the rules as they stand then.
  *
  * `scopes` bounds the blast radius (each re-run is a real model
  * investigation): one element per rule state the change touched — the
@@ -441,55 +489,202 @@ export async function queueReanalysesForOrgRule(
     }
     targets = analyzed.filter((a) => matched.has(a.entryId));
   }
-  return queueForAnalyzed(db, targets, "org_rule");
+  return queueAnalysesForEntries(db, targets, "org_rule");
 }
 
-/** Shared tail: drop entries already pending, insert the rest. Chunked —
- *  the analyzed set can span the whole book. */
-async function queueForAnalyzed(
+/**
+ * Enqueue an analysis for each entry. An entry already pending keeps its
+ * one row (the partial unique index guarantees it even across racing
+ * writers — the loser's insert is a no-op) but gets touched, so the sweep's
+ * settle window restarts: a packet's 7501 and CI both land before the
+ * analyst starts. Chunked — the set can span the whole book. Returns the
+ * number of NEW pending rows.
+ */
+export async function queueAnalysesForEntries(
   db: DbClient,
-  analyzed: { entryId: string; orgId: string }[],
-  trigger: "tariff_apply" | "org_rule" = "tariff_apply",
+  targets: { entryId: string; orgId: string }[],
+  trigger: schema.AnalysisRunTriggerValue,
 ): Promise<number> {
-  if (analyzed.length === 0) return 0;
+  const seen = new Set<string>();
+  const unique: { entryId: string; orgId: string }[] = [];
+  for (const t of targets) {
+    if (seen.has(t.entryId)) continue;
+    seen.add(t.entryId);
+    unique.push(t);
+  }
+  if (unique.length === 0) return 0;
 
-  const queuedIds = new Set<string>();
-  for (let i = 0; i < analyzed.length; i += 500) {
-    const batch = analyzed.slice(i, i + 500);
-    const rows = await db.query.analysisRuns.findMany({
-      where: and(
-        eq(schema.analysisRuns.status, "pending"),
-        inArray(
-          schema.analysisRuns.entryId,
-          batch.map((a) => a.entryId),
+  let queued = 0;
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
+    const touched = await db
+      .update(schema.analysisRuns)
+      .set({ updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.analysisRuns.status, "pending"),
+          inArray(
+            schema.analysisRuns.entryId,
+            batch.map((t) => t.entryId),
+          ),
+        ),
+      )
+      .returning({ entryId: schema.analysisRuns.entryId });
+    const alreadyPending = new Set(touched.map((r) => r.entryId));
+    const toInsert = batch.filter((t) => !alreadyPending.has(t.entryId));
+    if (toInsert.length === 0) continue;
+    const inserted = await db
+      .insert(schema.analysisRuns)
+      .values(
+        toInsert.map((t) => ({
+          orgId: t.orgId,
+          entryId: t.entryId,
+          status: "pending" as const,
+          trigger,
+        })),
+      )
+      .onConflictDoNothing({
+        target: schema.analysisRuns.entryId,
+        where: sql`status = 'pending'`,
+      })
+      .returning({ id: schema.analysisRuns.id });
+    queued += inserted.length;
+  }
+  return queued;
+}
+
+/**
+ * Seed a first analysis for every entry (all orgs) with no run row at all
+ * and a processed 7501 on file — the sweep's backfill leg, which is what
+ * makes analysis automatic for entries that arrived outside the processing
+ * hook (rows from before the hook existed). The 7501 gate is the principle
+ * behind the hook too: the customs summary is the primary document, and an
+ * entry without one (a seed row, a stub) has nothing for the analyst to
+ * judge. Entries whose only runs failed are NOT re-seeded: a refusal or
+ * deadline would otherwise retry every pass at real cost; they re-queue on
+ * their next primary-document change or a manual run.
+ */
+export async function queueAnalysesForUnanalyzedEntries(
+  db: DbClient,
+): Promise<number> {
+  const rows = await db
+    .select({ entryId: schema.entries.id, orgId: schema.entries.orgId })
+    .from(schema.entries)
+    .leftJoin(
+      schema.analysisRuns,
+      eq(schema.analysisRuns.entryId, schema.entries.id),
+    )
+    .where(
+      and(
+        isNull(schema.analysisRuns.id),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(schema.documentLinks)
+            .innerJoin(
+              schema.documents,
+              eq(schema.documents.id, schema.documentLinks.documentId),
+            )
+            .where(
+              and(
+                eq(schema.documentLinks.entityType, "entry"),
+                eq(schema.documentLinks.entityId, schema.entries.id),
+                eq(schema.documents.docType, "port_entry"),
+                eq(schema.documents.status, "processed"),
+              ),
+            ),
         ),
       ),
+    );
+  return queueAnalysesForEntries(db, rows, "backfill");
+}
+
+/**
+ * Every entry whose analysis bundle includes this document: linked to the
+ * entry itself, or to a shipment / PO / invoice on the entry — the inverse
+ * of loadEntryBundle's document fan-out, so a document landing anywhere in
+ * an entry's orbit re-queues that entry.
+ */
+export async function findEntriesForDocument(
+  db: DbClient,
+  orgId: string,
+  documentId: string,
+): Promise<{ entryId: string; orgId: string }[]> {
+  const links = await db
+    .select({
+      entityType: schema.documentLinks.entityType,
+      entityId: schema.documentLinks.entityId,
+    })
+    .from(schema.documentLinks)
+    .where(
+      and(
+        eq(schema.documentLinks.orgId, orgId),
+        eq(schema.documentLinks.documentId, documentId),
+      ),
+    );
+  const idsOf = (type: (typeof links)[number]["entityType"]) =>
+    links.filter((l) => l.entityType === type).map((l) => l.entityId);
+
+  const entryIds = new Set(idsOf("entry"));
+  const shipmentIds = idsOf("shipment");
+  const poIds = idsOf("purchase_order");
+  const invoiceIds = idsOf("invoice");
+  if (shipmentIds.length > 0) {
+    const rows = await db.query.entryShipments.findMany({
+      where: inArray(schema.entryShipments.shipmentId, shipmentIds),
       columns: { entryId: true },
     });
-    for (const r of rows) queuedIds.add(r.entryId);
+    for (const r of rows) entryIds.add(r.entryId);
   }
-  const toQueue = analyzed.filter((a) => !queuedIds.has(a.entryId));
-  if (toQueue.length === 0) return 0;
-
-  for (let i = 0; i < toQueue.length; i += 500) {
-    await db.insert(schema.analysisRuns).values(
-      toQueue.slice(i, i + 500).map((a) => ({
-        orgId: a.orgId,
-        entryId: a.entryId,
-        status: "pending" as const,
-        trigger,
-      })),
-    );
+  if (poIds.length > 0) {
+    const rows = await db.query.entryPurchaseOrders.findMany({
+      where: inArray(schema.entryPurchaseOrders.purchaseOrderId, poIds),
+      columns: { entryId: true },
+    });
+    for (const r of rows) entryIds.add(r.entryId);
   }
-  return toQueue.length;
+  if (invoiceIds.length > 0) {
+    const rows = await db.query.entryInvoices.findMany({
+      where: inArray(schema.entryInvoices.invoiceId, invoiceIds),
+      columns: { entryId: true },
+    });
+    for (const r of rows) entryIds.add(r.entryId);
+  }
+  return [...entryIds].map((entryId) => ({ entryId, orgId }));
 }
 
 export type ProcessQueueSummary = {
   processed: number;
   succeeded: number;
   failed: number;
-  /** Pending rows left after this pass (cap hit, or analyst unconfigured). */
+  /** Rows another runner claimed first (overlapping drains). */
+  skipped: number;
+  /** Pending rows left after this pass (cap or budget hit, settle window,
+   *  or analyst unconfigured). */
   remaining: number;
+};
+
+export type DrainOptions = {
+  /** Pending rows considered this pass, oldest first. */
+  limit?: number;
+  /** Parallel investigations. */
+  concurrency?: number;
+  /** Claim new rows only while this much wall time has elapsed — sized so
+   *  an investigation claimed at the budget's edge (analyst deadline 600s)
+   *  still finishes inside the caller's function lifetime. */
+  budgetMs?: number;
+  /** Skip pending rows touched more recently than this — the settle window
+   *  that lets a packet's parts all land before the analyst starts. */
+  settleMs?: number;
+};
+
+/** What an after()-response drain may spend: a few investigations claimed
+ *  up front, none later — inside a maxDuration=800 route that leaves the
+ *  analyst's 600s deadline plus margin. The sweep cron takes the rest. */
+export const AFTER_RESPONSE_DRAIN: DrainOptions = {
+  limit: 3,
+  concurrency: 3,
+  budgetMs: 60_000,
 };
 
 /**
@@ -501,18 +696,28 @@ export type ProcessQueueSummary = {
  */
 export async function processPendingAnalyses(
   db: DbClient,
-  opts: { limit?: number } = {},
+  opts: DrainOptions = {},
 ): Promise<ProcessQueueSummary> {
   const limit = opts.limit ?? 10;
+  const concurrency = Math.max(1, opts.concurrency ?? 1);
+  const budgetMs = opts.budgetMs ?? Number.POSITIVE_INFINITY;
+  const settleMs = opts.settleMs ?? 0;
   const pending = await db.query.analysisRuns.findMany({
-    where: eq(schema.analysisRuns.status, "pending"),
+    where: and(
+      eq(schema.analysisRuns.status, "pending"),
+      settleMs > 0
+        ? lt(schema.analysisRuns.updatedAt, new Date(Date.now() - settleMs))
+        : undefined,
+    ),
     orderBy: [asc(schema.analysisRuns.createdAt)],
     limit,
+    columns: { id: true, orgId: true, entryId: true },
   });
   const summary: ProcessQueueSummary = {
     processed: 0,
     succeeded: 0,
     failed: 0,
+    skipped: 0,
     remaining: 0,
   };
   if (pending.length === 0) return summary;
@@ -521,23 +726,118 @@ export async function processPendingAnalyses(
     summary.remaining = pending.length;
     return summary;
   }
-  for (const run of pending) {
-    const outcome = await runEntryAnalysis(
-      db,
-      run.orgId,
-      run.entryId,
-      run.trigger,
-    );
-    summary.processed += 1;
-    if (outcome.status === "succeeded") summary.succeeded += 1;
-    else summary.failed += 1;
-  }
+  const analyst = getEntryAnalyst();
+  const started = Date.now();
+  const queue = [...pending];
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      while (Date.now() - started < budgetMs) {
+        const run = queue.shift();
+        if (!run) return;
+        const runId = await claimPendingRun(db, run.id, analyst);
+        if (!runId) {
+          summary.skipped += 1;
+          continue;
+        }
+        const outcome = await executeRun(
+          db,
+          run.orgId,
+          run.entryId,
+          runId,
+          analyst,
+        );
+        summary.processed += 1;
+        if (outcome.status === "succeeded") summary.succeeded += 1;
+        else summary.failed += 1;
+      }
+    }),
+  );
   const left = await db.query.analysisRuns.findMany({
     where: eq(schema.analysisRuns.status, "pending"),
     columns: { id: true },
   });
   summary.remaining = left.length;
   return summary;
+}
+
+const ABANDONED_ERROR = "abandoned: the runner exited before the analyst finished";
+/** A run that dies this many times stops retrying — a crashloop, not a
+ *  killed function. It re-queues on the entry's next change or a manual run. */
+const MAX_ABANDONED_RETRIES = 2;
+
+/**
+ * Mark "running" rows older than `olderThanMs` as failed. A row only ever
+ * leaves "running" through recordAnalysisResult, so one that has outlived
+ * the analyst's deadline by a wide margin belongs to a runner that died
+ * mid-flight (a function cut off at its timeout, a deploy). Left alone it
+ * pins the entry page's "running" state forever. With `requeue`, each
+ * reclaimed entry gets a fresh pending row under its original trigger,
+ * bounded by MAX_ABANDONED_RETRIES.
+ */
+export async function failAbandonedRuns(
+  db: DbClient,
+  opts: { olderThanMs?: number; entryId?: string; requeue?: boolean } = {},
+): Promise<{ failed: number; requeued: number }> {
+  const olderThanMs = opts.olderThanMs ?? 20 * 60 * 1000;
+  const cutoff = new Date(Date.now() - olderThanMs);
+  const rows = await db
+    .update(schema.analysisRuns)
+    .set({
+      status: "failed",
+      error: ABANDONED_ERROR,
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.analysisRuns.status, "running"),
+        lt(schema.analysisRuns.startedAt, cutoff),
+        opts.entryId ? eq(schema.analysisRuns.entryId, opts.entryId) : undefined,
+      ),
+    )
+    .returning({
+      entryId: schema.analysisRuns.entryId,
+      orgId: schema.analysisRuns.orgId,
+      trigger: schema.analysisRuns.trigger,
+    });
+  if (!opts.requeue || rows.length === 0) {
+    return { failed: rows.length, requeued: 0 };
+  }
+
+  const deaths = await db
+    .select({
+      entryId: schema.analysisRuns.entryId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(schema.analysisRuns)
+    .where(
+      and(
+        eq(schema.analysisRuns.status, "failed"),
+        like(schema.analysisRuns.error, "abandoned:%"),
+        inArray(
+          schema.analysisRuns.entryId,
+          rows.map((r) => r.entryId),
+        ),
+      ),
+    )
+    .groupBy(schema.analysisRuns.entryId);
+  const deathsByEntry = new Map(deaths.map((d) => [d.entryId, d.count]));
+
+  let requeued = 0;
+  const byTrigger = new Map<
+    schema.AnalysisRunTriggerValue,
+    { entryId: string; orgId: string }[]
+  >();
+  for (const r of rows) {
+    if ((deathsByEntry.get(r.entryId) ?? 0) > MAX_ABANDONED_RETRIES) continue;
+    const list = byTrigger.get(r.trigger) ?? [];
+    list.push({ entryId: r.entryId, orgId: r.orgId });
+    byTrigger.set(r.trigger, list);
+  }
+  for (const [trigger, targets] of byTrigger) {
+    requeued += await queueAnalysesForEntries(db, targets, trigger);
+  }
+  return { failed: rows.length, requeued };
 }
 
 // Compile-time + test-time guard that the column enum and the analyst's

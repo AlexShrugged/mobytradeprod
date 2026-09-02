@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { z } from "zod";
 
 import {
+  AFTER_RESPONSE_DRAIN,
   processPendingAnalyses,
   queueReanalysesForOrgRule,
 } from "@/lib/analysis/service";
@@ -13,6 +14,11 @@ import {
   suppressionSpecSchema,
   type SuppressionSpec,
 } from "@/lib/org-rules";
+
+// The after() re-analysis drain claims up to three investigations (analyst
+// deadline 600s each) — the function must outlive them. Default 300s killed
+// the drain mid-run and orphaned the queue (2026-09-01).
+export const maxDuration = 800;
 
 const bodySchema = z.object({
   text: z.string().trim().min(1).max(300),
@@ -71,7 +77,7 @@ export async function POST(request: Request) {
   ]);
   if (analysesQueued > 0) {
     after(async () => {
-      await processPendingAnalyses(db).catch((err) => {
+      await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
         console.error("re-analysis after org rule save failed:", err);
       });
     });

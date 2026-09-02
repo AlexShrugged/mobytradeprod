@@ -10,6 +10,10 @@
     {
       "path": "/api/documents/sweep",
       "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/analysis/sweep",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

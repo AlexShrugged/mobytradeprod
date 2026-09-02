@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import {
+  AFTER_RESPONSE_DRAIN,
   processPendingAnalyses,
   queueReanalysesForOrgRule,
 } from "@/lib/analysis/service";
@@ -16,6 +17,9 @@ import {
   type SuppressionSpec,
 } from "@/lib/org-rules";
 
+// See org-rules/route.ts: the after() drain must outlive its investigations.
+export const maxDuration = 800;
+
 /** Queue re-analysis for the entries a rule change touches and drain after
  *  the response. `scopes` carries every rule state involved (before and/or
  *  after) — see queueReanalysesForOrgRule for the blast-radius rules. */
@@ -26,7 +30,7 @@ async function queueAndDrain(
   const queued = await queueReanalysesForOrgRule(db, orgId, scopes);
   if (queued > 0) {
     after(async () => {
-      await processPendingAnalyses(db).catch((err) => {
+      await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
         console.error("re-analysis after org rule change failed:", err);
       });
     });
