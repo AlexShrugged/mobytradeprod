@@ -85,14 +85,14 @@ const statusMeta: Record<string, { label: string; tone: Tone }> = {
   // AI analyst findings ("ai_" + finding category). The AI prefix carries
   // the evidence source, same as the CI prefix above; the rest names what
   // disagrees.
-  ai_adcvd_discrepancy: { label: "AI AD/CVD", tone: "red" },
-  ai_fee_error: { label: "AI fee error", tone: "red" },
-  ai_coo_inconsistency: { label: "AI origin", tone: "amber" },
-  ai_classification_mismatch: { label: "AI HTS", tone: "amber" },
-  ai_valuation_concern: { label: "AI valuation", tone: "blue" },
-  ai_document_inconsistency: { label: "AI documents", tone: "amber" },
-  ai_duty_calculation: { label: "AI duty", tone: "red" },
-  ai_other: { label: "AI finding", tone: "violet" },
+  ai_adcvd_discrepancy: { label: "AI - AD/CVD", tone: "red" },
+  ai_fee_error: { label: "AI - Fee error", tone: "red" },
+  ai_coo_inconsistency: { label: "AI - Origin", tone: "amber" },
+  ai_classification_mismatch: { label: "AI - HTS", tone: "amber" },
+  ai_valuation_concern: { label: "AI - Valuation", tone: "blue" },
+  ai_document_inconsistency: { label: "AI - Documents", tone: "amber" },
+  ai_duty_calculation: { label: "AI - Duty", tone: "red" },
+  ai_other: { label: "AI - Finding", tone: "violet" },
 };
 
 export function StatusBadge({
