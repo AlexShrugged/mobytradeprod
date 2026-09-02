@@ -38,8 +38,22 @@ export function AiVarianceDetailView({
   detail: AiVarianceDetail;
   fromEntry: boolean;
 }) {
-  const { finding, entry, window, line, catalogExpected, documents, siblings } =
-    detail;
+  const {
+    finding,
+    entry,
+    window,
+    line,
+    catalogExpected,
+    documents,
+    siblings,
+    relatedEntries,
+  } = detail;
+  // Evidence can quote a related entry's document (a sibling 7501 read
+  // through the packet); naming it needs that entry's file list too.
+  const evidenceDocuments = [
+    ...documents,
+    ...relatedEntries.flatMap((r) => r.documents),
+  ];
 
   // Same unit math as the rule page. AI findings never pair, but the line's
   // rule units keep their twins, so advance/undo counts stay correct on
@@ -143,7 +157,7 @@ export function AiVarianceDetailView({
 
               <FindingEvidenceList
                 evidence={finding.evidence}
-                documents={documents}
+                documents={evidenceDocuments}
               />
 
               <div>
@@ -205,7 +219,7 @@ export function AiVarianceDetailView({
             <CardHeader>
               <CardTitle className="text-base">Documents on file</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-4">
               {documents.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No documents linked to this entry yet.
@@ -213,6 +227,37 @@ export function AiVarianceDetailView({
               ) : (
                 <DocumentRail documents={documents} />
               )}
+              {/* Only a finding that crosses entries carries related
+                  entries, so this section appears on that finding's page
+                  alone — never on the line's other cards. */}
+              {relatedEntries.length > 0 ? (
+                <div className="flex flex-col gap-4 border-t pt-4">
+                  <CardTitle className="text-base">Related documents</CardTitle>
+                  {relatedEntries.map((rel) => (
+                    <div key={rel.id} className="flex flex-col gap-2">
+                      <Link
+                        href={`/entries/${rel.id}`}
+                        className="text-sm text-muted-foreground tabular-nums hover:underline"
+                      >
+                        Entry {rel.entryNumber}
+                        {rel.entryDate
+                          ? ` · filed ${formatDate(rel.entryDate)}`
+                          : ""}
+                      </Link>
+                      {rel.documents.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No documents on file.
+                        </p>
+                      ) : (
+                        <DocumentRail
+                          documents={rel.documents}
+                          labels={{ port_entry: "Related entry" }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         </div>

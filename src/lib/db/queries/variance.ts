@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
@@ -18,6 +18,10 @@ import {
   type ImpactLineSnapshot,
 } from "@/lib/variance/impact";
 import { hasActionableDiff } from "@/lib/variance/field-issue";
+import {
+  extractRelatedEntryNumbers,
+  findingTexts,
+} from "@/lib/variance/related-entries";
 import { getResolvedLinePartsForEntries } from "./line-parts";
 import type { ResolvedLinePart } from "@/lib/parts/line-parts";
 import { compareSiblingAlerts } from "@/lib/variance/grouping";
@@ -720,7 +724,136 @@ export type AiVarianceDetail = {
   catalogExpected: VarianceCatalogExpected | null;
   documents: EntryDocument[];
   siblings: VarianceSiblingAlert[];
+  /** The other entries this finding talks about, with their documents —
+   *  empty for the ordinary single-entry finding. */
+  relatedEntries: RelatedEntry[];
 };
+
+export type RelatedEntry = {
+  id: string;
+  entryNumber: string;
+  entryDate: string | null;
+  /** The related entry's own documents (linked to it directly — its 7501
+   *  and packet parts), newest first. */
+  documents: EntryDocument[];
+};
+
+/**
+ * The other entries a finding talks about — cited by number in its text
+ * (cross-entry consistency findings name their siblings), or reached
+ * through evidence quoting a document that is not on this entry's file (a
+ * sibling 7501 read through the packet) — each with its own documents.
+ * Empty for the ordinary finding, so the page's "Related documents" section
+ * appears only on the finding that actually crosses entries.
+ */
+async function loadRelatedEntries(
+  orgId: string,
+  own: { id: string; entryNumber: string; documents: EntryDocument[] },
+  finding: AiFindingRow,
+): Promise<RelatedEntry[]> {
+  const numbers = extractRelatedEntryNumbers(
+    findingTexts(finding),
+    own.entryNumber,
+  );
+  const ownDocIds = new Set(own.documents.map((d) => d.id));
+  const foreignDocIds = [
+    ...new Set(
+      finding.evidence
+        .map((e) => e.documentId)
+        .filter((id): id is string => id !== null && !ownDocIds.has(id)),
+    ),
+  ];
+
+  const ids = new Set<string>();
+  if (numbers.length > 0) {
+    const rows = await db
+      .select({ id: schema.entries.id })
+      .from(schema.entries)
+      .where(
+        and(
+          eq(schema.entries.orgId, orgId),
+          inArray(
+            sql`regexp_replace(${schema.entries.entryNumber}, '\\D', '', 'g')`,
+            numbers,
+          ),
+        ),
+      );
+    for (const r of rows) ids.add(r.id);
+  }
+  if (foreignDocIds.length > 0) {
+    const rows = await db
+      .select({ entityId: schema.documentLinks.entityId })
+      .from(schema.documentLinks)
+      .where(
+        and(
+          eq(schema.documentLinks.orgId, orgId),
+          eq(schema.documentLinks.entityType, "entry"),
+          inArray(schema.documentLinks.documentId, foreignDocIds),
+        ),
+      );
+    for (const r of rows) ids.add(r.entityId);
+  }
+  ids.delete(own.id);
+  if (ids.size === 0) return [];
+
+  const entryIds = [...ids];
+  const [rows, docRows] = await Promise.all([
+    db.query.entries.findMany({
+      where: and(
+        eq(schema.entries.orgId, orgId),
+        inArray(schema.entries.id, entryIds),
+      ),
+      columns: { id: true, entryNumber: true, entryDate: true },
+    }),
+    db
+      .select({
+        entryId: schema.documentLinks.entityId,
+        id: schema.documents.id,
+        fileName: schema.documents.fileName,
+        docType: schema.documents.docType,
+        fileSize: schema.documents.fileSize,
+        created: schema.documentLinks.created,
+      })
+      .from(schema.documentLinks)
+      .innerJoin(
+        schema.documents,
+        eq(schema.documentLinks.documentId, schema.documents.id),
+      )
+      .where(
+        and(
+          eq(schema.documentLinks.orgId, orgId),
+          eq(schema.documentLinks.entityType, "entry"),
+          inArray(schema.documentLinks.entityId, entryIds),
+        ),
+      )
+      .orderBy(desc(schema.documents.uploadedAt)),
+  ]);
+
+  const docsByEntry = new Map<string, EntryDocument[]>();
+  const seen = new Set<string>();
+  for (const r of docRows) {
+    const key = `${r.entryId}:${r.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const list = docsByEntry.get(r.entryId) ?? [];
+    list.push({
+      id: r.id,
+      fileName: r.fileName,
+      docType: r.docType,
+      fileSize: r.fileSize,
+      created: r.created,
+    });
+    docsByEntry.set(r.entryId, list);
+  }
+  return rows
+    .sort((a, b) => a.entryNumber.localeCompare(b.entryNumber))
+    .map((e) => ({
+      id: e.id,
+      entryNumber: e.entryNumber,
+      entryDate: e.entryDate,
+      documents: docsByEntry.get(e.id) ?? [],
+    }));
+}
 
 /** Detail payload for /variance/[id] when the id is an analysis finding —
  *  the reconciliation page's AI variant. */
@@ -773,6 +906,11 @@ export async function getAiVarianceDetail(
   const siblings = finding.lineItemId
     ? buildLineSiblings(detail, finding.lineItemId, snapshot, ctx)
     : [];
+  const relatedEntries = await loadRelatedEntries(
+    orgId,
+    { id: detail.id, entryNumber: detail.entryNumber, documents: detail.documents },
+    row,
+  );
 
   return {
     finding: row,
@@ -790,5 +928,6 @@ export async function getAiVarianceDetail(
     catalogExpected: computeLineCatalogExpected(siblings, snapshot, ctx),
     documents: detail.documents,
     siblings,
+    relatedEntries,
   };
 }

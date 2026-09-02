@@ -6,8 +6,16 @@ import { docTypeLabel } from "@/lib/format";
 // Compact document list for side rails: the whole row opens the file
 // in-browser; the only text is the file name and its document type. The
 // created/references distinction lives in the tooltip, not a badge, and the
-// download affordance appears on hover/focus.
-export function DocumentRail({ documents }: { documents: EntryDocument[] }) {
+// download affordance appears on hover/focus. `labels` overrides the type
+// caption per docType — a related entry's 7501 reads "Related entry", not
+// "Port entry", so it can't be mistaken for the entry under review.
+export function DocumentRail({
+  documents,
+  labels,
+}: {
+  documents: EntryDocument[];
+  labels?: Partial<Record<string, string>>;
+}) {
   return (
     <div className="divide-y">
       {documents.map((doc) => (
@@ -27,7 +35,7 @@ export function DocumentRail({ documents }: { documents: EntryDocument[] }) {
               {doc.fileName}
             </span>
             <span className="text-xs text-muted-foreground">
-              {docTypeLabel(doc.docType)}
+              {labels?.[doc.docType] ?? docTypeLabel(doc.docType)}
             </span>
           </a>
           <a
