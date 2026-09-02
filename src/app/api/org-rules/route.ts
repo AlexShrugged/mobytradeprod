@@ -1,11 +1,6 @@
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import {
-  AFTER_RESPONSE_DRAIN,
-  processPendingAnalyses,
-  queueReanalysesForOrgRule,
-} from "@/lib/analysis/service";
 import { sweepAudits } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
@@ -15,9 +10,12 @@ import {
   type SuppressionSpec,
 } from "@/lib/org-rules";
 
-// The after() re-analysis drain claims up to three investigations (analyst
-// deadline 600s each) — the function must outlive them. Default 300s killed
-// the drain mid-run and orphaned the queue (2026-09-01).
+import { scheduleRuleReanalysis } from "./schedule";
+
+// The after() re-analysis work (a Claude scoping call, then a drain of up
+// to three investigations at a 600s analyst deadline each) must outlive
+// the response. Default 300s killed the drain mid-run and orphaned the
+// queue (2026-09-01).
 export const maxDuration = 800;
 
 const bodySchema = z.object({
@@ -69,19 +67,21 @@ export async function POST(request: Request) {
   const reaudit = rule.suppression ? await sweepAudits(db, orgId) : null;
 
   // Rule alerts cleared synchronously above; AI findings need real model
-  // runs, so they queue (scoped by the spec's axes when present) and drain
-  // after the response — the tariff-apply pattern. Guidance rules queue
-  // too: every enabled rule reaches the analyst's prompt.
-  const analysesQueued = await queueReanalysesForOrgRule(db, orgId, [
-    (rule.suppression as SuppressionSpec | null) ?? null,
-  ]);
-  if (analysesQueued > 0) {
-    after(async () => {
-      await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
-        console.error("re-analysis after org rule save failed:", err);
-      });
-    });
-  }
+  // runs, so they queue after the response — scoped to the entries the
+  // rule can touch (the deterministic floor in rule-relevance.ts plus the
+  // Claude scoping pass in rule-scope.ts) and drained, the tariff-apply
+  // pattern. Guidance rules queue too: every enabled rule reaches the
+  // analyst's prompt. analysesQueued null = pending, decided in after().
+  scheduleRuleReanalysis(orgId, {
+    before: null,
+    after: {
+      text: rule.text,
+      suppression: (rule.suppression as SuppressionSpec | null) ?? null,
+    },
+  });
 
-  return NextResponse.json({ rule, reaudit, analysesQueued }, { status: 201 });
+  return NextResponse.json(
+    { rule, reaudit, analysesQueued: null },
+    { status: 201 },
+  );
 }

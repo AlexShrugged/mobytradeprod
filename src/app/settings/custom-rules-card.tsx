@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import type { OrgRule } from "@/lib/db/schema";
 
 // Mirrors SuppressionSpec from lib/org-rules.ts (type-only — that module
@@ -67,13 +68,19 @@ function scopeSummary(s: Suppression): string {
   return parts.join(" · ");
 }
 
-function changeNote(reaudit: Reaudit, analysesQueued: number): string {
+// analysesQueued: a count, or null while the server decides the reach after
+// the response (a Claude scoping call runs in the background).
+function changeNote(
+  reaudit: Reaudit,
+  analysesQueued: number | null | undefined,
+): string {
   const bits: string[] = [];
   if (reaudit && reaudit.cleared > 0)
     bits.push(`${reaudit.cleared} alert${reaudit.cleared === 1 ? "" : "s"} cleared`);
   if (reaudit && reaudit.created > 0)
     bits.push(`${reaudit.created} alert${reaudit.created === 1 ? "" : "s"} surfaced`);
-  if (analysesQueued > 0)
+  if (analysesQueued === null) bits.push("re-analysis queued");
+  else if (analysesQueued && analysesQueued > 0)
     bits.push(
       `${analysesQueued} entr${analysesQueued === 1 ? "y" : "ies"} queued for re-analysis`,
     );
@@ -108,7 +115,7 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
       if (!res.ok) throw new Error(payload?.error ?? "Update failed.");
       toast.success(
         success(
-          changeNote(payload?.reaudit ?? null, payload?.analysesQueued ?? 0),
+          changeNote(payload?.reaudit ?? null, payload?.analysesQueued),
         ),
       );
       setEditingId(null);
@@ -164,17 +171,25 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
                   />
                   {editingId === rule.id ? (
                     <>
-                      <Input
-                        value={draft}
-                        autoFocus
-                        disabled={busy}
-                        className="h-7 text-sm"
-                        onChange={(e) => setDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void saveText(rule);
-                          if (e.key === "Escape") setEditingId(null);
-                        }}
-                      />
+                      <div className="-mx-2 -my-1 min-w-0 flex-1">
+                        <Textarea
+                          value={draft}
+                          autoFocus
+                          disabled={busy}
+                          rows={1}
+                          maxLength={300}
+                          aria-label="Rule text"
+                          className="min-h-0 resize-none px-2 py-1 text-sm font-medium md:text-sm"
+                          onChange={(e) => setDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              void saveText(rule);
+                            }
+                            if (e.key === "Escape") setEditingId(null);
+                          }}
+                        />
+                      </div>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -329,7 +344,7 @@ function AddRuleDialog({
       if (!res.ok) throw new Error(payload?.error ?? "Save failed.");
       toast.success(
         "Rule saved." +
-          changeNote(payload?.reaudit ?? null, payload?.analysesQueued ?? 0),
+          changeNote(payload?.reaudit ?? null, payload?.analysesQueued),
       );
       onSaved();
     } catch (err) {

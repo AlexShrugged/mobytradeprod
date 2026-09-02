@@ -108,14 +108,18 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
         ]);
         if (res.ok) {
           const cleared: number = body?.reaudit?.cleared ?? 0;
-          const queued: number = body?.analysesQueued ?? 0;
+          // null = the server decides the reach after the response.
+          const queued: number | null =
+            body?.analysesQueued === undefined ? 0 : body.analysesQueued;
           const bits = [
             cleared > 0
               ? `${cleared} alert${cleared === 1 ? "" : "s"} cleared`
               : null,
-            queued > 0
-              ? `${queued} entr${queued === 1 ? "y" : "ies"} queued for re-analysis`
-              : null,
+            queued === null
+              ? "re-analysis queued"
+              : queued > 0
+                ? `${queued} entr${queued === 1 ? "y" : "ies"} queued for re-analysis`
+                : null,
           ].filter(Boolean);
           toast.success(
             bits.length > 0 ? `Rule saved. ${bits.join(", ")}.` : "Rule saved.",

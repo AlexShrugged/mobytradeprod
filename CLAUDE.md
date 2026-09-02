@@ -135,7 +135,31 @@ invoice; supporting docs (cargo release, packing list, refund report) and
 part adoption link without queueing, so a catalog import never re-analyzes
 the book. Tariff approvals and org-rule changes queue
 `tariff_apply`/`org_rule` re-runs for the previously analyzed entries they
-touch (inside the apply transaction); and the analysis sweep
+touch (inside the apply transaction). An org rule's reach is decided in
+two passes, both in `after()` of the org-rule routes
+(`api/org-rules/schedule.ts` — a Settings save never waits on a model
+call; the response carries `analysesQueued: null` = pending). Pass 1,
+`analysis/rule-relevance.ts` (pure, the FLOOR): the structured spec's
+axes AND whatever the rule TEXT names — HTS codes (dotted, or labeled
+bare digits, matched against line and charge headings), countries (ICU
+region names + demonym aliases + bare codes outside an English-word
+stoplist), suppliers/vendors (suffix-stripped names, leading two words,
+distinctive single words), SKUs, entry numbers — resolved against the
+analyzed entries' own facts; single-word names must be capitalized and
+pure-alpha SKUs all-caps so prose is never read as a name. A rule naming
+nothing reaches the whole analyzed book. Pass 2, `analysis/rule-scope.ts`:
+a Claude structured-output call (`RULE_SCOPE_MODEL`/`_DEADLINE_MS`/
+`_MAX_ENTRIES`; one retry, 60s per attempt) over the change (before/after
+text + spec) and a compact table of the analyzed entries (suppliers, COO,
+HTS, Ch99 headings, SKUs, open alert types, open AI findings, literal-match
+mark) returns "all" or entry numbers with one-line reasons. `mergeReach`
+is the coverage doctrine: a named floor is never shrunk, only widened;
+"everything" shrinks only to a NON-EMPTY pick (the prompt demands "all"
+for broker-conduct/fee/valuation rules); no key, refusal, malformed reply,
+deadline, or a book over the cap keeps the deterministic reach. Measured
+on the seed book 2026-09-02: MPF rule stays all, a battery-pack guidance
+rule shrank all→6/11, supplier/COO rules widened by the entries literal
+matching missed. And the analysis sweep
 (`GET /api/analysis/sweep`, Vercel cron every 10 min under `CRON_SECRET`;
 `POST` = super-admin trigger) is the queue's runner: it reclaims abandoned
 `running` rows (>20 min, re-queued up to twice), seeds a `backfill` run

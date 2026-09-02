@@ -26,12 +26,23 @@ import {
 } from "drizzle-orm";
 
 import * as schema from "../db/schema";
-import { isUnscoped, lineMatchesScope } from "../audit/suppression";
 import { loadReferenceDataForOrg, type DbClient } from "../duty/reference";
-import type { SuppressionSpec } from "../org-rules";
 import { getEntryAnalyst } from "./index";
 import { loadEntryBundle } from "./bundle";
 import { findingCategorySchema, type Finding } from "./findings";
+import {
+  entriesTouchedByRules,
+  type OrgRuleState,
+  type RelevanceEntry,
+  type RelevanceLine,
+  type RuleReach,
+} from "./rule-relevance";
+import {
+  getRuleScoper,
+  mergeReach,
+  type RuleChange,
+  type RuleScoper,
+} from "./rule-scope";
 import type { AnalystResult, EntryAnalyst } from "./types";
 
 export class AnalysisNotConfiguredError extends Error {}
@@ -429,22 +440,36 @@ export async function queueReanalysesForEntries(
  * has cleanly analyzed: never-analyzed entries get their first run from
  * the sweep's backfill leg, under the rules as they stand then.
  *
- * `scopes` bounds the blast radius (each re-run is a real model
- * investigation): one element per rule state the change touched — the
- * before spec and/or the after spec on an edit, one spec on create/delete.
- * A guidance rule (null) or an unscoped spec has no structured scope, so
- * the whole analyzed set queues; a scoped spec queues only entries with a
- * line matching its axes, via the auditor's own lineMatchesScope so the
- * two layers can never disagree. alertTypes are deliberately ignored here:
- * they name audit alert types, and the analyst re-judges the entry
- * holistically anyway.
+ * `change` bounds the blast radius (each re-run is a real model
+ * investigation): the rule's before and/or after state — a create has no
+ * before, a delete or disable no after. Two passes decide the reach:
+ *
+ *   1. rule-relevance.ts, deterministic and the FLOOR: the structured
+ *      spec's axes (via the auditor's own lineMatchesScope, so the two
+ *      layers never disagree) AND whatever the rule TEXT names — HTS
+ *      codes, countries, suppliers, SKUs, entry numbers — resolved against
+ *      the analyzed entries' own facts. A state that names nothing and has
+ *      no scoped spec reaches the whole book.
+ *   2. rule-scope.ts, a Claude scoping call over the same entries (plus
+ *      their open alerts and findings): it may widen a named set, or
+ *      shrink "the whole book" to the entries the rule can actually touch,
+ *      with an explicit "all" for entry-wide rules. Every failure keeps
+ *      the deterministic reach (mergeReach).
+ *
+ * alertTypes are deliberately ignored: they name audit alert types, and
+ * the analyst re-judges the entry holistically anyway. `opts.scoper`
+ * injects the model pass (null = deterministic only) for tests/scripts.
  */
 export async function queueReanalysesForOrgRule(
   db: DbClient,
   orgId: string,
-  scopes: (SuppressionSpec | null)[],
+  change: RuleChange,
+  opts: { scoper?: RuleScoper | null } = {},
 ): Promise<number> {
-  if (scopes.length === 0) return 0;
+  const states = [change.before, change.after].filter(
+    (s): s is OrgRuleState => s !== null,
+  );
+  if (states.length === 0) return 0;
 
   const analyzed = await db
     .selectDistinct({
@@ -460,36 +485,196 @@ export async function queueReanalysesForOrgRule(
     );
   if (analyzed.length === 0) return 0;
 
-  const specs = scopes.filter((s): s is SuppressionSpec => s !== null);
-  const everything =
-    specs.length < scopes.length || specs.some(isUnscoped);
+  const entries = await loadRelevanceEntries(
+    db,
+    orgId,
+    analyzed.map((a) => a.entryId),
+  );
+  const deterministic = entriesTouchedByRules(states, entries);
+  const scoper = opts.scoper === undefined ? getRuleScoper() : opts.scoper;
+  const model = scoper
+    ? await scoper.scope(change, entries, deterministic)
+    : null;
+  const reach = mergeReach(deterministic, model);
+  console.log(
+    `[rule-scope] org ${orgId}: deterministic=${describeReach(deterministic)} model=${
+      model === null ? "none" : model.all ? "all" : String(model.picks.length)
+    } final=${describeReach(reach)} of ${entries.length}`,
+  );
 
-  let targets = analyzed;
-  if (!everything) {
-    const matched = new Set<string>();
-    const ids = analyzed.map((a) => a.entryId);
-    for (let i = 0; i < ids.length; i += 500) {
-      const lines = await db.query.entryLineItems.findMany({
-        where: and(
+  if (reach.all) return queueAnalysesForEntries(db, analyzed, "org_rule");
+  const touched = new Set(reach.entryIds);
+  return queueAnalysesForEntries(
+    db,
+    analyzed.filter((a) => touched.has(a.entryId)),
+    "org_rule",
+  );
+}
+
+const describeReach = (reach: RuleReach): string =>
+  reach.all ? "all" : String(reach.entryIds.length);
+
+/**
+ * The facts rule-relevance.ts reads, for a set of entries: entry numbers,
+ * each line's supplier / vendor / COO / HTS, its charge headings, and the
+ * SKUs on the line and its tariff-sheet rows. Chunked — the set can span
+ * the whole book. Exported for scripts that want to preview a rule's reach.
+ */
+export async function loadRelevanceEntries(
+  db: DbClient,
+  orgId: string,
+  entryIds: string[],
+): Promise<RelevanceEntry[]> {
+  const byEntry = new Map<string, RelevanceEntry>();
+  const linesById = new Map<string, RelevanceLine>();
+  const linesByNumber = new Map<string, RelevanceLine>();
+  const vendorOfLine = new Map<string, string>();
+  const key = (entryId: string, lineNumber: number) => `${entryId}:${lineNumber}`;
+
+  for (let i = 0; i < entryIds.length; i += 500) {
+    const ids = entryIds.slice(i, i + 500);
+    const rows = await db
+      .select({
+        id: schema.entries.id,
+        entryNumber: schema.entries.entryNumber,
+      })
+      .from(schema.entries)
+      .where(
+        and(eq(schema.entries.orgId, orgId), inArray(schema.entries.id, ids)),
+      );
+    for (const r of rows) {
+      byEntry.set(r.id, { entryId: r.id, entryNumber: r.entryNumber, lines: [] });
+    }
+
+    const lines = await db
+      .select({
+        id: schema.entryLineItems.id,
+        entryId: schema.entryLineItems.entryId,
+        lineNumber: schema.entryLineItems.lineNumber,
+        sku: schema.entryLineItems.sku,
+        supplierName: schema.entryLineItems.supplierName,
+        vendorId: schema.entryLineItems.vendorId,
+        countryOfOrigin: schema.entryLineItems.countryOfOrigin,
+        htsCodeDigits: schema.entryLineItems.htsCodeDigits,
+      })
+      .from(schema.entryLineItems)
+      .where(
+        and(
           eq(schema.entryLineItems.orgId, orgId),
-          inArray(schema.entryLineItems.entryId, ids.slice(i, i + 500)),
+          inArray(schema.entryLineItems.entryId, ids),
         ),
-        columns: {
-          entryId: true,
-          supplierName: true,
-          countryOfOrigin: true,
-          htsCodeDigits: true,
-        },
-      });
-      for (const line of lines) {
-        if (specs.some((spec) => lineMatchesScope(line, spec))) {
-          matched.add(line.entryId);
-        }
+      );
+    for (const l of lines) {
+      const entry = byEntry.get(l.entryId);
+      if (!entry) continue;
+      const line: RelevanceLine = {
+        supplierName: l.supplierName,
+        vendorName: null,
+        countryOfOrigin: l.countryOfOrigin,
+        htsCodeDigits: l.htsCodeDigits,
+        chargeHtsDigits: [],
+        skus: l.sku ? [l.sku] : [],
+      };
+      entry.lines.push(line);
+      linesById.set(l.id, line);
+      linesByNumber.set(key(l.entryId, l.lineNumber), line);
+      if (l.vendorId) vendorOfLine.set(l.id, l.vendorId);
+    }
+
+    const lineParts = await db
+      .select({
+        entryId: schema.entryLineParts.entryId,
+        lineNumber: schema.entryLineParts.lineNumber,
+        sku: schema.entryLineParts.sku,
+      })
+      .from(schema.entryLineParts)
+      .where(
+        and(
+          eq(schema.entryLineParts.orgId, orgId),
+          inArray(schema.entryLineParts.entryId, ids),
+        ),
+      );
+    for (const p of lineParts) {
+      linesByNumber.get(key(p.entryId, p.lineNumber))?.skus.push(p.sku);
+    }
+
+    // Open items, for the model scoping pass: where a rule change would
+    // actually clear or raise something.
+    const alerts = await db
+      .select({
+        entryId: schema.auditAlerts.entryId,
+        alertType: schema.auditAlerts.alertType,
+      })
+      .from(schema.auditAlerts)
+      .where(
+        and(
+          eq(schema.auditAlerts.orgId, orgId),
+          eq(schema.auditAlerts.status, "open"),
+          inArray(schema.auditAlerts.entryId, ids),
+        ),
+      );
+    for (const a of alerts) {
+      const entry = byEntry.get(a.entryId);
+      if (entry) (entry.openAlertTypes ??= []).push(a.alertType);
+    }
+    const findings = await db
+      .select({
+        entryId: schema.analysisFindings.entryId,
+        category: schema.analysisFindings.category,
+        title: schema.analysisFindings.title,
+      })
+      .from(schema.analysisFindings)
+      .where(
+        and(
+          eq(schema.analysisFindings.orgId, orgId),
+          eq(schema.analysisFindings.status, "open"),
+          inArray(schema.analysisFindings.entryId, ids),
+        ),
+      );
+    for (const f of findings) {
+      const entry = byEntry.get(f.entryId);
+      if (entry) {
+        (entry.openFindings ??= []).push({ category: f.category, title: f.title });
       }
     }
-    targets = analyzed.filter((a) => matched.has(a.entryId));
   }
-  return queueAnalysesForEntries(db, targets, "org_rule");
+
+  const lineIds = [...linesById.keys()];
+  for (let i = 0; i < lineIds.length; i += 500) {
+    const charges = await db
+      .select({
+        lineItemId: schema.entryLineCharges.lineItemId,
+        htsCodeDigits: schema.entryLineCharges.htsCodeDigits,
+      })
+      .from(schema.entryLineCharges)
+      .where(
+        and(
+          eq(schema.entryLineCharges.orgId, orgId),
+          inArray(schema.entryLineCharges.lineItemId, lineIds.slice(i, i + 500)),
+        ),
+      );
+    for (const c of charges) {
+      if (c.htsCodeDigits) {
+        linesById.get(c.lineItemId)?.chargeHtsDigits.push(c.htsCodeDigits);
+      }
+    }
+  }
+
+  const vendorIds = [...new Set(vendorOfLine.values())];
+  const vendorNames = new Map<string, string>();
+  for (let i = 0; i < vendorIds.length; i += 500) {
+    const vendors = await db
+      .select({ id: schema.vendors.id, name: schema.vendors.name })
+      .from(schema.vendors)
+      .where(inArray(schema.vendors.id, vendorIds.slice(i, i + 500)));
+    for (const v of vendors) vendorNames.set(v.id, v.name);
+  }
+  for (const [lineId, vendorId] of vendorOfLine) {
+    const line = linesById.get(lineId);
+    if (line) line.vendorName = vendorNames.get(vendorId) ?? null;
+  }
+
+  return [...byEntry.values()];
 }
 
 /**
