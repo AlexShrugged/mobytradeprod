@@ -205,8 +205,18 @@ export type PartRow = Part & {
   pendingChanges: boolean;
   /** Derived: a received quote awaits a decision. */
   hasUnapproved: boolean;
-  /** parts.status with the derived pending_changes overlay for active parts. */
-  displayStatus: "draft" | "active" | "archived" | "pending_changes";
+  /** Derived: an entry names this SKU (parts/usage-sql.ts) — the same
+   *  predicate the Status filter uses. */
+  usedOnEntry: boolean;
+  /** The Status pill, in the filter's vocabulary: draft/archived from the
+   *  catalog record; otherwise pending_changes (an approved quote awaits its
+   *  PO), else active/inactive by usage. */
+  displayStatus:
+    | "draft"
+    | "active"
+    | "inactive"
+    | "archived"
+    | "pending_changes";
   /** All quote lines for this part, newest sheet first. Fetched for every
    *  part in ONE org-bounded query — simpler than lazy per-row loads for the
    *  single-page expansion model, and quote volume is small. */
@@ -408,6 +418,7 @@ export async function getParts(opts: {
     openItems,
     usage,
     classificationRuns,
+    usedRows,
   ] = await Promise.all([
       getReferenceDataForOrg(),
       db.query.quoteLines.findMany({
@@ -473,7 +484,14 @@ export async function getParts(opts: {
           },
         },
       }),
+      // Which of this page's parts an entry names — the Status pill must
+      // agree with the Status filter, so it runs the same predicate.
+      db
+        .select({ id: schema.parts.id })
+        .from(schema.parts)
+        .where(and(inArray(schema.parts.id, partIds), partUsedOnEntrySql(db))),
     ]);
+  const usedIds = new Set(usedRows.map((r) => r.id));
 
   const latestClassificationByPartId = new Map<
     string,
@@ -731,10 +749,15 @@ export async function getParts(opts: {
       quoteCounts: counts,
       pendingChanges,
       hasUnapproved: counts.received > 0,
+      usedOnEntry: usedIds.has(part.id),
       displayStatus:
-        part.status === "active" && pendingChanges
-          ? "pending_changes"
-          : part.status,
+        part.status !== "active"
+          ? part.status
+          : pendingChanges
+            ? "pending_changes"
+            : usedIds.has(part.id)
+              ? "active"
+              : "inactive",
       quotes,
       classification,
       comparison,

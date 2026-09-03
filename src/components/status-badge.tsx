@@ -43,8 +43,10 @@ const statusMeta: Record<string, { label: string; tone: Tone }> = {
   processing: { label: "Processing", tone: "blue" },
   processed: { label: "Processed", tone: "green" },
   failed: { label: "Failed", tone: "red" },
-  // parts (draft shared with entries above)
+  // parts (draft shared with entries above). active/inactive are the
+  // usage vocabulary (parts/status.ts): an entry names the SKU, or not.
   active: { label: "Active", tone: "green" },
+  inactive: { label: "Inactive", tone: "neutral" },
   archived: { label: "Archived", tone: "neutral" },
   pending_changes: { label: "Pending changes", tone: "amber" },
   // quotes ("received"/"rejected" reuse rows above where labels differ)
