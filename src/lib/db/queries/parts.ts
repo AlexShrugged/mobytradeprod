@@ -37,6 +37,7 @@ import {
   PART_USAGE_STATUSES,
   type PartUsageStatus,
 } from "@/lib/parts/status";
+import { partUsedOnEntrySql } from "@/lib/parts/usage-sql";
 import {
   buildQuoteComparison,
   type ComparisonInput,
@@ -256,20 +257,15 @@ function partsSearchWhere(q: string | null | undefined): SQL | undefined {
   );
 }
 
-/** Usage-based Status filter (src/lib/parts/status.ts): Active = the SKU
- *  appears on at least one entry line. Undefined = no filter; every box
- *  unchecked matches nothing. */
+/** Usage-based Status filter (src/lib/parts/status.ts): Active = an entry
+ *  names the SKU through any link (parts/usage-sql.ts). Undefined = no
+ *  filter; every box unchecked matches nothing. */
 function partsStatusWhere(
   status: Set<PartUsageStatus> | undefined,
 ): SQL | undefined {
   if (!status || status.size >= PART_USAGE_STATUSES.length) return undefined;
   if (status.size === 0) return sql`false`;
-  const used = exists(
-    db
-      .select({ one: sql`1` })
-      .from(schema.entryLineItems)
-      .where(eq(schema.entryLineItems.partId, schema.parts.id)),
-  );
+  const used = partUsedOnEntrySql(db);
   return status.has("active") ? used : not(used);
 }
 

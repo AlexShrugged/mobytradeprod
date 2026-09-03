@@ -1,8 +1,10 @@
-// Usage-based catalog status: a SKU is Active once any entry line has
-// carried it, Inactive until then. Derived on read, never stored — and
-// distinct from parts.status (draft/active/archived), which tracks the
-// catalog record's own lifecycle. Client-safe: the Parts view renders the
-// dropdown from this vocabulary and the server query filters by it.
+// Usage-based catalog status: a SKU is Active once an entry names it — a
+// 7501 line, a broker tariff-sheet row, or a commercial invoice attached to
+// an entry (the predicate lives in ./usage-sql.ts) — Inactive until then.
+// Derived on read, never stored — and distinct from parts.status
+// (draft/active/archived), which tracks the catalog record's own lifecycle.
+// Client-safe: the Parts view renders the dropdown from this vocabulary and
+// the server query filters by it.
 
 export const PART_USAGE_STATUSES = ["active", "inactive"] as const;
 export type PartUsageStatus = (typeof PART_USAGE_STATUSES)[number];

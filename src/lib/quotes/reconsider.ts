@@ -22,6 +22,7 @@ import * as schema from "../db/schema";
 import { normalizeHts } from "../duty/calculator";
 import { loadReferenceDataForOrg } from "../duty/reference";
 import { dayAfter, dayBefore } from "../effective-dating";
+import { partUsedOnEntrySql } from "../parts/usage-sql";
 import {
   buildQuoteComparison,
   buildReconsiderProposal,
@@ -104,7 +105,9 @@ export async function sweepQuoteReconsider(
   const { asOfBefore, asOfAfter } = resolveChangeWindow(scope.effectiveDates);
 
   // Candidate SKUs across every org (reference data is global): in use on
-  // an entry, still in the catalog, with something to compare against.
+  // an entry (the Parts page's Active predicate — 7501 line, tariff-sheet
+  // row, or invoice attached to an entry), still in the catalog, with
+  // something to compare against.
   const parts = await db
     .select({
       id: schema.parts.id,
@@ -118,12 +121,7 @@ export async function sweepQuoteReconsider(
     .where(
       and(
         ne(schema.parts.status, "archived"),
-        exists(
-          db
-            .select({ one: sql`1` })
-            .from(schema.entryLineItems)
-            .where(eq(schema.entryLineItems.partId, schema.parts.id)),
-        ),
+        partUsedOnEntrySql(db),
         exists(
           db
             .select({ one: sql`1` })
