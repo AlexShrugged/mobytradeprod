@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 import { adoptEntryLinesForParts } from "@/lib/processing/linker";
+import { classifyQuoteCreatedParts } from "@/lib/quotes/auto-classify";
 import { ingestQuoteSheet } from "@/lib/quotes/service";
 
 const isoDate = z
@@ -71,5 +73,14 @@ export async function POST(request: Request) {
     await adoptEntryLinesForParts(tx, orgId, ingested.createdPartIds);
     return ingested;
   });
+  // New SKUs get their potential HTS codes after the response — the
+  // classifier's model call never runs inside the ingest transaction.
+  if (result.createdPartIds.length > 0) {
+    after(async () => {
+      await classifyQuoteCreatedParts(db, orgId, result.createdPartIds).catch(
+        (err) => console.error("auto-classification after quote entry failed:", err),
+      );
+    });
+  }
   return NextResponse.json(result, { status: 201 });
 }

@@ -227,6 +227,11 @@ export const reviewItemType = pgEnum("review_item_type", [
   // Release-level approval of a base-schedule (ch. 1–97) refresh.
   // subject_id = the "<release>-base" tariff_announcements.id.
   "tariff_base_release",
+  // A tariff change moved a SKU's cheapest sourcing option (quotes vs the
+  // current source, landed cost). Org-scoped; subject_id = parts.id;
+  // proposal = QuoteReconsiderProposal (quotes/compare.ts). Written only
+  // by quotes/service.ts.
+  "quote_reconsider",
 ]);
 export const reviewItemStatus = pgEnum("review_item_status", [
   "pending",

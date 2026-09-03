@@ -53,6 +53,10 @@ const statusMeta: Record<string, { label: string; tone: Tone }> = {
   applied: { label: "Applied", tone: "green" },
   rejected: { label: "Rejected", tone: "red" },
   superseded: { label: "Superseded", tone: "neutral" },
+  // sourcing comparison: the (part, vendor) source row, and the part-level
+  // "a tariff change moved the cheapest option" flag
+  current: { label: "Current", tone: "green" },
+  reconsider: { label: "Reconsider", tone: "amber" },
   // refunds (derived stage)
   paid: { label: "Paid", tone: "green" },
   pending_payout: { label: "Pending payout", tone: "amber" },

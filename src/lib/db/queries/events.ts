@@ -12,6 +12,7 @@ import type {
 } from "@/lib/events/types";
 import { deriveRefundStage } from "@/lib/refunds";
 import { formatCents } from "@/lib/format";
+import type { QuoteReconsiderProposal } from "@/lib/quotes/compare";
 
 // Materializes the derived events feed (see src/lib/events/types.ts). One
 // source query per event family, each pushed down as far as practical, then
@@ -190,6 +191,7 @@ export async function getEvents(opts?: {
     partRows,
     fieldChangeRows,
     appliedRevisionRows,
+    reconsiderRows,
   ] = await Promise.all([
     scoped(scope.entryIds, () =>
       db.query.entries.findMany({
@@ -288,6 +290,17 @@ export async function getEvents(opts?: {
           where: isNotNull(schema.measureRevisions.appliedAt),
           with: { appliedMeasure: true, announcement: true },
         }),
+    // Sourcing reconsiderations (a tariff change moved a SKU's cheapest
+    // option) — pending and decided alike; the item IS the event.
+    db.query.reviewItems.findMany({
+      where: and(
+        eq(schema.reviewItems.orgId, orgId),
+        eq(schema.reviewItems.itemType, "quote_reconsider"),
+        ...(scope.partId
+          ? [eq(schema.reviewItems.subjectId, scope.partId)]
+          : []),
+      ),
+    }),
   ]);
 
   const filteredSheets = scope.partId
@@ -645,6 +658,31 @@ export async function getEvents(opts?: {
     ];
   });
 
+  const reconsiderEvents: BusinessEvent[] = reconsiderRows.map((item) => {
+    const p = item.proposal as QuoteReconsiderProposal;
+    const against = p.chosen ?? p.previousCheapest;
+    return {
+      id: `quote_reconsider:${item.id}`,
+      type: "quote_reconsider",
+      occurredOn: item.createdAt.toISOString().slice(0, 10),
+      dateBasis: "exact",
+      recordedAt: iso(item.createdAt),
+      title: `Landed costs changed on ${p.sku}`,
+      detail: `${p.cheapest.label} now cheapest, ${formatCents(p.savingCents)}/unit below ${
+        against?.label ?? "the previous option"
+      } after ${p.changeLabel}`,
+      entityRefs: [
+        {
+          type: "part",
+          id: item.subjectId,
+          label: p.sku,
+          href: `/parts?expand=${item.subjectId}`,
+        },
+      ],
+      provenance: { kind: "system", note: p.changeLabel },
+    };
+  });
+
   const assembled = assembleEvents(
     [
       entryEvents,
@@ -654,6 +692,7 @@ export async function getEvents(opts?: {
       refundEvents,
       quoteSheetEvents,
       quoteLineEvents,
+      reconsiderEvents,
       partEvents,
       fieldChangeEvents,
       tariffEvents,

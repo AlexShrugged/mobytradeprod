@@ -11,6 +11,7 @@ import {
   PackagePlus,
   Pencil,
   ReceiptText,
+  Scale,
   Ship,
   Stamp,
   Tags,
@@ -68,6 +69,11 @@ export const eventMeta: Record<
     icon: ArrowDownToLine,
     label: "Cost applied",
     ringClass: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  },
+  quote_reconsider: {
+    icon: Scale,
+    label: "Reconsider",
+    ringClass: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   },
   part_created: {
     icon: PackagePlus,

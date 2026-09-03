@@ -28,6 +28,7 @@ import { buildStory, VENDOR_SEED } from "../src/lib/db/seed-data/story";
 import type { DocLinkSeed } from "../src/lib/db/seed-data/story";
 import { normalizeHts } from "../src/lib/duty/calculator";
 import { loadReferenceData } from "../src/lib/duty/reference";
+import { sweepQuoteReconsider } from "../src/lib/quotes/reconsider";
 
 const DAY = 86_400_000;
 const FILES_DIR = "./.files";
@@ -830,6 +831,24 @@ async function main() {
   assertExactKeys("231-4501358-3", []);
   assertExactKeys("231-4501364-1", ["unknown_sku:line2"]);
 
+  // ------------------------------------------------------ quote reconsider
+  //
+  // The sourcing re-analysis a tariff apply triggers, run once over the
+  // seeded book against the Section 301 List 1 window (before: no China
+  // duties; after: today's stack). Every other quoted SKU is single-origin
+  // and keeps its ranking; EB-MTR-500W's rejected VN quote (QS5) lands
+  // under Shenzhen's CN cost, so exactly one reconsider item opens — the
+  // demo of that alert. Derived by the real sweep, never hand-seeded.
+  const reconsider = await sweepQuoteReconsider(db, {
+    label: "Section 301 List 1 — China",
+    prefixes: null,
+    effectiveDates: ["2018-07-06"],
+  });
+  assertSeed(
+    reconsider.opened === 1,
+    `expected exactly one quote reconsider item (EB-MTR-500W), got ${reconsider.opened} across ${reconsider.partsChecked} parts`,
+  );
+
   // -------------------------------------------------------------- summary
   const count = async (table: Parameters<typeof db.$count>[0]) => db.$count(table);
   const counts = {
@@ -863,6 +882,7 @@ async function main() {
     stacking_rules: await count(schema.stackingRules),
     adcvd_orders: await count(schema.adcvdOrders),
     audit_alerts: await count(schema.auditAlerts),
+    review_items: await count(schema.reviewItems),
   };
   console.log("Seeded:", counts);
   console.log("Seed complete.");

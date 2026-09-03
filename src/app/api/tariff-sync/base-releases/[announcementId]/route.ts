@@ -15,6 +15,10 @@ import {
   type ReauditSummary,
 } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
+import {
+  sweepQuoteReconsider,
+  type ReconsiderSweepSummary,
+} from "@/lib/quotes/reconsider";
 import { ApplyValidationError } from "@/lib/tariff-sync/apply";
 import { applyBaseRelease } from "@/lib/tariff-sync/base-apply";
 
@@ -141,6 +145,8 @@ export async function PATCH(
         ...stats,
         targets,
         analysesQueued,
+        // The quote re-analysis scope (post-commit, below).
+        touchedDigits,
       };
     });
 
@@ -165,6 +171,22 @@ export async function PATCH(
       console.error("re-audit after base apply failed:", err);
     }
 
+    // Re-price every SKU whose potential codes changed rate, before/after
+    // the release; open reconsider items where the cheapest moved.
+    let quoteReconsider: ReconsiderSweepSummary | null = null;
+    if (result.touchedDigits.length > 0) {
+      try {
+        quoteReconsider = await sweepQuoteReconsider(db, {
+          label: `Base schedule ${result.release}`,
+          prefixes: [],
+          digits: result.touchedDigits,
+          effectiveDates: [result.effectiveDate],
+        });
+      } catch (err) {
+        console.error("quote re-analysis after base apply failed:", err);
+      }
+    }
+
     if (result.analysesQueued > 0) {
       after(async () => {
         await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
@@ -172,8 +194,16 @@ export async function PATCH(
         });
       });
     }
-    // targets: undefined drops the (possibly huge) id list from the JSON.
-    return NextResponse.json({ ...result, targets: undefined, audit, auditError });
+    // targets/touchedDigits: undefined drops the (possibly huge) lists
+    // from the JSON.
+    return NextResponse.json({
+      ...result,
+      targets: undefined,
+      touchedDigits: undefined,
+      audit,
+      auditError,
+      quoteReconsider,
+    });
   } catch (err) {
     if (err instanceof ApplyValidationError) {
       // Thrown inside the transaction, so the approval rolled back too.

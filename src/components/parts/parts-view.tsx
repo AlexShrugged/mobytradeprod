@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Download, Plus, Search, Upload } from "lucide-react";
+import { ChevronDown, Download, Plus, Scale, Search, Upload } from "lucide-react";
 
 import { UrlPaginationControls } from "@/components/pagination-controls";
 import { HtsReviewBanner } from "@/components/parts/hts-review-banner";
@@ -18,7 +18,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import type { HtsReviewQueueItem, PartRow } from "@/lib/db/queries/parts";
+import type {
+  HtsReviewQueueItem,
+  PartRow,
+  PartsAttention,
+} from "@/lib/db/queries/parts";
 import { encodeSetParam } from "@/lib/filter-params";
 import { DEFAULT_PER_PAGE, pageCountFor } from "@/lib/pagination";
 import {
@@ -32,10 +36,13 @@ import {
 // dialogs (HTS review walker, New SKU / add-quote). Search, status, and
 // pagination are URL params — the server assembles only the visible page.
 
-// One applied-state key over both filters, so the effect can tell a real
+// One applied-state key over every filter, so the effect can tell a real
 // change from a redundant re-render.
-const appliedKey = (q: string, s: Set<PartUsageStatus>) =>
-  `${q} ${encodeSetParam(s, PART_USAGE_STATUSES) ?? ""}`;
+const appliedKey = (
+  q: string,
+  s: Set<PartUsageStatus>,
+  attention: PartsAttention | null,
+) => `${q} ${encodeSetParam(s, PART_USAGE_STATUSES) ?? ""} ${attention ?? ""}`;
 
 type SkuDialogState =
   // "New SKU" — both tabs, SKU editable.
@@ -55,6 +62,8 @@ export function PartsView({
   initialQuery = "",
   initialStatus = [...PART_USAGE_STATUSES],
   statusCounts = { active: 0, inactive: 0 },
+  initialAttention = null,
+  reconsiderCount = 0,
 }: {
   parts: PartRow[];
   totalCount: number;
@@ -70,24 +79,32 @@ export function PartsView({
   initialStatus?: PartUsageStatus[];
   /** Option counts under the current search, status filter excluded. */
   statusCounts?: Record<PartUsageStatus, number>;
+  /** ?attention= — narrows to SKUs whose cheapest option moved. */
+  initialAttention?: PartsAttention | null;
+  /** Open reconsider items org-wide — the banner count. */
+  reconsiderCount?: number;
 }) {
   const router = useRouter();
   const [query, setQuery] = React.useState(initialQuery);
   const [status, setStatus] = React.useState<Set<PartUsageStatus>>(
     () => new Set(initialStatus),
   );
+  const [attention, setAttention] = React.useState<PartsAttention | null>(
+    initialAttention,
+  );
 
-  // Debounced URL sync: typing or toggling Status replaces ?q=/?status=
-  // (dropping ?page and the ?sku deep-link param) and the server
-  // re-filters. replace, not push — every keystroke must not become a
-  // history entry; the delay also coalesces rapid checkbox toggles. The
-  // ref keeps the mount value from firing a redundant navigation.
+  // Debounced URL sync: typing or toggling a filter replaces
+  // ?q=/?status=/?attention= (dropping ?page and the ?sku deep-link
+  // param) and the server re-filters. replace, not push — every keystroke
+  // must not become a history entry; the delay also coalesces rapid
+  // checkbox toggles. The ref keeps the mount value from firing a
+  // redundant navigation.
   const applied = React.useRef(
-    appliedKey(initialQuery.trim(), new Set(initialStatus)),
+    appliedKey(initialQuery.trim(), new Set(initialStatus), initialAttention),
   );
   React.useEffect(() => {
     const q = query.trim();
-    const next = appliedKey(q, status);
+    const next = appliedKey(q, status, attention);
     if (next === applied.current) return;
     const t = setTimeout(() => {
       applied.current = next;
@@ -95,12 +112,13 @@ export function PartsView({
       if (q) params.set("q", q);
       const statusParam = encodeSetParam(status, PART_USAGE_STATUSES);
       if (statusParam) params.set("status", statusParam);
+      if (attention) params.set("attention", attention);
       if (per !== DEFAULT_PER_PAGE) params.set("per", String(per));
       const qs = params.toString();
       router.replace(qs ? `/parts?${qs}` : "/parts");
     }, 300);
     return () => clearTimeout(t);
-  }, [query, status, per, router]);
+  }, [query, status, attention, per, router]);
   const [reviewIndex, setReviewIndex] = React.useState<number | null>(() => {
     if (initialReviewPartId === null) return null;
     const i = queue.findIndex((q) => q.part.id === initialReviewPartId);
@@ -118,6 +136,27 @@ export function PartsView({
   return (
     <div className="flex flex-col gap-4">
       <HtsReviewBanner count={queue.length} onStart={() => setReviewIndex(0)} />
+      {reconsiderCount > 0 || attention === "reconsider" ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50/60 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/20">
+          <div className="flex items-center gap-2 text-sm">
+            <Scale className="size-4 text-amber-700 dark:text-amber-400" />
+            <span>
+              <span className="font-medium">{reconsiderCount}</span> SKU
+              {reconsiderCount === 1 ? " has" : "s have"} a cheaper option
+              after a tariff change.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant={attention === "reconsider" ? "outline" : "default"}
+            onClick={() =>
+              setAttention((a) => (a === "reconsider" ? null : "reconsider"))
+            }
+          >
+            {attention === "reconsider" ? "Show all SKUs" : "Show them"}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative max-w-sm flex-1 basis-64">

@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { EditableCell } from "@/components/inline-edit";
 import { eventMeta } from "@/components/events/event-meta";
 import { ClassificationCard } from "@/components/parts/classification-card";
+import { CompareCard } from "@/components/parts/compare-card";
 import { Money } from "@/components/money";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -36,11 +37,13 @@ import {
 } from "@/lib/vendors/part-vendor-groups";
 import { cn } from "@/lib/utils";
 
-// The row expansion: vendors and classification stacked on the left
-// (~5/12) — vendors with real activity first, an expandable archive of
-// offer-only vendors under them, then the part's HTS classification — and
-// SKU history on the right (~7/12), stacked on narrow screens. Same muted
-// panel treatment as the entries expansion.
+// The row expansion: the landed-cost comparison across the top whenever
+// the SKU has anything to price (a source or a quote), then vendors and
+// classification stacked on the left (~5/12) — vendors with real activity
+// first, an expandable archive of offer-only vendors under them, then the
+// part's HTS classification — and SKU history on the right (~7/12),
+// stacked on narrow screens. Same muted panel treatment as the entries
+// expansion.
 export function PartExpansion({
   part,
   onAddQuote,
@@ -50,17 +53,76 @@ export function PartExpansion({
   onAddQuote: (part: PartRow) => void;
   onReview: (partId: string, code?: string) => void;
 }) {
+  const decision = useQuoteDecision(part);
   return (
-    <div className="grid gap-4 bg-muted/30 px-12 py-4 lg:grid-cols-12">
-      <div className="flex flex-col gap-4 lg:col-span-5">
-        <VendorsCard part={part} onAddQuote={onAddQuote} />
-        <ClassificationCard part={part} onReview={onReview} />
-      </div>
-      <div className="lg:col-span-7">
-        <HistoryCard part={part} />
+    <div className="flex flex-col gap-4 bg-muted/30 px-12 py-4">
+      {part.comparison.options.length > 0 ? (
+        <CompareCard
+          part={part}
+          busyQuoteId={decision.busyQuoteId}
+          onDecide={decision.decide}
+        />
+      ) : null}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="flex flex-col gap-4 lg:col-span-5">
+          <VendorsCard
+            part={part}
+            onAddQuote={onAddQuote}
+            busyQuoteId={decision.busyQuoteId}
+            onDecide={decision.decide}
+          />
+          <ClassificationCard part={part} onReview={onReview} />
+        </div>
+        <div className="lg:col-span-7">
+          <HistoryCard part={part} />
+        </div>
       </div>
     </div>
   );
+}
+
+// One approve/reject handler shared by the comparison and the Vendors card,
+// so a quote decided in either place busies its row in both.
+function useQuoteDecision(part: PartRow) {
+  const router = useRouter();
+  const [busyQuoteId, setBusyQuoteId] = React.useState<string | null>(null);
+  const [, startTransition] = React.useTransition();
+
+  const decide = React.useCallback(
+    (quote: PartQuoteRow, action: "approve" | "reject") => {
+      setBusyQuoteId(quote.id);
+      startTransition(async () => {
+        try {
+          const res = await fetch(`/api/quote-lines/${quote.id}/decide`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // No decidedBy: the server records the org's default actor.
+            body: JSON.stringify({ action }),
+          });
+          const payload = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(payload?.error ?? "The decision failed.");
+          if (action === "reject") {
+            toast.success(`Quote rejected for ${part.sku}.`);
+          } else if (payload?.line?.status === "applied") {
+            // Approving a draft part's quote finalizes the SKU immediately.
+            toast.success(`${part.sku} finalized at the quoted cost.`);
+          } else {
+            toast.success(
+              `Quote approved for ${part.sku}. Applies when a matching PO arrives.`,
+            );
+          }
+          router.refresh();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "The decision failed.");
+        } finally {
+          setBusyQuoteId(null);
+        }
+      });
+    },
+    [part.sku, router],
+  );
+
+  return { busyQuoteId, decide };
 }
 
 // ---------------------------------------------------------------- vendors
@@ -75,14 +137,16 @@ export function PartExpansion({
 function VendorsCard({
   part,
   onAddQuote,
+  busyQuoteId,
+  onDecide,
 }: {
   part: PartRow;
   onAddQuote: (part: PartRow) => void;
+  busyQuoteId: string | null;
+  onDecide: (quote: PartQuoteRow, action: "approve" | "reject") => void;
 }) {
   const router = useRouter();
   const [removingId, setRemovingId] = React.useState<string | null>(null);
-  const [busyQuoteId, setBusyQuoteId] = React.useState<string | null>(null);
-  const [, startTransition] = React.useTransition();
 
   const { used, archive } = React.useMemo(
     () => groupPartVendors(part.sources, part.quotes),
@@ -114,43 +178,12 @@ function VendorsCard({
     }
   }
 
-  function decide(quote: PartQuoteRow, action: "approve" | "reject") {
-    setBusyQuoteId(quote.id);
-    startTransition(async () => {
-      try {
-        const res = await fetch(`/api/quote-lines/${quote.id}/decide`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // No decidedBy: the server records the org's default actor.
-          body: JSON.stringify({ action }),
-        });
-        const payload = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(payload?.error ?? "The decision failed.");
-        if (action === "reject") {
-          toast.success(`Quote rejected for ${part.sku}.`);
-        } else if (payload?.line?.status === "applied") {
-          // Approving a draft part's quote finalizes the SKU immediately.
-          toast.success(`${part.sku} finalized at the quoted cost.`);
-        } else {
-          toast.success(
-            `Quote approved for ${part.sku}. Applies when a matching PO arrives.`,
-          );
-        }
-        router.refresh();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "The decision failed.");
-      } finally {
-        setBusyQuoteId(null);
-      }
-    });
-  }
-
   const groupProps = {
     part,
     removingId,
     onRemove: removeSource,
     busyQuoteId,
-    onDecide: decide,
+    onDecide,
   };
 
   return (

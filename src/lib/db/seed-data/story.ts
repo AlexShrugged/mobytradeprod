@@ -6,7 +6,9 @@
 // Derived data is NEVER seeded: no audit_alerts (the auditor computes
 // them), no review_items/hts_classifications (the classification service
 // lands later — parts carry only the projection column), no "pending
-// changes" flags (derived from quote_lines on read).
+// changes" flags (derived from quote_lines on read). The one review item the
+// seed does hold is derived too: scripts/seed.ts runs the quote reconsider
+// sweep over the finished book (QS5 below).
 //
 // Planted audit findings (surfaced by the auditor, seeded as declared
 // facts here). Entry 231-4501311-9 carries the money findings:
@@ -380,7 +382,7 @@ export type QuoteLineSeed = {
 };
 
 export type QuoteSheetSeed = {
-  key: "QS1" | "QS2" | "QS3" | "QS4";
+  key: "QS1" | "QS2" | "QS3" | "QS4" | "QS5";
   supplierName: string;
   quoteDate: string;
   validUntil: string | null;
@@ -1113,6 +1115,21 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
       documentFile: null,
       lines: [
         { lineNumber: 1, sku: "EB-BRK-HYD", partCreated: false, description: "Hydraulic disc brake set, 180mm rotors", unitCost: "64.8000", countryOfOrigin: "TW", htsCode: "8714.94.3080", moq: "200.0000", leadTimeDays: 30, status: "applied", decidedBy: "Alex", decidedAt: at(-88, 11, 0), decisionNote: "Renegotiated 2026 pricing.", appliedAt: at(-45, 9, 30), appliedPoLineRef: { poNumber: "PO-2026-005", lineNumber: 1 } },
+      ],
+    },
+    // Rejected — Hanoi's VN motor was $2 over Shenzhen's cost, so it went
+    // to the archive. Under stacked China duties it lands cheaper: the seed
+    // runs the quote re-analysis against the Section 301 window and this is
+    // the SKU that opens a reconsider item (the demo of that alert).
+    {
+      key: "QS5",
+      supplierName: HANOI,
+      quoteDate: day(-30),
+      validUntil: day(60),
+      notes: null,
+      documentFile: null,
+      lines: [
+        { lineNumber: 1, sku: "EB-MTR-500W", partCreated: false, description: "500W geared hub motor, 36-hole", unitCost: "150.0000", countryOfOrigin: "VN", htsCode: null, moq: "100.0000", leadTimeDays: 40, status: "rejected", decidedBy: "Alex", decidedAt: at(-28, 10, 0), decisionNote: "$2 above Shenzhen's cost, same spec.", appliedAt: null, appliedPoLineRef: null },
       ],
     },
     // Received quote for an unknown SKU — created draft part EB-CHG-52V

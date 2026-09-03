@@ -275,6 +275,30 @@ Stop only stops rendering — the turn finishes via `after()` and
   exclusion-claim doctrine in its prompt.
 - **MPF/HMF are ingested facts** on entries — never computed (CBP per-entry mins/caps).
   Nominal rates appear only in estimates, labeled as such.
+- **Quotes are compared as landed cost, and re-compared when tariffs move.**
+  `quotes/compare.ts` (pure) prices every sourcing option of a SKU — the
+  current `(part, vendor)` sources and every quote line whatever its status —
+  under ONE HTS basis (`selectHtsBasis`: the committed code; else the
+  classifier's provisional pick leading its other candidates; else the ranked
+  candidates — never the supplier's claimed code) and marks the cheapest;
+  superseded quotes and non-USD quotes never rank (no FX exists). The Parts
+  page renders it as the expansion's Landed cost card (row = component stack;
+  basis switch for potential codes) and the source/quote rows take their
+  estimates from the same pass. A quote-created draft SKU is auto-classified
+  right after ingest (`quotes/auto-classify.ts`, `after()` in the sheet route
+  and `processing/run.ts`) so it carries potential codes, never a committed
+  one. The three tariff-apply routes run `quotes/reconsider.ts` post-commit
+  beside the entry re-audit: for usage-active SKUs (on an entry) with a live
+  quote whose potential codes the change reaches, it rebuilds the comparison
+  as of the day before the change's earliest window and as of its latest
+  window (or today) — both derived from the effective-dated reference, nothing
+  stored — and when the cheapest option MOVED (`diffComparisons`) opens a
+  `quote_reconsider` review item (subject = part; `quotes/service.ts` is its
+  sole writer, one pending per part, a rerun supersedes). Approving any quote
+  on the part resolves it (accept); "Keep current" acknowledges it
+  (`/api/quote-reconsider/[itemId]`). An in-place correction never fires
+  (before = after). The seed derives its one demo item by running the sweep
+  against the Section 301 List 1 window (QS5, EB-MTR-500W).
 - **Catalog import overwrites, for now.** The Parts page CSV/XLSX import
   (`parts/import-service.ts`; upload filed as a processed `part_catalog` document on
   the Data page) last-write-wins over existing SKUs — right for the launch use case of

@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { and, eq, lt, ne, or } from "drizzle-orm";
 
 import {
@@ -6,6 +7,10 @@ import {
 } from "@/lib/analysis/service";
 import { db, schema } from "@/lib/db";
 import type { Document } from "@/lib/db/schema";
+import {
+  classifyQuoteCreatedParts,
+  findPartsCreatedByDocument,
+} from "@/lib/quotes/auto-classify";
 
 import { getProcessor } from "./index";
 import { linkExtraction } from "./linker";
@@ -149,6 +154,23 @@ export async function processDocumentRow(
       .where(eq(schema.documents.id, doc.id))
       .returning();
 
+    // A quote sheet that minted draft SKUs gets them classified right away
+    // — potential HTS codes, never a committed one — so their quotes price
+    // to a landed cost before anyone opens the part. The model call runs
+    // after the response; the document is already processed either way.
+    if (extraction.docType === "quote_sheet") {
+      const createdPartIds = await findPartsCreatedByDocument(
+        db,
+        doc.orgId,
+        doc.id,
+      );
+      if (createdPartIds.length > 0) {
+        await afterResponseOrNow(() =>
+          classifyQuoteCreatedParts(db, doc.orgId, createdPartIds),
+        );
+      }
+    }
+
     // Children run AFTER the parent persists as processed, sequentially:
     // 7501s first, then CIs (orderPacketParts), so a CI usually finds its
     // sibling entry on the first pass, and two children never race the
@@ -188,5 +210,21 @@ export async function processDocumentRow(
       .where(eq(schema.documents.id, doc.id))
       .returning();
     return { claimed: true, ok: false, document: updated };
+  }
+}
+
+// Defer a follow-up past the response when a request is in flight (route
+// handlers, the cron sweep); run it inline where there is no request scope
+// (scripts). after() throws synchronously outside a request, which is the
+// branch signal.
+async function afterResponseOrNow(task: () => Promise<unknown>): Promise<void> {
+  const run = () =>
+    task().catch((err) => {
+      console.error("post-processing follow-up failed:", err);
+    });
+  try {
+    after(run);
+  } catch {
+    await run();
   }
 }

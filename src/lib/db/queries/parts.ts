@@ -31,13 +31,18 @@ import type {
 import { normalizeHts } from "@/lib/duty/calculator";
 import { candidateDutySavingRate } from "@/lib/duty/candidate-delta";
 import { getReferenceDataForOrg } from "./reference";
-import { computeEstimatedLandedCost } from "@/lib/landed-cost/estimate";
 import { rollupBySku, type RollupLine } from "@/lib/landed-cost/rollup";
 import { getCurrentOrgId } from "@/lib/org";
 import {
   PART_USAGE_STATUSES,
   type PartUsageStatus,
 } from "@/lib/parts/status";
+import {
+  buildQuoteComparison,
+  type ComparisonInput,
+  type QuoteComparison,
+  type QuoteReconsiderProposal,
+} from "@/lib/quotes/compare";
 
 // The Parts page payload. mobynew's pattern: one query round per concern
 // (catalog, reference data, quote lines, actual entry lines, open review
@@ -162,6 +167,15 @@ export type PartClassificationInfo = {
   suggestions: PartHtsSuggestion[];
 };
 
+/** A pending quote_reconsider item: a tariff change moved the SKU's
+ *  cheapest sourcing option since the org last decided. */
+export type PartReconsider = {
+  itemId: string;
+  proposal: QuoteReconsiderProposal;
+  /** ISO date the item opened. */
+  openedAt: string;
+};
+
 export type PartRow = Part & {
   /** The part's vendor sources, vendor-name order. For draft parts these
    *  carry quote-claimed data — display-only; the UI labels draft rows. */
@@ -198,7 +212,20 @@ export type PartRow = Part & {
   quotes: PartQuoteRow[];
   /** Latest completed classifier run; null = never classified. */
   classification: PartClassificationInfo | null;
+  /** Every sourcing option — current sources and every quote line — priced
+   *  to a landed cost under the part's HTS basis as of today, cheapest
+   *  first. The source and quote rows above take their estimates from it,
+   *  so a draft SKU with only potential codes still prices. */
+  comparison: QuoteComparison;
+  /** The same options under each alternative potential code (provisional
+   *  and candidate bases only) — the compare card's basis switch. */
+  alternativeComparisons: QuoteComparison[];
+  /** Pending "a tariff change moved the cheapest option" item, if any. */
+  reconsider: PartReconsider | null;
 };
+
+/** The Parts page's attention filter: SKUs with an open reconsider item. */
+export type PartsAttention = "reconsider";
 
 /** The server-side counterpart of the old client filter: SKU, name, HTS,
  *  or a current vendor's name. Undefined when there is no query. */
@@ -246,6 +273,25 @@ function partsStatusWhere(
   return status.has("active") ? used : not(used);
 }
 
+/** Attention filter: only SKUs carrying a pending quote_reconsider item. */
+function partsAttentionWhere(
+  attention: PartsAttention | null | undefined,
+): SQL | undefined {
+  if (!attention) return undefined;
+  return exists(
+    db
+      .select({ one: sql`1` })
+      .from(schema.reviewItems)
+      .where(
+        and(
+          eq(schema.reviewItems.subjectId, schema.parts.id),
+          eq(schema.reviewItems.itemType, "quote_reconsider"),
+          eq(schema.reviewItems.status, "pending"),
+        ),
+      ),
+  );
+}
+
 /** Which page (at `per` rows, under the filters) a given part lands on —
  *  deep links (?expand=, ?review=) must open on the page that shows the
  *  part. */
@@ -254,6 +300,7 @@ export async function getPartPageIndex(
   per: number,
   q?: string | null,
   status?: Set<PartUsageStatus>,
+  attention?: PartsAttention | null,
 ): Promise<number> {
   const orgId = await getCurrentOrgId();
   const part = await db.query.parts.findFirst({
@@ -267,10 +314,24 @@ export async function getPartPageIndex(
       eq(schema.parts.orgId, orgId),
       partsSearchWhere(q),
       partsStatusWhere(status),
+      partsAttentionWhere(attention),
       lt(schema.parts.sku, part.sku),
     ),
   );
   return Math.floor(before / per) + 1;
+}
+
+/** SKUs with an open reconsider item — the Parts page banner count. */
+export async function countReconsiderItems(): Promise<number> {
+  const orgId = await getCurrentOrgId();
+  return db.$count(
+    schema.reviewItems,
+    and(
+      eq(schema.reviewItems.orgId, orgId),
+      eq(schema.reviewItems.itemType, "quote_reconsider"),
+      eq(schema.reviewItems.status, "pending"),
+    ),
+  );
 }
 
 export type PartsPageResult = {
@@ -291,17 +352,19 @@ export async function getParts(opts: {
   per: number;
   q?: string | null;
   status?: Set<PartUsageStatus>;
+  attention?: PartsAttention | null;
 }): Promise<PartsPageResult> {
   const orgId = await getCurrentOrgId();
   const searchWhere = partsSearchWhere(opts.q);
   const statusWhere = partsStatusWhere(opts.status);
+  const attentionWhere = partsAttentionWhere(opts.attention);
   const searchedWhere = and(eq(schema.parts.orgId, orgId), searchWhere);
-  const where = and(searchedWhere, statusWhere);
+  const where = and(searchedWhere, statusWhere, attentionWhere);
 
   const [totalCount, filteredRaw, searchedRaw, activeCount] =
     await Promise.all([
       db.$count(schema.parts, eq(schema.parts.orgId, orgId)),
-      searchWhere || statusWhere
+      searchWhere || statusWhere || attentionWhere
         ? db.$count(schema.parts, where)
         : Promise.resolve(-1), // filled from totalCount below
       searchWhere
@@ -382,11 +445,20 @@ export async function getParts(opts: {
       db.query.reviewItems.findMany({
         where: and(
           eq(schema.reviewItems.orgId, orgId),
-          eq(schema.reviewItems.itemType, "hts_classification"),
+          inArray(schema.reviewItems.itemType, [
+            "hts_classification",
+            "quote_reconsider",
+          ]),
           eq(schema.reviewItems.status, "pending"),
           inArray(schema.reviewItems.subjectId, partIds),
         ),
-        columns: { id: true, subjectId: true, proposal: true },
+        columns: {
+          id: true,
+          itemType: true,
+          subjectId: true,
+          proposal: true,
+          createdAt: true,
+        },
       }),
       fetchVendorUsage(orgId, partIds),
       // Completed runs newest-first (uuidv7 ids order by time); the first
@@ -423,10 +495,24 @@ export async function getParts(opts: {
       .map((r) => [r.partId as string, r.latest]),
   );
   const openItemByPartId = new Map(
-    openItems.map((i) => [
-      i.subjectId,
-      { id: i.id, kind: (i.proposal as ReviewProposal).kind },
-    ]),
+    openItems
+      .filter((i) => i.itemType === "hts_classification")
+      .map((i) => [
+        i.subjectId,
+        { id: i.id, kind: (i.proposal as ReviewProposal).kind },
+      ]),
+  );
+  const reconsiderByPartId = new Map<string, PartReconsider>(
+    openItems
+      .filter((i) => i.itemType === "quote_reconsider")
+      .map((i) => [
+        i.subjectId,
+        {
+          itemId: i.id,
+          proposal: i.proposal as QuoteReconsiderProposal,
+          openedAt: i.createdAt.toISOString().slice(0, 10),
+        },
+      ]),
   );
 
   const linesByPartId = new Map<string, typeof quoteLines>();
@@ -491,28 +577,55 @@ export async function getParts(opts: {
 
     const partHtsDigits =
       part.htsCode === null ? null : normalizeHts(part.htsCode);
+    const run = latestClassificationByPartId.get(part.id) ?? null;
 
     const sourceRows = sourcesByPartId.get(part.id) ?? [];
     const sourceByVendorId = new Map(sourceRows.map((s) => [s.vendorId, s]));
+
+    // One pricing pass for every option under the part's HTS basis; the
+    // source and quote rows below read their estimates back from it.
+    const comparisonInput: ComparisonInput = {
+      part: { htsCode: part.htsCode, htsCodeProvisional: part.htsCodeProvisional },
+      candidates: (run?.candidates ?? []).map((c) => ({
+        code: c.code,
+        codeDigits: c.codeDigits,
+        confidence: c.confidence === null ? null : Number(c.confidence),
+      })),
+      sources: sourceRows.map((s) => ({
+        sourceId: s.id,
+        vendorId: s.vendorId,
+        vendorName: s.vendor.name,
+        unitCost: s.unitCost,
+        countryOfOrigin: s.countryOfOrigin,
+      })),
+      quotes: sorted.map((l) => ({
+        quoteLineId: l.id,
+        vendorId: l.quoteSheet.vendorId,
+        supplierName: l.quoteSheet.supplierName,
+        quoteDate: l.quoteSheet.quoteDate,
+        status: l.status,
+        unitCost: l.unitCost,
+        currency: l.currency,
+        countryOfOrigin: l.countryOfOrigin,
+      })),
+    };
+    const comparison = buildQuoteComparison(comparisonInput, ref, asOf);
+    const alternativeComparisons = comparison.basis.alternatives.map((a) =>
+      buildQuoteComparison(comparisonInput, ref, asOf, { basisDigits: a.digits }),
+    );
+    const optionByKey = new Map(comparison.options.map((o) => [o.key, o]));
+
     const sources: PartSourceRow[] = sourceRows
       .map((s) => {
-        const estimated = computeEstimatedLandedCost(
-          {
-            unitCostCents: centsOf(s.unitCost),
-            htsDigits: partHtsDigits,
-            countryOfOrigin: s.countryOfOrigin,
-          },
-          ref,
-          asOf,
-        );
+        const option = optionByKey.get(`source:${s.id}`);
         return {
           id: s.id,
           vendorId: s.vendorId,
           vendorName: s.vendor.name,
           countryOfOrigin: s.countryOfOrigin,
           unitCost: s.unitCost,
-          estimatedPerUnitCents: estimated?.perUnitCents ?? null,
-          estimateIncomplete: estimated?.incomplete ?? false,
+          estimatedPerUnitCents: option?.landedPerUnitCents ?? null,
+          estimateIncomplete: option?.incomplete ?? false,
           quoteCounts: countsByVendor.get(s.vendorId) ?? {
             received: 0,
             approved: 0,
@@ -532,16 +645,7 @@ export async function getParts(opts: {
       const sheetVendorSource = l.quoteSheet.vendorId
         ? sourceByVendorId.get(l.quoteSheet.vendorId)
         : undefined;
-      const estimated = computeEstimatedLandedCost(
-        {
-          unitCostCents: quoteCostCents,
-          htsDigits: partHtsDigits,
-          countryOfOrigin:
-            l.countryOfOrigin ?? sheetVendorSource?.countryOfOrigin ?? null,
-        },
-        ref,
-        asOf,
-      );
+      const option = optionByKey.get(`quote:${l.id}`);
       const vendorCostCents = centsOf(sheetVendorSource?.unitCost ?? null);
       return {
         id: l.id,
@@ -565,8 +669,8 @@ export async function getParts(opts: {
         vendorId: l.quoteSheet.vendorId,
         quoteDate: l.quoteSheet.quoteDate,
         documentId: l.quoteSheet.documentId,
-        estimatedPerUnitCents: estimated?.perUnitCents ?? null,
-        estimateIncomplete: estimated?.incomplete ?? false,
+        estimatedPerUnitCents: option?.landedPerUnitCents ?? null,
+        estimateIncomplete: option?.incomplete ?? false,
         deltaVsCurrentCents:
           vendorCostCents !== null && l.currency === "USD"
             ? quoteCostCents - vendorCostCents
@@ -580,7 +684,6 @@ export async function getParts(opts: {
     const latest = latestByPartId.get(part.id);
     const pendingChanges = counts.approved > 0;
 
-    const run = latestClassificationByPartId.get(part.id) ?? null;
     const classification: PartClassificationInfo | null =
       run === null
         ? null
@@ -638,6 +741,9 @@ export async function getParts(opts: {
           : part.status,
       quotes,
       classification,
+      comparison,
+      alternativeComparisons,
+      reconsider: reconsiderByPartId.get(part.id) ?? null,
     };
   });
 

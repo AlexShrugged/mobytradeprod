@@ -485,6 +485,21 @@ export async function findEntriesForMeasures(
   measureIds: string[],
   extraPrefixes: string[] = [],
 ): Promise<SweepTarget[] | null> {
+  const prefixes = await loadMeasurePrefixes(db, measureIds, extraPrefixes);
+  if (prefixes === null) return null;
+  if (prefixes.length === 0) return [];
+  return findEntriesForHtsPrefixes(db, prefixes);
+}
+
+/** The HTS prefix reach of a list of Ch99 measures (their trade_measure_hts
+ *  rows plus any caller-supplied superset), the blast radius every scoped
+ *  follow-up to a tariff apply keys on. Null = at least one measure is
+ *  all_products and the reach is every code; empty = no measures. */
+export async function loadMeasurePrefixes(
+  db: DbClient,
+  measureIds: string[],
+  extraPrefixes: string[] = [],
+): Promise<string[] | null> {
   const ids = [...new Set(measureIds)];
   if (ids.length === 0) return [];
   const measures = await db.query.tradeMeasures.findMany({
@@ -496,10 +511,9 @@ export async function findEntriesForMeasures(
     where: inArray(schema.tradeMeasureHts.tradeMeasureId, ids),
     columns: { htsPrefix: true },
   });
-  return findEntriesForHtsPrefixes(db, [
-    ...prefixRows.map((r) => r.htsPrefix),
-    ...extraPrefixes,
-  ]);
+  return [
+    ...new Set([...prefixRows.map((r) => r.htsPrefix), ...extraPrefixes]),
+  ];
 }
 
 /** Re-audit exactly these entries, loading reference data once per org —

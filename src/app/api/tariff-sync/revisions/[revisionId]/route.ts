@@ -12,11 +12,17 @@ import {
 } from "@/lib/analysis/service";
 import {
   findEntriesForMeasures,
+  loadMeasurePrefixes,
   sweepAuditsAllOrgs,
   sweepAuditsForEntries,
   type ReauditSummary,
 } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
+import {
+  proposalChangeDates,
+  sweepQuoteReconsider,
+  type ReconsiderSweepSummary,
+} from "@/lib/quotes/reconsider";
 import {
   applyRevision,
   ApplyValidationError,
@@ -203,16 +209,14 @@ export async function PATCH(
       // measure's prefixes (applied + target measure covers tiles and
       // narrowed scopes; the proposal's own prefixes are a safety superset).
       // null = an all_products measure — only then sweep everything.
+      const measureIds = [applied.measureId, revision.targetMeasureId].filter(
+        (id): id is string => id !== null,
+      );
+      const extraPrefixes = proposed.prefixes ?? [];
       const targets =
         applied.measureId === null
           ? null
-          : await findEntriesForMeasures(
-              tx,
-              [applied.measureId, revision.targetMeasureId].filter(
-                (id): id is string => id !== null,
-              ),
-              proposed.prefixes ?? [],
-            );
+          : await findEntriesForMeasures(tx, measureIds, extraPrefixes);
 
       // AI findings persist too, but re-deriving them costs real model runs
       // — queue them here (transactional) and process after the response.
@@ -233,6 +237,11 @@ export async function PATCH(
         superseded: applied.superseded,
         targets,
         analysesQueued,
+        // The quote re-analysis scope (post-commit, below).
+        measureIds,
+        extraPrefixes,
+        effectiveDates: proposalChangeDates(proposed),
+        changeLabel: proposed.name,
       };
     });
 
@@ -260,6 +269,28 @@ export async function PATCH(
       console.error("re-audit after tariff apply failed:", err);
     }
 
+    // Sourcing options move with the measures too: re-price every touched
+    // SKU's quotes before and after the change and open a reconsider item
+    // where the cheapest option moved. Same post-commit contract as the
+    // audit sweep — a failure here never rolls the apply back.
+    let quoteReconsider: ReconsiderSweepSummary | null = null;
+    try {
+      quoteReconsider = await sweepQuoteReconsider(db, {
+        label: result.changeLabel,
+        prefixes:
+          result.targets === null
+            ? null
+            : await loadMeasurePrefixes(
+                db,
+                result.measureIds,
+                result.extraPrefixes,
+              ),
+        effectiveDates: result.effectiveDates,
+      });
+    } catch (err) {
+      console.error("quote re-analysis after tariff apply failed:", err);
+    }
+
     if (result.analysesQueued > 0) {
       after(async () => {
         await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
@@ -268,7 +299,13 @@ export async function PATCH(
       });
     }
     // targets: undefined drops the (possibly huge) id list from the JSON.
-    return NextResponse.json({ ...result, targets: undefined, audit, auditError });
+    return NextResponse.json({
+      ...result,
+      targets: undefined,
+      audit,
+      auditError,
+      quoteReconsider,
+    });
   } catch (err) {
     if (err instanceof ApplyValidationError) {
       // Thrown inside the transaction, so the approval rolled back too.

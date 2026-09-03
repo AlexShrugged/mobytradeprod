@@ -199,25 +199,34 @@ export function PartsTable({
         cell: ({ row }) => {
           const part = row.original;
           const total = part.quotes.length;
-          if (total === 0) return null;
+          if (total === 0 && part.reconsider === null) return null;
+          // The words carry the state, not the tint: undecided quotes read
+          // "N to decide" (amber), otherwise the plain count. An approved
+          // quote waiting on its PO already shows as the Status column's
+          // "Pending changes".
+          const toDecide = part.quoteCounts.received;
           return (
-            <Badge
-              variant="outline"
-              className={cn(
-                "font-normal",
-                part.hasUnapproved &&
-                  "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-              )}
-              title={
-                part.hasUnapproved
-                  ? "A received quote awaits a decision."
-                  : part.pendingChanges
-                    ? "An approved quote awaits its confirming PO."
-                    : undefined
-              }
-            >
-              {total} quote{total === 1 ? "" : "s"}
-            </Badge>
+            <div className="flex items-center gap-1.5">
+              {toDecide > 0 ? (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/30 bg-amber-500/10 font-normal text-amber-700 dark:text-amber-400"
+                >
+                  {toDecide} to decide
+                </Badge>
+              ) : total > 0 ? (
+                <Badge variant="outline" className="font-normal">
+                  {total} quote{total === 1 ? "" : "s"}
+                </Badge>
+              ) : null}
+              {part.reconsider ? (
+                <span
+                  title={`${part.reconsider.proposal.cheapest.label} now cheapest after ${part.reconsider.proposal.changeLabel}.`}
+                >
+                  <StatusBadge status="reconsider" />
+                </span>
+              ) : null}
+            </div>
           );
         },
       },
@@ -244,16 +253,20 @@ export function PartsTable({
             range.min !== range.max
               ? " The spread is per-vendor: origin decides which measures apply."
               : "";
+          const basis =
+            part.comparison.basis.kind === "committed"
+              ? ""
+              : ` Priced under a ${part.comparison.basis.kind} HTS code (${part.comparison.basis.code}).`;
           return (
             <div
               className={cn(
                 "text-right font-medium tabular-nums",
-                isDraft && "font-normal text-muted-foreground",
+                (isDraft || basis !== "") && "font-normal text-muted-foreground",
               )}
               title={
                 isDraft
-                  ? `${ESTIMATE_TITLE}${spread} Draft SKU: inputs from an unapproved quote.`
-                  : `${ESTIMATE_TITLE}${spread}`
+                  ? `${ESTIMATE_TITLE}${spread}${basis} Draft SKU: inputs from an unapproved quote.`
+                  : `${ESTIMATE_TITLE}${spread}${basis}`
               }
             >
               {part.estimateIncomplete ? "≥ " : ""}

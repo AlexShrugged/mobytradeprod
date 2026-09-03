@@ -18,6 +18,14 @@ export function dayBefore(isoDate: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** The day after an ISO date, UTC-safe — the first day a closed window's
+ *  successor state holds. */
+export function dayAfter(isoDate: string): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 export type WindowPlan =
   | { action: "tile"; closePredecessorAt: string }
   | { action: "update_in_place" };

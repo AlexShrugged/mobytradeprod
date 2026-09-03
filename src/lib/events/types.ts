@@ -14,6 +14,7 @@ export type EventType =
   | "quote_received"
   | "quote_approved"
   | "quote_applied"
+  | "quote_reconsider"
   | "part_created"
   | "hts_changed"
   | "cost_changed"
@@ -83,7 +84,12 @@ export const EVENT_FILTER_GROUPS = {
   shipments: ["shipment_sailed", "shipment_arrived"],
   pos: ["po_placed"],
   invoices: ["invoice_received"],
-  quotes: ["quote_received", "quote_approved", "quote_applied"],
+  quotes: [
+    "quote_received",
+    "quote_approved",
+    "quote_applied",
+    "quote_reconsider",
+  ],
   classification: ["hts_changed", "tariff_rate_change"],
   refunds: ["refund_update"],
   edits: ["cost_changed", "part_created"],

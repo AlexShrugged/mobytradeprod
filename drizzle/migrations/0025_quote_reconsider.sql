@@ -1,0 +1,1 @@
+ALTER TYPE "public"."review_item_type" ADD VALUE 'quote_reconsider';

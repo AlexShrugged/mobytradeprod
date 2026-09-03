@@ -12,16 +12,23 @@ import {
 } from "@/lib/analysis/service";
 import {
   findEntriesForMeasures,
+  loadMeasurePrefixes,
   sweepAuditsAllOrgs,
   sweepAuditsForEntries,
   type ReauditSummary,
 } from "@/lib/audit/auditor";
 import { db, schema } from "@/lib/db";
 import {
+  proposalChangeDates,
+  sweepQuoteReconsider,
+  type ReconsiderSweepSummary,
+} from "@/lib/quotes/reconsider";
+import {
   applyRevisionGroup,
   ApplyValidationError,
   resolveAnnouncementIfTerminal,
 } from "@/lib/tariff-sync/apply";
+import type { ProposedMeasureChange } from "@/lib/tariff-sync/types";
 
 // Approval applies the whole family group and re-audits every org in one
 // transaction — well past the platform's default function duration.
@@ -160,17 +167,18 @@ export async function PATCH(
       // predecessor's entries in scope). null = an all_products measure.
       const members = await tx.query.measureRevisions.findMany({
         where: eq(schema.measureRevisions.groupId, groupId),
-        columns: { targetMeasureId: true },
+        columns: { targetMeasureId: true, proposed: true },
       });
+      const measureIds = [
+        ...applied.changedMeasureIds,
+        ...members
+          .map((m) => m.targetMeasureId)
+          .filter((id): id is string => id !== null),
+      ];
       const targets =
         applied.changedMeasureIds.length === 0
           ? []
-          : await findEntriesForMeasures(tx, [
-              ...applied.changedMeasureIds,
-              ...members
-                .map((m) => m.targetMeasureId)
-                .filter((id): id is string => id !== null),
-            ]);
+          : await findEntriesForMeasures(tx, measureIds);
 
       // Queue AI re-analyses transactionally; process after the response.
       const analysesQueued =
@@ -191,6 +199,12 @@ export async function PATCH(
         superseded: applied.superseded,
         targets,
         analysesQueued,
+        // The quote re-analysis scope (post-commit, below).
+        measureIds,
+        effectiveDates: members.flatMap((m) =>
+          proposalChangeDates(m.proposed as ProposedMeasureChange),
+        ),
+        changeLabel: group.title,
       };
     });
 
@@ -215,6 +229,25 @@ export async function PATCH(
       console.error("re-audit after tariff apply failed:", err);
     }
 
+    // Re-price every touched SKU's sourcing options before/after the
+    // change; open reconsider items where the cheapest moved. Post-commit,
+    // never rolls the apply back.
+    let quoteReconsider: ReconsiderSweepSummary | null = null;
+    if (result.applied > 0) {
+      try {
+        quoteReconsider = await sweepQuoteReconsider(db, {
+          label: result.changeLabel,
+          prefixes:
+            result.targets === null
+              ? null
+              : await loadMeasurePrefixes(db, result.measureIds),
+          effectiveDates: result.effectiveDates,
+        });
+      } catch (err) {
+        console.error("quote re-analysis after tariff apply failed:", err);
+      }
+    }
+
     if (result.analysesQueued > 0) {
       after(async () => {
         await processPendingAnalyses(db, AFTER_RESPONSE_DRAIN).catch((err) => {
@@ -223,7 +256,13 @@ export async function PATCH(
       });
     }
     // targets: undefined drops the (possibly huge) id list from the JSON.
-    return NextResponse.json({ ...result, targets: undefined, audit, auditError });
+    return NextResponse.json({
+      ...result,
+      targets: undefined,
+      audit,
+      auditError,
+      quoteReconsider,
+    });
   } catch (err) {
     if (err instanceof ApplyValidationError) {
       // Thrown inside the transaction, so the approval rolled back too.

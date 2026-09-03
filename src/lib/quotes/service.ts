@@ -28,6 +28,7 @@ import { planCommitWindow } from "../effective-dating";
 import { buildSkuIndex, normalizeSku, resolveSku } from "../parts/sku";
 import { skuKeySql } from "../parts/sku-sql";
 import { findOrCreateVendor } from "../vendors/service";
+import type { QuoteReconsiderProposal } from "./compare";
 import {
   diffQuoteAgainstSource,
   pickWinningQuote,
@@ -298,6 +299,7 @@ export async function decideQuoteLine(
       .set({ status: "approved", ...decisionFields })
       .where(eq(schema.quoteLines.id, line.id))
       .returning();
+    await resolveReconsiderForPart(db, orgId, part.id, decidedBy);
     return { line: updated, part };
   }
 
@@ -350,6 +352,7 @@ export async function decideQuoteLine(
     })
     .where(eq(schema.quoteLines.id, line.id))
     .returning();
+  await resolveReconsiderForPart(db, orgId, part.id, decidedBy);
 
   return { line: updatedLine, part: updatedPart };
 }
@@ -639,4 +642,110 @@ async function recordAppliedDiffs(
       reviewItemId: null,
     });
   }
+}
+
+// ---------------------------------------------------------- reconsider items
+//
+// review_items of type quote_reconsider — "a tariff change moved this SKU's
+// cheapest sourcing option" — are written ONLY here: quotes/reconsider.ts
+// computes the before/after comparison, this module records the decision
+// state, the same single-writer split classification/service.ts keeps for
+// hts_classification items. One pending item per part (the queue's partial
+// unique index); a newer change supersedes the stale numbers.
+
+export const QUOTE_RECONSIDER_ITEM_TYPE = "quote_reconsider" as const;
+
+export async function openReconsiderItem(
+  db: DbClient,
+  orgId: string,
+  partId: string,
+  proposal: QuoteReconsiderProposal,
+): Promise<schema.ReviewItem> {
+  await db
+    .update(schema.reviewItems)
+    .set({ status: "superseded", updatedAt: new Date() })
+    .where(
+      and(
+        eq(schema.reviewItems.itemType, QUOTE_RECONSIDER_ITEM_TYPE),
+        eq(schema.reviewItems.subjectId, partId),
+        eq(schema.reviewItems.status, "pending"),
+      ),
+    );
+  const [item] = await db
+    .insert(schema.reviewItems)
+    .values({
+      orgId,
+      itemType: QUOTE_RECONSIDER_ITEM_TYPE,
+      subjectId: partId,
+      payloadId: null,
+      proposal,
+    })
+    .returning();
+  return item;
+}
+
+/** Dismiss = the human looked and keeps the current sourcing. Acknowledged,
+ *  not rejected: the numbers were right, the answer is "no change". */
+export async function dismissReconsiderItem(
+  db: DbClient,
+  orgId: string,
+  itemId: string,
+  decidedBy: string,
+  note?: string,
+): Promise<schema.ReviewItem | null> {
+  const item = await db.query.reviewItems.findFirst({
+    where: and(
+      eq(schema.reviewItems.id, itemId),
+      eq(schema.reviewItems.orgId, orgId),
+      eq(schema.reviewItems.itemType, QUOTE_RECONSIDER_ITEM_TYPE),
+    ),
+  });
+  if (!item) return null;
+  if (item.status !== "pending") {
+    throw new QuoteStateError(
+      `This item is ${item.status}; only pending items can be dismissed. Refresh and retry.`,
+    );
+  }
+  const now = new Date();
+  const [updated] = await db
+    .update(schema.reviewItems)
+    .set({
+      status: "approved",
+      resolutionAction: "acknowledge",
+      decidedBy,
+      decidedAt: now,
+      notes: note?.trim() || item.notes,
+      updatedAt: now,
+    })
+    .where(eq(schema.reviewItems.id, item.id))
+    .returning();
+  return updated;
+}
+
+/** Approving any quote on the part answers the open question — the human
+ *  re-decided the sourcing. Called by decideQuoteLine on approve. */
+async function resolveReconsiderForPart(
+  db: DbClient,
+  orgId: string,
+  partId: string,
+  decidedBy: string,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(schema.reviewItems)
+    .set({
+      status: "approved",
+      resolutionAction: "accept",
+      decidedBy,
+      decidedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(schema.reviewItems.orgId, orgId),
+        eq(schema.reviewItems.itemType, QUOTE_RECONSIDER_ITEM_TYPE),
+        eq(schema.reviewItems.subjectId, partId),
+        eq(schema.reviewItems.status, "pending"),
+      ),
+    );
 }

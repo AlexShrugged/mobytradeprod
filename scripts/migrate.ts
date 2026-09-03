@@ -25,10 +25,13 @@ async function main() {
     const { PGlite } = await import("@electric-sql/pglite");
     const { drizzle } = await import("drizzle-orm/pglite");
     const { migrate } = await import("drizzle-orm/pglite/migrator");
-    const client = new PGlite("./.pglite");
+    // Same override the app honors (src/lib/db/index.ts) — a scratch
+    // database for trying a seed without touching the working one.
+    const dataDir = process.env.PGLITE_DATA_DIR ?? "./.pglite";
+    const client = new PGlite(dataDir);
     await migrate(drizzle(client), { migrationsFolder: "./drizzle/migrations" });
     await client.close();
-    console.log("Migrations applied to ./.pglite");
+    console.log(`Migrations applied to ${dataDir}`);
   }
 }
 

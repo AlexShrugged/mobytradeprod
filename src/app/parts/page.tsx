@@ -1,9 +1,11 @@
 import { PageHeader } from "@/components/page-header";
 import { PartsView } from "@/components/parts/parts-view";
 import {
+  countReconsiderItems,
   getHtsReviewQueue,
   getPartPageIndex,
   getParts,
+  type PartsAttention,
 } from "@/lib/db/queries/parts";
 import { parseSetParam } from "@/lib/filter-params";
 import { parsePageParams } from "@/lib/pagination";
@@ -27,6 +29,7 @@ export default async function PartsPage({
     sku?: string;
     q?: string;
     status?: string;
+    attention?: string;
     page?: string;
     per?: string;
   }>;
@@ -35,6 +38,9 @@ export default async function PartsPage({
   const { review, expand, sku } = params;
   const q = (params.q ?? sku ?? "").trim() || null;
   const status = parseSetParam(params.status, PART_USAGE_STATUSES);
+  // ?attention=reconsider narrows to SKUs whose cheapest option moved.
+  const attention: PartsAttention | null =
+    params.attention === "reconsider" ? "reconsider" : null;
   const { page: requestedPage, per } = parsePageParams(params);
 
   // A deep-linked part must be on the page we open — resolve which one,
@@ -42,15 +48,17 @@ export default async function PartsPage({
   const target = review ?? expand;
   const page =
     target && !params.page
-      ? await getPartPageIndex(target, per, q, status)
+      ? await getPartPageIndex(target, per, q, status, attention)
       : requestedPage;
 
   const [
     { rows, totalCount, filteredCount, page: effectivePage, statusCounts },
     queue,
+    reconsiderCount,
   ] = await Promise.all([
-    getParts({ page, per, q, status }),
+    getParts({ page, per, q, status, attention }),
     getHtsReviewQueue(),
+    countReconsiderItems(),
   ]);
 
   return (
@@ -76,6 +84,8 @@ export default async function PartsPage({
         initialQuery={q ?? ""}
         initialStatus={[...status]}
         statusCounts={statusCounts}
+        initialAttention={attention}
+        reconsiderCount={reconsiderCount}
       />
     </div>
   );
