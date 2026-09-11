@@ -105,7 +105,10 @@ describe("classifyFromResponse", () => {
     // A broker's own bill is USD and cites exactly one entry, so it would
     // pass every variance gate if it ever became a commercial_invoice.
     expect(
-      classifyFromResponse([{ doc_type: "broker_invoice" }], "commercial_invoice"),
+      classifyFromResponse(
+        [{ doc_type: "broker_invoice" }],
+        "commercial_invoice",
+      ),
     ).toBe("other");
   });
 
@@ -343,6 +346,35 @@ describe("commercial_invoice mapping", () => {
       ],
     });
   });
+
+  it("renumbers every line by position when printed numbers collide", () => {
+    // A multi-page invoice restarts its numbering on page 2 (an ASC shape:
+    // 1..8 then 1,2,3). The persisted key is (invoice, line_number), so the
+    // printed numbers give way to document positions.
+    const result = mapExtractToResult("commercial_invoice", [
+      {
+        invoice_number: cite("HD2612050"),
+        line_items: [
+          { line_number: cite("1"), sku: cite("A"), total_price: cite("10") },
+          { line_number: cite("2"), sku: cite("B"), total_price: cite("20") },
+          // Dropped (no total): positions are dense over the surviving lines.
+          { line_number: cite("3"), sku: cite("C") },
+          { line_number: cite("1"), sku: cite("D"), total_price: cite("40") },
+          { line_number: cite("2"), sku: cite("E"), total_price: cite("50") },
+        ],
+      },
+    ]);
+    if (result.docType !== "commercial_invoice")
+      throw new Error("wrong docType");
+    expect(result.fields.line_items.map((l) => [l.line_number, l.sku])).toEqual(
+      [
+        [1, "A"],
+        [2, "B"],
+        [3, "D"],
+        [4, "E"],
+      ],
+    );
+  });
 });
 
 describe("packing_list mapping", () => {
@@ -456,7 +488,8 @@ describe("tariff_code_sheet mapping", () => {
         ],
       },
     ]);
-    if (result.docType !== "tariff_code_sheet") throw new Error("wrong docType");
+    if (result.docType !== "tariff_code_sheet")
+      throw new Error("wrong docType");
     expect(result.fields.entry_number).toBe("231-7379174-7");
     expect(result.fields.referenced_invoices).toEqual(["MD2610468"]);
     expect(result.fields.rows).toEqual([
@@ -487,7 +520,8 @@ describe("tariff_code_sheet mapping", () => {
         ],
       },
     ]);
-    if (result.docType !== "tariff_code_sheet") throw new Error("wrong docType");
+    if (result.docType !== "tariff_code_sheet")
+      throw new Error("wrong docType");
     expect(result.fields.rows.map((r) => r.part_number)).toEqual([
       "0890073182",
     ]);

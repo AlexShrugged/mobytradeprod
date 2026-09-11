@@ -108,8 +108,18 @@ function toSpi(v: unknown): string | null {
 
 /** Normalize to YYYY-MM-DD; accepts ISO datetimes and MM/DD/YYYY. */
 const MONTHS: Record<string, string> = {
-  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
-  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  jan: "01",
+  feb: "02",
+  mar: "03",
+  apr: "04",
+  may: "05",
+  jun: "06",
+  jul: "07",
+  aug: "08",
+  sep: "09",
+  oct: "10",
+  nov: "11",
+  dec: "12",
 };
 
 function toDate(v: unknown): string | null {
@@ -194,6 +204,26 @@ function mapCharge(raw: Record<string, unknown>): EntryChargeExtraction {
 
 function isCh99(hts: string): boolean {
   return hts.replace(/\D/g, "").startsWith("99");
+}
+
+// The line tables key a line by (document, line_number), so two lines
+// printing the same number fail the whole document. Multi-page invoices
+// restart their numbering on every page and the extractor sometimes repeats
+// a number, so printed numbers are kept only while they are unique; on the
+// first collision every line takes its document position instead. Nothing
+// downstream reads the number as a fact — comparisons are SKU-grouped
+// (audit/invoice-rules.ts) — it is an ordinal for display and identity.
+function renumberOnCollision<T extends { line_number: number }>(
+  lines: T[],
+): T[] {
+  const seen = new Set<number>();
+  for (const line of lines) {
+    if (seen.has(line.line_number)) {
+      return lines.map((l, i) => ({ ...l, line_number: i + 1 }));
+    }
+    seen.add(line.line_number);
+  }
+  return lines;
 }
 
 function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
@@ -333,18 +363,20 @@ function mapPurchaseOrder(
     total_amount: toNum(data.total_amount),
     // Map before filtering so the position fallback for line_number
     // reflects the document, not the surviving subset.
-    line_items: asRecordArray(data.line_items)
-      .map((line, i) => ({
-        line_number: toInt(line.line_number) ?? i + 1,
-        sku: toStr(line.sku),
-        description: toStr(line.description),
-        country_of_origin: toCountry(line.country_of_origin),
-        quantity: toNum(line.quantity) ?? 0,
-        unit_price: toNum(line.unit_price) ?? 0,
-      }))
-      .filter(
-        (line): line is typeof line & { sku: string } => line.sku !== null,
-      ),
+    line_items: renumberOnCollision(
+      asRecordArray(data.line_items)
+        .map((line, i) => ({
+          line_number: toInt(line.line_number) ?? i + 1,
+          sku: toStr(line.sku),
+          description: toStr(line.description),
+          country_of_origin: toCountry(line.country_of_origin),
+          quantity: toNum(line.quantity) ?? 0,
+          unit_price: toNum(line.unit_price) ?? 0,
+        }))
+        .filter(
+          (line): line is typeof line & { sku: string } => line.sku !== null,
+        ),
+    ),
   };
 }
 
@@ -374,23 +406,25 @@ function mapCommercialInvoice(
     related_party: toBool(data.related_party),
     // Map before filtering so the position fallback for line_number
     // reflects the document, not the surviving subset.
-    line_items: asRecordArray(data.line_items)
-      .map((line, i) => ({
-        line_number: toInt(line.line_number) ?? i + 1,
-        sku: toStr(line.sku),
-        description: toStr(line.description),
-        country_of_origin: toCountry(line.country_of_origin),
-        hts_code: toStr(line.hts_code),
-        quantity: toNum(line.quantity),
-        unit_price: toNum(line.unit_price),
-        total_price: toNum(line.total_price),
-        adcvd_case_number: toStr(line.adcvd_case_number),
-        manufacturer_name: toStr(line.manufacturer_name),
-      }))
-      .filter(
-        (line): line is typeof line & { total_price: number } =>
-          line.total_price !== null,
-      ),
+    line_items: renumberOnCollision(
+      asRecordArray(data.line_items)
+        .map((line, i) => ({
+          line_number: toInt(line.line_number) ?? i + 1,
+          sku: toStr(line.sku),
+          description: toStr(line.description),
+          country_of_origin: toCountry(line.country_of_origin),
+          hts_code: toStr(line.hts_code),
+          quantity: toNum(line.quantity),
+          unit_price: toNum(line.unit_price),
+          total_price: toNum(line.total_price),
+          adcvd_case_number: toStr(line.adcvd_case_number),
+          manufacturer_name: toStr(line.manufacturer_name),
+        }))
+        .filter(
+          (line): line is typeof line & { total_price: number } =>
+            line.total_price !== null,
+        ),
+    ),
   };
 }
 
@@ -447,23 +481,25 @@ function mapQuoteSheet(data: Record<string, unknown>): QuoteSheetExtraction {
   // A quote line without a SKU or a unit cost quotes nothing ingestible —
   // drop it rather than fail the whole document. Map before filtering so
   // the position fallback for line_number reflects the document.
-  const lineItems = asRecordArray(data.line_items)
-    .map((line, i) => ({
-      line_number: toInt(line.line_number) ?? i + 1,
-      sku: toStr(line.sku),
-      description: toStr(line.description),
-      unit_cost: toNum(line.unit_cost),
-      currency: toStr(line.currency),
-      country_of_origin: toCountry(line.country_of_origin),
-      hts_code: toStr(line.hts_code),
-      moq: toNum(line.moq),
-      lead_time_days: toInt(line.lead_time_days),
-      unit_of_measure: toStr(line.unit_of_measure),
-    }))
-    .filter(
-      (line): line is typeof line & { sku: string; unit_cost: number } =>
-        line.sku !== null && line.unit_cost !== null,
-    );
+  const lineItems = renumberOnCollision(
+    asRecordArray(data.line_items)
+      .map((line, i) => ({
+        line_number: toInt(line.line_number) ?? i + 1,
+        sku: toStr(line.sku),
+        description: toStr(line.description),
+        unit_cost: toNum(line.unit_cost),
+        currency: toStr(line.currency),
+        country_of_origin: toCountry(line.country_of_origin),
+        hts_code: toStr(line.hts_code),
+        moq: toNum(line.moq),
+        lead_time_days: toInt(line.lead_time_days),
+        unit_of_measure: toStr(line.unit_of_measure),
+      }))
+      .filter(
+        (line): line is typeof line & { sku: string; unit_cost: number } =>
+          line.sku !== null && line.unit_cost !== null,
+      ),
+  );
   // Like a claimless refund report: a quote sheet with no usable lines has
   // nothing to ingest — fail loudly instead of writing an empty sheet.
   if (lineItems.length === 0) {
