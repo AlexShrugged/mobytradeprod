@@ -172,6 +172,10 @@ const DUTY_CHARGE_TYPES: ReadonlySet<ChargeTypeValue> = new Set([
   "antidumping",
   "countervailing",
 ]);
+const ADCVD_CHARGE_TYPES: ReadonlySet<ChargeTypeValue> = new Set([
+  "antidumping",
+  "countervailing",
+]);
 const ADDITIONAL_CHARGE_TYPES: ReadonlySet<ChargeTypeValue> = new Set([
   "additional_duty",
   "antidumping",
@@ -367,14 +371,28 @@ export function computeEntryAlerts(
   let chargesTrusted = true;
   if (headerDutyCents !== null && entry.lines.some((l) => l.charges.length)) {
     let declaredDutyCents = 0;
+    let adcvdCents = 0;
     for (const line of entry.lines) {
       for (const c of line.charges) {
         if (DUTY_CHARGE_TYPES.has(c.chargeType)) {
           declaredDutyCents += toCents(c.amount) ?? 0;
         }
+        if (ADCVD_CHARGE_TYPES.has(c.chargeType)) {
+          adcvdCents += toCents(c.amount) ?? 0;
+        }
       }
     }
-    const diff = Math.abs(declaredDutyCents - headerDutyCents);
+    // Block 37 "Duty" on the 7501 header is the Chapter 1-97 plus Chapter
+    // 99 duty; AD/CVD deposits belong to block 39 "Other", and broker ABI
+    // printouts follow either convention. The gate hunts dropped or
+    // misread charges, so it accepts whichever reading the header
+    // matches — same doctrine as the extraction's own reconcile pass.
+    // Every ASC entry with an antidumping deposit sat behind this gate
+    // (gap = exactly the AD amount) until it did.
+    const diff = Math.min(
+      Math.abs(declaredDutyCents - headerDutyCents),
+      Math.abs(declaredDutyCents - adcvdCents - headerDutyCents),
+    );
     const tolerance = Math.max(
       config.trustGateAbsCents,
       Math.round(headerDutyCents * config.trustGatePct),
@@ -421,7 +439,10 @@ export function computeEntryAlerts(
         },
         ref,
       );
-      if (expected.sailBasis === "estimated" || expected.sailBasis === "assumed") {
+      if (
+        expected.sailBasis === "estimated" ||
+        expected.sailBasis === "assumed"
+      ) {
         sailAffectedLines.add(line.lineNumber);
         if (worstSailBasis !== "assumed") worstSailBasis = expected.sailBasis;
       }
@@ -464,7 +485,8 @@ export function computeEntryAlerts(
             authority: m.authority,
             expected_hts: m.ch99Code,
             expected_rate: m.rate,
-            expected_amount: m.amountCents === null ? null : dollars(m.amountCents),
+            expected_amount:
+              m.amountCents === null ? null : dollars(m.amountCents),
             line_number: line.lineNumber,
             sku: line.sku,
           },
@@ -523,7 +545,8 @@ export function computeEntryAlerts(
         const amountCents = toCents(c.amount) ?? 0;
         if (amountCents === 0) continue; // exclusion claimed — a statement
         if (!c.htsCodeDigits) continue;
-        if (declaredMatchesExpected(c.htsCodeDigits, expected.measures)) continue;
+        if (declaredMatchesExpected(c.htsCodeDigits, expected.measures))
+          continue;
 
         // Exclusion codes are allowed — but only on entries their measure
         // window covers (entry-date-aware; falls back to the current-row
@@ -623,7 +646,11 @@ export function computeEntryAlerts(
             chargeRefKey = c.htsCodeDigits;
           }
         }
-        if (expectedRate === null || expectedAmountCents === null || !chargeRefKey)
+        if (
+          expectedRate === null ||
+          expectedAmountCents === null ||
+          !chargeRefKey
+        )
           continue;
 
         // Rule 3: declared rate deviates from the official rate. When an
@@ -635,7 +662,10 @@ export function computeEntryAlerts(
             ? ` under SPI ${expected.baseDutyClaim.spi}`
             : "";
         const declaredRate = c.rate === null ? null : Number(c.rate);
-        if (declaredRate !== null && Math.abs(declaredRate - expectedRate) > 0.00005) {
+        if (
+          declaredRate !== null &&
+          Math.abs(declaredRate - expectedRate) > 0.00005
+        ) {
           const impliedDiff = Math.round(
             Math.abs(declaredRate - expectedRate) * enteredCents,
           );
@@ -718,7 +748,8 @@ export function computeEntryAlerts(
   const headerValueCents = toCents(entry.totalEnteredValue);
   if (headerValueCents !== null && entry.lines.length > 0) {
     let lineSumCents = 0;
-    for (const line of entry.lines) lineSumCents += toCents(line.enteredValue) ?? 0;
+    for (const line of entry.lines)
+      lineSumCents += toCents(line.enteredValue) ?? 0;
     const diff = Math.abs(lineSumCents - headerValueCents);
     const tolerance = Math.max(
       config.valueToleranceAbsCents,

@@ -139,6 +139,32 @@ describe("rule 0: trust gate", () => {
     const alerts = computeEntryAlerts(entry({ totalDuty: "3901.50" }), ref);
     expect(alerts).toEqual([]);
   });
+
+  it("accepts a header that leaves AD/CVD deposits out of block 37", () => {
+    // Broker printouts follow either convention: block 37 "Duty" with or
+    // without the block-39 antidumping deposit. $500 AD on the motor line;
+    // both header readings reconcile, an unrelated gap still does not.
+    const line = cleanMotorLine();
+    line.charges = [
+      ...line.charges,
+      charge("antidumping", null, 0.05, "500.00"),
+    ];
+    const excluding = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "3900.00" }),
+      ref,
+    );
+    expect(keys(excluding)).not.toContain("unreconciled:duty_total");
+    const including = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "4400.00" }),
+      ref,
+    );
+    expect(keys(including)).not.toContain("unreconciled:duty_total");
+    const neither = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "4100.00" }),
+      ref,
+    );
+    expect(keys(neither)).toContain("unreconciled:duty_total");
+  });
 });
 
 describe("rule 1: missing measure", () => {
@@ -293,7 +319,11 @@ describe("rule 2: unexpected measure", () => {
     // Inside the 122 window, sail resolved exactly (no assumption alert).
     const IN_WINDOW = {
       entryDate: "2026-08-06",
-      sail: { earliestSail: "2026-08-02", latestSail: "2026-08-02", estimated: false },
+      sail: {
+        earliestSail: "2026-08-02",
+        latestSail: "2026-08-02",
+        estimated: false,
+      },
     };
     const frameLine = (charges: AuditableCharge[]) =>
       cleanMotorLine({
@@ -456,9 +486,9 @@ describe("rule 5: HTS vs catalog", () => {
     );
     expect(keys(alerts)).toContain("hts_discrepancy:line1");
     expect(keys(alerts)).not.toContain("amount_mismatch:line1:99038801");
-    expect(alerts.find((a) => a.alertKey === "hts_discrepancy:line1")?.severity).toBe(
-      "warning",
-    );
+    expect(
+      alerts.find((a) => a.alertKey === "hts_discrepancy:line1")?.severity,
+    ).toBe("warning");
   });
 
   it("a corrected catalog code clears the discrepancy AND re-enables money checks", () => {
@@ -645,9 +675,7 @@ describe("rule 8: invoice internal consistency", () => {
   it("runs on non-USD invoices too — internal consistency is currency-agnostic", () => {
     const alerts = computeEntryAlerts(
       entry({
-        linkedInvoices: [
-          invoice({ currency: "EUR", totalAmount: "10200.00" }),
-        ],
+        linkedInvoices: [invoice({ currency: "EUR", totalAmount: "10200.00" })],
       }),
       ref,
     );
@@ -888,9 +916,7 @@ describe("rule 9: CI header value vs entered value", () => {
         linkedInvoices: [
           invoice({
             totalAmount: "20000.00",
-            lines: [
-              invoiceLine({ sku: "EB-BAT-48V", totalPrice: "20000.00" }),
-            ],
+            lines: [invoiceLine({ sku: "EB-BAT-48V", totalPrice: "20000.00" })],
           }),
         ],
       }),
@@ -1076,9 +1102,7 @@ describe("rule 12: SKU-grouped quantity mismatch", () => {
   it("skips SKUs where either side omits a quantity", () => {
     const alerts = computeEntryAlerts(
       entry({
-        linkedInvoices: [
-          invoice({ lines: [invoiceLine({ quantity: null })] }),
-        ],
+        linkedInvoices: [invoice({ lines: [invoiceLine({ quantity: null })] })],
       }),
       ref,
     );
@@ -1306,9 +1330,7 @@ describe("rule 15: entry SKU missing from CI", () => {
         linkedInvoices: [
           invoice({
             totalAmount: "20000.00",
-            lines: [
-              invoiceLine({ sku: "NOT_FOUND", totalPrice: "20000.00" }),
-            ],
+            lines: [invoiceLine({ sku: "NOT_FOUND", totalPrice: "20000.00" })],
           }),
         ],
       }),
@@ -1338,9 +1360,7 @@ describe("rule 9b: non-USD notices", () => {
   it("no notice for a multi-entry invoice — that skip is silent by design", () => {
     const alerts = computeEntryAlerts(
       entry({
-        linkedInvoices: [
-          invoice({ currency: "EUR", linkedEntryCount: 2 }),
-        ],
+        linkedInvoices: [invoice({ currency: "EUR", linkedEntryCount: 2 })],
       }),
       ref,
     );
@@ -1448,7 +1468,10 @@ describe("rule 2: entry-date-windowed exemptions", () => {
         ["99038867", [{ effectiveDate: "2026-01-01", endDate: null }]],
       ]),
     };
-    const alerts = computeEntryAlerts(entry({ lines: [exclusionLine()] }), windowed);
+    const alerts = computeEntryAlerts(
+      entry({ lines: [exclusionLine()] }),
+      windowed,
+    );
     expect(keys(alerts)).not.toContain("unexpected_measure:line1:99038867");
   });
 
@@ -1459,7 +1482,10 @@ describe("rule 2: entry-date-windowed exemptions", () => {
         ["99038867", [{ effectiveDate: "2026-01-01", endDate: "2026-03-31" }]],
       ]),
     };
-    const alerts = computeEntryAlerts(entry({ lines: [exclusionLine()] }), windowed);
+    const alerts = computeEntryAlerts(
+      entry({ lines: [exclusionLine()] }),
+      windowed,
+    );
     expect(keys(alerts)).toContain("unexpected_measure:line1:99038867");
   });
 
@@ -1505,9 +1531,7 @@ describe("non-ad-valorem (presence-only) measures", () => {
 
   it("declared charge → presence satisfied, amount/rate never checked", () => {
     const line = cleanMotorLine();
-    line.charges.push(
-      charge("additional_duty", "9903.99.05", null, "123.00"),
-    );
+    line.charges.push(charge("additional_duty", "9903.99.05", null, "123.00"));
     const alerts = computeEntryAlerts(
       entry({ lines: [line], totalDuty: "4023.00" }),
       withSpecific,
