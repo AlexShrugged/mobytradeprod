@@ -10,9 +10,12 @@ const existing = {
 
 describe("describeDuplicate", () => {
   it("names the document on file and when it arrived", () => {
-    expect(describeDuplicate(existing)).toMatch(
-      /^Identical to 7077850722\.pdf, uploaded /,
-    );
+    const text = describeDuplicate(existing);
+    expect(text).toMatch(/^Identical to 7077850722\.pdf, uploaded /);
+    // uploadedAt travels as an ISO timestamp, not a calendar date — the
+    // formatter must read it as one (the first cut printed "Invalid Date").
+    expect(text).not.toMatch(/Invalid/);
+    expect(text).toMatch(/Sep 11/);
   });
 });
 

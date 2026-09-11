@@ -1,7 +1,7 @@
 // Client-safe vocabulary for duplicate uploads, shared by the upload routes
 // (the refusal payload) and the dropzone (the toast). Dependency-free
 // beyond the date formatter — it is imported from a client bundle.
-import { formatDate } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 
 /** The document a refused upload was identical to. */
 export type DuplicateOf = {
@@ -18,7 +18,7 @@ export type DuplicateUpload = {
 };
 
 export function describeDuplicate(existing: DuplicateOf): string {
-  return `Identical to ${existing.fileName}, uploaded ${formatDate(existing.uploadedAt)}`;
+  return `Identical to ${existing.fileName}, uploaded ${formatDateTime(existing.uploadedAt)}`;
 }
 
 // The batch toast: every skipped file by name, capped so a 15-file re-drag
