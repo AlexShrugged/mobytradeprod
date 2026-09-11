@@ -23,21 +23,24 @@ const ANALYSIS_TRIGGER_DOC_TYPES = new Set<Document["docType"]>([
 ]);
 
 export type ProcessRunOutcome =
-  | { claimed: false }
-  | { claimed: true; ok: boolean; document: Document };
+  { claimed: false } | { claimed: true; ok: boolean; document: Document };
 
 // Claim → extract → link → persist outcome, shared by the interactive
 // process route and the cron sweep. The claim is a guarded UPDATE on
 // status, so two callers racing for the same document resolve to exactly
 // one processor — the loser gets { claimed: false } and must not touch the
-// row. `reclaimStaleBefore` lets the sweep steal "processing" rows whose
-// runner died mid-flight (updatedAt older than the cutoff); interactive
-// callers omit it and bounce off in-flight rows.
+// row. Interactive callers bounce off in-flight rows and may (re)process
+// anything else. The sweep passes `reclaimStaleBefore`, which narrows the
+// claim to the rows it swept for: still "pending", or "processing" but
+// untouched since the cutoff (a dead runner). The sweep lists its rows
+// once and works through them for minutes, so a row another runner has
+// finished in the meantime must NOT be claimed again — reprocessing a
+// packet parent while its children are still in flight failed the parent
+// ("Packet parts are still processing") over a finished extraction.
 export async function processDocumentRow(
   doc: Document,
   opts: { reclaimStaleBefore?: Date } = {},
 ): Promise<ProcessRunOutcome> {
-  const notInFlight = ne(schema.documents.status, "processing");
   const [claim] = await db
     .update(schema.documents)
     .set({ status: "processing", errorMessage: null, updatedAt: new Date() })
@@ -46,10 +49,13 @@ export async function processDocumentRow(
         eq(schema.documents.id, doc.id),
         opts.reclaimStaleBefore
           ? or(
-              notInFlight,
-              lt(schema.documents.updatedAt, opts.reclaimStaleBefore),
+              eq(schema.documents.status, "pending"),
+              and(
+                eq(schema.documents.status, "processing"),
+                lt(schema.documents.updatedAt, opts.reclaimStaleBefore),
+              ),
             )
-          : notInFlight,
+          : ne(schema.documents.status, "processing"),
       ),
     )
     .returning({ id: schema.documents.id });
