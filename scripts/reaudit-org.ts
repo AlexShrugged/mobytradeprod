@@ -10,7 +10,7 @@
 //
 // Runs against whatever DATABASE_URL points at (2026-09-11: ran against prod
 // after the trust gate learned the block-37 AD/CVD convention).
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { sweepAudits } from "../src/lib/audit/auditor";
 import { db, schema } from "../src/lib/db";
@@ -21,8 +21,14 @@ async function main() {
     console.error("usage: reaudit-org.ts <org name or id> [--run]");
     process.exit(1);
   }
+  // A uuid targets the id column; anything else is a name (comparing a
+  // name against the uuid column is a Postgres type error, not a miss).
+  const isId =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const org = await db.query.orgs.findFirst({
-    where: or(eq(schema.orgs.name, target), eq(schema.orgs.id, target)),
+    where: isId.test(target)
+      ? eq(schema.orgs.id, target)
+      : eq(schema.orgs.name, target),
     columns: { id: true, name: true },
   });
   if (!org) {
