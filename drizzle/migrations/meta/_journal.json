@@ -183,6 +183,13 @@
       "when": 1788392001415,
       "tag": "0025_quote_reconsider",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789148585398,
+      "tag": "0026_document_content_hash",
+      "breakpoints": true
     }
   ]
 }

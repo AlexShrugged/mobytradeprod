@@ -22,11 +22,37 @@ const { rawExtraction: strippedRawColumn, ...documentListColumns } =
   getTableColumns(schema.documents);
 void strippedRawColumn;
 
+// Derived on read, never stored: a parent row whose bytes match an earlier
+// parent in the org points at that original (the upload routes refuse new
+// duplicates; these are the ones that got in before hashing existed or
+// raced the check). Children never carry a hash, so they never match.
+const duplicateOfWhere = sql`
+  d2.org_id = ${schema.documents.orgId}
+  and d2.content_hash = ${schema.documents.contentHash}
+  and d2.parent_document_id is null
+  and ${schema.documents.parentDocumentId} is null
+  and (d2.uploaded_at, d2.id) < (${schema.documents.uploadedAt}, ${schema.documents.id})`;
+const duplicateColumns = {
+  duplicateOfId: sql<
+    string | null
+  >`(select d2.id from documents d2 where ${duplicateOfWhere} order by d2.uploaded_at, d2.id limit 1)`.as(
+    "duplicate_of_id",
+  ),
+  duplicateOfName: sql<
+    string | null
+  >`(select d2.file_name from documents d2 where ${duplicateOfWhere} order by d2.uploaded_at, d2.id limit 1)`.as(
+    "duplicate_of_name",
+  ),
+};
+
 // The documents table's Source column: which intake channel delivered the
 // file (manual upload / SFTP / email inbox / ERP). Null on legacy rows.
 export type DocumentWithSource = DocumentListItem & {
   sourceName: string | null;
   sourceKind: IntegrationKind | null;
+  /** The earlier document with identical bytes, when this row is a duplicate. */
+  duplicateOfId: string | null;
+  duplicateOfName: string | null;
 };
 
 export async function getDocuments(): Promise<DocumentWithSource[]> {
@@ -36,6 +62,7 @@ export async function getDocuments(): Promise<DocumentWithSource[]> {
       ...documentListColumns,
       sourceName: schema.integrationSources.name,
       sourceKind: schema.integrationSources.kind,
+      ...duplicateColumns,
     })
     .from(schema.documents)
     .leftJoin(
@@ -82,9 +109,7 @@ export async function getDocumentsPage(opts: {
 
   const [totalCount, filteredRaw] = await Promise.all([
     db.$count(schema.documents, eq(schema.documents.orgId, orgId)),
-    searchWhere
-      ? db.$count(schema.documents, where)
-      : Promise.resolve(-1), // filled from totalCount below
+    searchWhere ? db.$count(schema.documents, where) : Promise.resolve(-1), // filled from totalCount below
   ]);
   const filteredCount = filteredRaw === -1 ? totalCount : filteredRaw;
 
@@ -98,6 +123,7 @@ export async function getDocumentsPage(opts: {
       ...documentListColumns,
       sourceName: schema.integrationSources.name,
       sourceKind: schema.integrationSources.kind,
+      ...duplicateColumns,
     })
     .from(schema.documents)
     .leftJoin(
@@ -122,7 +148,10 @@ export async function getDocumentsForEntity(
 ): Promise<LinkedDocument[]> {
   const orgId = await getCurrentOrgId();
   return db
-    .select({ document: documentListColumns, created: schema.documentLinks.created })
+    .select({
+      document: documentListColumns,
+      created: schema.documentLinks.created,
+    })
     .from(schema.documentLinks)
     .innerJoin(
       schema.documents,

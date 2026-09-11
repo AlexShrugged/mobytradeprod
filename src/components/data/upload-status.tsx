@@ -12,7 +12,9 @@ export type PendingUpload = {
   name: string;
   size: number;
   pct: number;
-  stage: "uploading" | "queued" | "failed";
+  stage: "uploading" | "queued" | "failed" | "duplicate";
+  /** Why the file was not registered (a duplicate names its original). */
+  note?: string;
   /** Set once the blob landed and the row was registered; the table hides
    *  the pending row as soon as a real document with this storageKey
    *  arrives from the server. */

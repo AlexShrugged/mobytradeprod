@@ -11,9 +11,21 @@ import {
   useUploadStatus,
   type PendingUpload,
 } from "@/components/data/upload-status";
+import {
+  describeDuplicate,
+  summarizeDuplicates,
+  type DuplicateUpload,
+} from "@/lib/documents/duplicates";
 import { buildUploadKey } from "@/lib/documents/upload-key";
 import { cn } from "@/lib/utils";
 import type { DocumentListItem } from "@/lib/db/schema";
+
+// What both upload routes answer with: the rows they created, plus the
+// files they refused as byte-identical to a document already on file.
+type UploadResponse = {
+  documents?: DocumentListItem[];
+  duplicates?: DuplicateUpload[];
+};
 
 // Blob mode: files go browser → Vercel Blob directly (signed token from
 // /api/documents/upload-token), then each file registers its row the moment
@@ -94,6 +106,9 @@ export function UploadDropzone({
         );
 
       const registered: DocumentListItem[] = [];
+      // Files the server recognized as already on file: never registered,
+      // never processed, reported once at the end.
+      const duplicates: DuplicateUpload[] = [];
       let failed = 0;
 
       const setBatchBusy = (msg: string) => {
@@ -138,11 +153,22 @@ export function UploadDropzone({
                     fileName: file.name,
                     mimeType: file.type || "application/octet-stream",
                   });
-                  if (!res.ok) throw new Error("Registration failed.");
-                  const { documents } = (await res.json()) as {
-                    documents: DocumentListItem[];
-                  };
-                  registered.push(documents[0]);
+                  const body = (await res
+                    .json()
+                    .catch(() => null)) as UploadResponse | null;
+                  const duplicate = body?.duplicates?.[0];
+                  if (res.status === 409 && duplicate) {
+                    duplicates.push({ ...duplicate, index });
+                    patch(index, {
+                      stage: "duplicate",
+                      pct: 100,
+                      note: describeDuplicate(duplicate.duplicateOf),
+                    });
+                    continue;
+                  }
+                  const doc = body?.documents?.[0];
+                  if (!res.ok || !doc) throw new Error("Registration failed.");
+                  registered.push(doc);
                   patch(index, {
                     stage: "queued",
                     pct: 100,
@@ -163,14 +189,32 @@ export function UploadDropzone({
             method: "POST",
             body: formData,
           });
-          if (!res.ok) throw new Error("Upload failed.");
-          const { documents } = (await res.json()) as {
-            documents: DocumentListItem[];
-          };
+          const body = (await res
+            .json()
+            .catch(() => null)) as UploadResponse | null;
+          const dups = body?.duplicates ?? [];
+          // 409 means every file was a duplicate — a full answer, not a
+          // failure.
+          if (!res.ok && !(res.status === 409 && dups.length > 0)) {
+            throw new Error("Upload failed.");
+          }
+          for (const d of dups) {
+            duplicates.push(d);
+            patch(d.index, {
+              stage: "duplicate",
+              pct: 100,
+              note: describeDuplicate(d.duplicateOf),
+            });
+          }
+          const documents = body?.documents ?? [];
           registered.push(...documents);
-          // Response order matches file order.
-          documents.forEach((doc, index) =>
-            patch(index, {
+          // Response order matches file order, minus the duplicates.
+          const skipped = new Set(dups.map((d) => d.index));
+          const order = accepted
+            .map((_, index) => index)
+            .filter((index) => !skipped.has(index));
+          documents.forEach((doc, k) =>
+            patch(order[k], {
               stage: "queued",
               pct: 100,
               storageKey: doc.storageKey,
@@ -227,16 +271,19 @@ export function UploadDropzone({
           }),
         );
 
+        const attempted = accepted.length - duplicates.length;
+        const succeeded = attempted - failed;
         if (failed > 0) {
           toast.warning(
-            `${accepted.length - failed} of ${accepted.length} documents processed; ${failed} failed. You can reprocess failures from the table.`,
+            `${succeeded} of ${attempted} documents processed; ${failed} failed. You can reprocess failures from the table.`,
           );
-        } else {
+        } else if (succeeded > 0) {
           toast.success(
-            `${accepted.length} document${accepted.length > 1 ? "s" : ""} processed.`,
+            `${succeeded} document${succeeded > 1 ? "s" : ""} processed.`,
           );
         }
-        onComplete?.(failed === 0);
+        if (duplicates.length > 0) toast.info(summarizeDuplicates(duplicates));
+        onComplete?.(failed === 0 && succeeded > 0);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed.");
         onComplete?.(false);

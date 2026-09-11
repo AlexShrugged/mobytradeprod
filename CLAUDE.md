@@ -48,7 +48,14 @@ declared SKU outranks the parts resolved on read and raises false "Not on
 invoice" variances. Broker **entry packets** (one PDF
 bundling a 7501 + commercial invoice + supporting docs) split into child documents
 (parent-child rows on `documents`; children share the parent's file, page-scoped) that
-each run the normal per-doc pipeline.
+each run the normal per-doc pipeline. Uploads are deduped by content: both upload
+routes hash the stored bytes server-side (`documents.content_hash`, SHA-256, parents
+only) and refuse a file identical to any document already in the org (any status —
+reprocess the twin instead), reporting it in `duplicates`; the dropzone shows
+"Already on file". Rows that got in before hashing are hashed by the document
+sweep's backfill leg and flagged "Duplicate" on read (`duplicateOfId`, derived,
+never stored). ASC re-dragged all 15 packets of a batch on 2026-09-11 (~450 Reducto
+credits) before this existed.
 
 ## Customs data ingestion
 

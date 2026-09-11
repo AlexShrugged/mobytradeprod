@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
+  CopyX,
   CornerDownRight,
   Download,
   FileJson,
@@ -16,6 +17,7 @@ import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { useUploadStatus } from "@/components/data/upload-status";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,6 +49,8 @@ import { packetRoleLabel, pageRangeLabel } from "@/lib/processing/packet";
 export type DocumentRow = DocumentListItem & {
   sourceName: string | null;
   sourceKind: IntegrationKind | null;
+  duplicateOfId: string | null;
+  duplicateOfName: string | null;
 };
 
 const sourceKindLabels: Record<IntegrationKind, string> = {
@@ -106,7 +110,8 @@ export function DocumentsTable({
   // itself the moment its real (registered) row arrives from the server.
   const uploadStatus = useUploadStatus();
   const pendingUploads = (uploadStatus?.pending ?? []).filter(
-    (p) => !p.storageKey || !documents.some((d) => d.storageKey === p.storageKey),
+    (p) =>
+      !p.storageKey || !documents.some((d) => d.storageKey === p.storageKey),
   );
 
   const processDocument = async (doc: DocumentRow) => {
@@ -155,6 +160,11 @@ export function DocumentsTable({
               <TableRow key={p.key}>
                 <TableCell className="max-w-64">
                   <span className="block truncate font-medium">{p.name}</span>
+                  {p.note ? (
+                    <div className="truncate text-xs text-muted-foreground">
+                      {p.note}
+                    </div>
+                  ) : null}
                 </TableCell>
                 <TableCell className="text-muted-foreground">—</TableCell>
                 <TableCell className="text-muted-foreground">Manual</TableCell>
@@ -162,16 +172,20 @@ export function DocumentsTable({
                   <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
                     {p.stage === "failed" ? (
                       <XCircle className="size-3.5 text-red-500" />
+                    ) : p.stage === "duplicate" ? (
+                      <CopyX className="size-3.5" />
                     ) : (
                       <Loader2 className="size-3.5 animate-spin" />
                     )}
                     {p.stage === "failed"
                       ? "Upload failed"
-                      : p.stage === "queued"
-                        ? "Queued"
-                        : p.pct > 0
-                          ? `Uploading ${p.pct}%`
-                          : "Uploading…"}
+                      : p.stage === "duplicate"
+                        ? "Already on file"
+                        : p.stage === "queued"
+                          ? "Queued"
+                          : p.pct > 0
+                            ? `Uploading ${p.pct}%`
+                            : "Uploading…"}
                   </span>
                 </TableCell>
                 <TableCell>{formatBytes(p.size)}</TableCell>
@@ -201,9 +215,7 @@ export function DocumentsTable({
                     <TableCell className="max-w-64">
                       <div
                         className={
-                          isChild
-                            ? "flex items-center gap-1.5 pl-5"
-                            : undefined
+                          isChild ? "flex items-center gap-1.5 pl-5" : undefined
                         }
                       >
                         {isChild ? (
@@ -225,6 +237,17 @@ export function DocumentsTable({
                               {doc.pageRange?.length
                                 ? ` · ${pageRangeLabel(doc.pageRange)}`
                                 : ""}
+                            </div>
+                          ) : null}
+                          {doc.duplicateOfId ? (
+                            <div className="mt-0.5">
+                              <Badge
+                                variant="outline"
+                                className="text-muted-foreground"
+                                title={`Identical to ${doc.duplicateOfName ?? "an earlier upload"}`}
+                              >
+                                Duplicate
+                              </Badge>
                             </div>
                           ) : null}
                         </div>
@@ -315,7 +338,10 @@ export function DocumentsTable({
           : `${pageStart + 1}–${pageStart + documents.length} of ${filteredCount} documents`}
       </p>
 
-      <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
+      <Dialog
+        open={viewing !== null}
+        onOpenChange={(open) => !open && setViewing(null)}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="truncate">{viewing?.fileName}</DialogTitle>

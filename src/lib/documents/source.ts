@@ -15,7 +15,9 @@ const sourceIdSchema = z.uuid();
 export async function resolveSourceId(
   orgId: string,
   rawSourceId: string | null,
-): Promise<{ ok: true; sourceId: string | null } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; sourceId: string | null } | { ok: false; error: string }
+> {
   if (rawSourceId !== null && rawSourceId !== "") {
     const parsed = sourceIdSchema.safeParse(rawSourceId);
     if (!parsed.success) {

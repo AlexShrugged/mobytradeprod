@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { db, schema } from "@/lib/db";
+import { findDuplicateDocument, sha256Hex } from "@/lib/documents/content-hash";
+import type { DuplicateUpload } from "@/lib/documents/duplicates";
 import { resolveSourceId } from "@/lib/documents/source";
 import { getCurrentOrgId } from "@/lib/org";
 import { inferDocType } from "@/lib/processing";
@@ -10,7 +12,10 @@ import { getFileStore } from "@/lib/storage";
 // requests are subject to the platform body cap (~4.5MB on Vercel). The
 // dropzone uses the client-direct blob flow (upload-token + register) in
 // prod; this route remains the dev path and the entry point for future
-// server-side connectors.
+// server-side connectors. Same duplicate contract as the register route:
+// a file identical to a document already on file is reported in
+// `duplicates` instead of stored, and the response is 409 only when
+// nothing in the batch was new.
 export async function POST(request: Request) {
   const formData = await request.formData();
   const files = formData
@@ -36,8 +41,15 @@ export async function POST(request: Request) {
   const store = getFileStore();
 
   const created = [];
-  for (const file of files) {
+  const duplicates: DuplicateUpload[] = [];
+  for (const [index, file] of files.entries()) {
     const buffer = Buffer.from(await file.arrayBuffer());
+    const contentHash = sha256Hex(buffer);
+    const duplicateOf = await findDuplicateDocument(db, orgId, contentHash);
+    if (duplicateOf) {
+      duplicates.push({ index, fileName: file.name, duplicateOf });
+      continue;
+    }
     const { storageKey } = await store.put(file.name, buffer);
     const [doc] = await db
       .insert(schema.documents)
@@ -50,6 +62,7 @@ export async function POST(request: Request) {
         docType: inferDocType(file.name),
         status: "pending",
         sourceId,
+        contentHash,
       })
       .returning();
     created.push(doc);
@@ -64,7 +77,8 @@ export async function POST(request: Request) {
         void rawExtraction;
         return rest;
       }),
+      duplicates,
     },
-    { status: 201 },
+    { status: created.length === 0 && duplicates.length > 0 ? 409 : 201 },
   );
 }

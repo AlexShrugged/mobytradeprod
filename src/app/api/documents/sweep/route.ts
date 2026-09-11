@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import { and, asc, eq, lt, or } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, or } from "drizzle-orm";
 
 import { requireSuperAdmin } from "@/lib/admin";
 import { db, schema } from "@/lib/db";
+import { sha256Hex } from "@/lib/documents/content-hash";
 import { isProdRuntime } from "@/lib/env";
 import { processDocumentRow } from "@/lib/processing/run";
+import { getFileStore } from "@/lib/storage";
 
 // Sweep documents whose browser-driven processing never ran or never
 // finished: "pending" rows (the tab closed before their turn in the upload
@@ -26,6 +28,45 @@ const CONCURRENCY = 3;
 // (minutes each) can finish inside this invocation; leftovers keep their
 // status and the next sweep picks them up.
 const DEADLINE_MS = 180_000;
+
+// Hash backfill: parent rows uploaded before content hashing existed get
+// their SHA-256 here, oldest first, within a budget — the sweep runs with
+// the store's own credentials, so the corpus is hashed in place. Once
+// every parent carries a hash this leg finds nothing and costs one query.
+// A file missing from the store is skipped (and retried next sweep).
+const HASH_BUDGET_MS = 120_000;
+const HASH_BATCH = 500;
+
+async function backfillHashes(): Promise<{ hashed: number; unhashed: number }> {
+  const rows = await db.query.documents.findMany({
+    where: and(
+      isNull(schema.documents.contentHash),
+      isNull(schema.documents.parentDocumentId),
+    ),
+    columns: { id: true, storageKey: true },
+    orderBy: asc(schema.documents.uploadedAt),
+    limit: HASH_BATCH,
+  });
+  if (rows.length === 0) return { hashed: 0, unhashed: 0 };
+  const store = getFileStore();
+  const deadline = Date.now() + HASH_BUDGET_MS;
+  let hashed = 0;
+  for (const row of rows) {
+    if (Date.now() >= deadline) break;
+    let bytes: Buffer;
+    try {
+      bytes = await store.get(row.storageKey);
+    } catch {
+      continue;
+    }
+    await db
+      .update(schema.documents)
+      .set({ contentHash: sha256Hex(bytes) })
+      .where(eq(schema.documents.id, row.id));
+    hashed += 1;
+  }
+  return { hashed, unhashed: rows.length - hashed };
+}
 
 async function sweep() {
   const staleBefore = new Date(Date.now() - STALE_PROCESSING_MS);
@@ -59,12 +100,16 @@ async function sweep() {
     }),
   );
 
+  const hashes = await backfillHashes();
+
   return NextResponse.json({
     eligible: docs.length,
     processed,
     failed,
     skipped,
     remaining: docs.length - processed - failed - skipped,
+    hashed: hashes.hashed,
+    unhashed: hashes.unhashed,
   });
 }
 

@@ -383,7 +383,10 @@ export const entries = pgTable(
     // (filed by construction); liquidation derives on read from linked
     // refund claims' printed liquidation dates (entries/status.ts).
     // "released" was dropped outright — no ingested document evidences it.
-    totalEnteredValue: numeric("total_entered_value", { precision: 14, scale: 2 }),
+    totalEnteredValue: numeric("total_entered_value", {
+      precision: 14,
+      scale: 2,
+    }),
     // totalDuty = all duty-type charges (base + additional + AD/CVD),
     // excluding MPF/HMF/fees. totalBaseDuty is the base-only slice.
     // "Duties & fees" is always derived in queries, never stored.
@@ -599,6 +602,14 @@ export const documents = pgTable(
     // Which processor produced extracted_data: "stub" | "reducto".
     processedBy: text("processed_by"),
     errorMessage: text("error_message"),
+    // SHA-256 (hex) of the stored bytes, computed server-side at register
+    // time — the identity a re-upload of the same file is refused on
+    // (org-scoped, parents only). Null on packet children (page-scoped rows
+    // sharing the parent's bytes) and on rows uploaded before hashing
+    // existed until the document sweep backfills them. Not unique: the
+    // backfill records duplicates that already got in so they can be
+    // flagged on read; the upload routes are what refuse new ones.
+    contentHash: varchar("content_hash", { length: 64 }),
     uploadedAt: timestamp("uploaded_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -610,6 +621,7 @@ export const documents = pgTable(
     index("documents_status_idx").on(t.orgId, t.status),
     index("documents_source_idx").on(t.sourceId),
     index("documents_parent_idx").on(t.parentDocumentId),
+    index("documents_hash_idx").on(t.orgId, t.contentHash),
   ],
 );
 
@@ -681,7 +693,9 @@ export const parts = pgTable(
     // classification/service.ts, in the same transaction as the queue.
     // A provisional code was auto-selected by a classifier and not yet
     // human-committed — it must never drive audit findings.
-    htsCodeProvisional: boolean("hts_code_provisional").notNull().default(false),
+    htsCodeProvisional: boolean("hts_code_provisional")
+      .notNull()
+      .default(false),
     htsReviewStatus: partHtsReviewStatus("hts_review_status"),
     // "Pending changes" (approved quote awaiting its PO) and "quote received"
     // are DERIVED from quote_lines, never stored here.
@@ -882,7 +896,13 @@ export const integrationSources = pgTable(
     consecutiveFailures: integer("consecutive_failures").notNull().default(0),
     ...timestamps,
   },
-  (t) => [uniqueIndex("integration_sources_org_kind_name_uq").on(t.orgId, t.kind, t.name)],
+  (t) => [
+    uniqueIndex("integration_sources_org_kind_name_uq").on(
+      t.orgId,
+      t.kind,
+      t.name,
+    ),
+  ],
 );
 
 // ---------------------------------------------------------------- org rules
@@ -1029,7 +1049,10 @@ export const htsCodes = pgTable(
     ...timestamps,
   },
   (t) => [
-    uniqueIndex("hts_codes_digits_measure_uq").on(t.codeDigits, t.tradeMeasureId),
+    uniqueIndex("hts_codes_digits_measure_uq").on(
+      t.codeDigits,
+      t.tradeMeasureId,
+    ),
     // One CURRENT base-schedule row per code; closed windows are history.
     uniqueIndex("hts_codes_digits_base_current_uq")
       .on(t.codeDigits)
@@ -1103,7 +1126,9 @@ export const tariffAnnouncements = pgTable(
     status: announcementStatus("status").notNull().default("open"),
     ...timestamps,
   },
-  (t) => [uniqueIndex("tariff_announcements_source_ref_uq").on(t.source, t.sourceRef)],
+  (t) => [
+    uniqueIndex("tariff_announcements_source_ref_uq").on(t.source, t.sourceRef),
+  ],
 );
 
 // One reviewable "adopt this measure family" unit: the payload behind a
@@ -1220,7 +1245,10 @@ export const entryLineItems = pgTable(
     }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
     unitValue: numeric("unit_value", { precision: 12, scale: 4 }),
-    enteredValue: numeric("entered_value", { precision: 12, scale: 2 }).notNull(),
+    enteredValue: numeric("entered_value", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
     ...timestamps,
   },
   (t) => [
@@ -1461,7 +1489,9 @@ export const refundClaims = pgTable(
   {
     id: id(),
     orgId: orgId(),
-    entrySummaryNumber: varchar("entry_summary_number", { length: 32 }).notNull(),
+    entrySummaryNumber: varchar("entry_summary_number", {
+      length: 32,
+    }).notNull(),
     normalizedEntryNumber: varchar("normalized_entry_number", {
       length: 16,
     }).notNull(),
@@ -2329,19 +2359,16 @@ export const agentMessagesRelations = relations(agentMessages, ({ one }) => ({
   }),
 }));
 
-export const agentProposalsRelations = relations(
-  agentProposals,
-  ({ one }) => ({
-    conversation: one(agentConversations, {
-      fields: [agentProposals.conversationId],
-      references: [agentConversations.id],
-    }),
-    message: one(agentMessages, {
-      fields: [agentProposals.messageId],
-      references: [agentMessages.id],
-    }),
+export const agentProposalsRelations = relations(agentProposals, ({ one }) => ({
+  conversation: one(agentConversations, {
+    fields: [agentProposals.conversationId],
+    references: [agentConversations.id],
   }),
-);
+  message: one(agentMessages, {
+    fields: [agentProposals.messageId],
+    references: [agentMessages.id],
+  }),
+}));
 
 // ---------------------------------------------------------------- row types
 
