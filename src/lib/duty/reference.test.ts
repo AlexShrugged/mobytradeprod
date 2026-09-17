@@ -59,6 +59,7 @@ function measureRow(
     sailedOnOrBefore: null,
     predecessorId: null,
     inLieuOfBaseDuty: false,
+    col1RateBelow: null,
     notes: null,
     createdAt: NOW,
     updatedAt: NOW,

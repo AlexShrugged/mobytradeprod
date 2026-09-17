@@ -814,6 +814,9 @@ export type LineChargeDetail = {
   measureName: string | null;
   /** Set when this charge matches a measure a stacking rule suppressed. */
   suppressedReason: string | null;
+  /** Base-duty rows only: the ceiling heading charged in lieu of the
+   *  column-1 rate, when one applies to the line. */
+  replacedByNote: string | null;
   rateMismatch: boolean;
   amountMismatch: boolean;
 };
@@ -1224,16 +1227,32 @@ export async function getEntryDetail(
       let expectedAmount: number | null = null;
       let measureName: string | null = null;
       let suppressedReason: string | null = null;
+      let replacedByNote: string | null = null;
       let refKey: string | null = null;
 
       if (c.chargeType === "base_duty") {
         refKey = "base";
         if (expected?.baseDuty && expected.baseDuty.rate !== null) {
-          expectedRate = expected.baseDuty.rate;
+          // A ceiling heading charges its rate in lieu of the column-1
+          // rate: the expectation on the base row is $0 at 0%, and the
+          // note names the heading that replaced it.
+          // Claim-aware like the audit: a declared $0 exclusion of the
+          // in-lieu heading's family asserts it does not reach the line,
+          // and the column-1 rate stands.
+          const inLieu = expected.measures.find((m) => m.inLieuOfBaseDuty);
+          const claimedAway =
+            inLieu?.exclusionDigits.some((d) => declaredDigits.has(d)) ?? false;
+          const replacedBy = claimedAway ? null : expected.baseDutyReplacedBy;
+          expectedRate = replacedBy ? 0 : expected.baseDuty.rate;
           expectedAmount =
             expected.baseDuty.amountCents === null
               ? null
-              : expected.baseDuty.amountCents / 100;
+              : claimedAway
+                ? Math.round(expected.baseDuty.rate * enteredCents) / 100
+                : expected.baseDuty.amountCents / 100;
+          if (replacedBy) {
+            replacedByNote = `${replacedBy.name} (${replacedBy.ch99Code}) applies in lieu of the ${Math.round(expected.baseDuty.rate * 10000) / 100}% column-1 rate`;
+          }
         }
       } else if (c.htsCodeDigits) {
         refKey = c.htsCodeDigits;
@@ -1269,6 +1288,7 @@ export async function getEntryDetail(
         expectedAmount,
         measureName,
         suppressedReason,
+        replacedByNote,
         rateMismatch: refKey
           ? openKeys.has(`rate_mismatch:line${li.lineNumber}:${refKey}`)
           : false,

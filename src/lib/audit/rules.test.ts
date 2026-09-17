@@ -1539,3 +1539,183 @@ describe("non-ad-valorem (presence-only) measures", () => {
     expect(alerts).toEqual([]);
   });
 });
+
+describe("ceiling headings (in lieu of the column-1 rate)", () => {
+  // Taiwan's note-52 heading over the motor code: 10% charged instead of
+  // the 4% general rate, on lines whose column-1 rate is below 10%. The
+  // at-or-above sibling (9903.05.75) is a $0 exemption row of the family.
+  const ceiling: MeasureRef = {
+    id: "tw-ceiling",
+    name: "Trade measure — 9903.05.76",
+    authority: "other",
+    program: null,
+    scope: "all_products",
+    countries: ["TW"],
+    effectiveDate: "2026-07-24",
+    endDate: null,
+    sailedOnOrAfter: null,
+    sailedOnOrBefore: null,
+    inLieuOfBaseDuty: true,
+    col1RateBelow: 0.1,
+    ch99Code: "9903.05.76",
+    ch99Digits: "99030576",
+    rate: 0.1,
+    exclusionDigits: ["99030575"],
+    prefixes: [],
+  };
+  const motor = ref.htsByDigits.get("8501314000")!;
+  const dear = { ...motor, code: "8501.31.9999", codeDigits: "8501319999", rate: 0.12 };
+  const ceilingRef = {
+    ...ref,
+    htsByDigits: new Map(ref.htsByDigits).set(dear.codeDigits, dear),
+    measures: [ceiling],
+    stackingRules: [],
+  };
+  const entryDate = "2026-09-01";
+  const fees = () => [
+    charge("mpf", "499", 0.003464, "34.64"),
+    charge("hmf", "501", 0.00125, "12.50"),
+  ];
+  function taiwanLine(
+    charges: AuditableCharge[],
+    htsCode = "8501.31.4000",
+  ): AuditableLine {
+    return cleanMotorLine({
+      id: "tw1",
+      sku: null,
+      htsCode,
+      htsCodeDigits: htsCode.replace(/\D/g, ""),
+      countryOfOrigin: "TW",
+      partHtsCode: null,
+      partHtsCodeCurrent: null,
+      charges,
+    });
+  }
+
+  it("the broker's filing — $0 base duty beside the heading at its full rate — audits clean", () => {
+    const line = taiwanLine([
+      charge("base_duty", null, null, "0.00"),
+      charge("additional_duty", "9903.05.76", 0.1, "1000.00"),
+      ...fees(),
+    ]);
+    expect(
+      computeEntryAlerts(
+        entry({ entryDate, lines: [line], totalDuty: "1000.00" }),
+        ceilingRef,
+      ),
+    ).toEqual([]);
+  });
+
+  it("no base duty row at all is not a missing base duty", () => {
+    const line = taiwanLine([
+      charge("additional_duty", "9903.05.76", 0.1, "1000.00"),
+      ...fees(),
+    ]);
+    expect(
+      keys(
+        computeEntryAlerts(
+          entry({ entryDate, lines: [line], totalDuty: "1000.00" }),
+          ceilingRef,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("base duty charged anyway is an overpayment against the replaced rate", () => {
+    const line = taiwanLine([
+      charge("base_duty", "8501.31.4000", 0.04, "400.00"),
+      charge("additional_duty", "9903.05.76", 0.1, "1000.00"),
+      ...fees(),
+    ]);
+    const alerts = computeEntryAlerts(
+      entry({ entryDate, lines: [line], totalDuty: "1400.00" }),
+      ceilingRef,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "amount_mismatch:line1:base",
+      "rate_mismatch:line1:base",
+    ]);
+    for (const a of alerts) {
+      expect(a.message).toContain("9903.05.76");
+      expect(a.message).toContain("in lieu of the column-1 rate");
+    }
+    const amount = alerts.find((a) => a.alertType === "amount_mismatch")!;
+    expect(amount.message).toContain("overpaid $400.00");
+    expect(amount.details?.expected_amount).toBe(0);
+  });
+
+  it("the heading itself missing is the shortfall", () => {
+    const line = taiwanLine([charge("base_duty", null, null, "0.00"), ...fees()]);
+    const alerts = computeEntryAlerts(
+      entry({ entryDate, lines: [line], totalDuty: "0.00" }),
+      ceilingRef,
+    );
+    expect(keys(alerts)).toEqual(["missing_measure:line1:99030576"]);
+    expect(alerts[0].details?.expected_amount).toBe(1000);
+  });
+
+  it("a declared $0 exclusion of the heading's family keeps the column-1 rate (metals line)", () => {
+    // ASC's real filing: a 232 metals line claims 9903.05.90 at $0 beside
+    // its 50% charge and pays the 4% column-1 rate — the ceiling heading
+    // is claimed away, so no base-duty alert may fire.
+    const metals: MeasureRef = {
+      ...ceiling,
+      id: "metals",
+      name: "Section 232 metals",
+      authority: "section_232_steel",
+      program: "section-232-metals-2026",
+      scope: "hts_list",
+      countries: null,
+      inLieuOfBaseDuty: false,
+      col1RateBelow: null,
+      ch99Code: "9903.82.02",
+      ch99Digits: "99038202",
+      rate: 0.5,
+      exclusionDigits: [],
+      prefixes: ["8501"],
+    };
+    const family = { ...ceiling, exclusionDigits: ["99030575", "99030590"] };
+    const withMetals = { ...ceilingRef, measures: [family, metals] };
+    const line = taiwanLine([
+      charge("base_duty", "8501.31.4000", 0.04, "400.00"),
+      charge("additional_duty", "9903.05.90", 0, "0.00"),
+      charge("additional_duty", "9903.82.02", 0.5, "5000.00"),
+      ...fees(),
+    ]);
+    expect(
+      computeEntryAlerts(
+        entry({ entryDate, lines: [line], totalDuty: "5400.00" }),
+        withMetals,
+      ),
+    ).toEqual([]);
+
+    // And with the claim but no base row, the base duty is genuinely missing.
+    const noBase = taiwanLine([
+      charge("additional_duty", "9903.05.90", 0, "0.00"),
+      charge("additional_duty", "9903.82.02", 0.5, "5000.00"),
+      ...fees(),
+    ]);
+    const alerts = computeEntryAlerts(
+      entry({ entryDate, lines: [noBase], totalDuty: "5000.00" }),
+      withMetals,
+    );
+    expect(keys(alerts)).toEqual(["missing_base_duty:line1"]);
+  });
+
+  it("at or above the gate the column-1 rate stands and the $0 sibling is a statement", () => {
+    const line = taiwanLine(
+      [
+        charge("base_duty", "8501.31.9999", 0.12, "1200.00"),
+        charge("additional_duty", "9903.05.75", 0, "0.00"),
+        ...fees(),
+      ],
+      "8501.31.9999",
+    );
+    expect(
+      computeEntryAlerts(
+        entry({ entryDate, lines: [line], totalDuty: "1200.00" }),
+        ceilingRef,
+      ),
+    ).toEqual([]);
+  });
+});

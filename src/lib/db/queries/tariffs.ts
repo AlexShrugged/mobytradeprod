@@ -272,6 +272,10 @@ export type OpenGroupMember = {
   /** Raw rate text for non-ad-valorem measures (rate null, presence-only). */
   rateText: string | null;
   exemption: boolean;
+  /** Ceiling semantics: the rate replaces the column-1 rate, on lines
+   *  whose column-1 rate is below the gate (see ProposedMeasureChange). */
+  inLieuOfBaseDuty: boolean;
+  col1RateBelow: number | null;
   countries: string[] | null;
   countriesExcluded: string[] | null;
   effectiveDate: string | null;
@@ -370,6 +374,8 @@ export async function getOpenMeasureGroups(): Promise<OpenMeasureGroup[]> {
             rate: proposed.rate,
             rateText: proposed.rateText ?? null,
             exemption: proposed.exemption,
+            inLieuOfBaseDuty: proposed.inLieuOfBaseDuty,
+            col1RateBelow: proposed.col1RateBelow ?? null,
             countries: proposed.countries,
             countriesExcluded: proposed.countriesExcluded ?? null,
             effectiveDate: proposed.effectiveDate,

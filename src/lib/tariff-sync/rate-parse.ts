@@ -1,8 +1,12 @@
 // Deterministic parse of Chapter 99 "general" rate text. The USITC idiom
 // for an additional duty is "The duty provided in the applicable subheading
-// + 25%"; a bare "The duty provided in the applicable subheading" (no
-// surcharge) marks an exemption/in-transit line. Anything compound or
-// specific stays unparsed and a human supplies the rate at review time.
+// + 25%" (older headings spell the plus out); a bare "The duty provided in
+// the applicable subheading" (no surcharge) marks an exemption/in-transit
+// line; a bare "25%" is a rate charged IN LIEU of the column-1 rate — the
+// ceiling-heading shape ("articles of Taiwan with a column 1 rate less than
+// 10 percent" at 10%), whose threshold parseColumnOneThreshold reads from
+// the article text. Anything compound or specific stays unparsed and a
+// human supplies the rate at review time.
 
 import type { ParsedBaseRate, ParsedRate } from "./types";
 
@@ -15,7 +19,7 @@ export function parseGeneralRate(text: string): ParsedRate {
   if (NONE_TEXTS.has(lower)) return { kind: "none" };
 
   const additional = lower.match(
-    /^the duty provided in the applicable subheading\s*(?:\+\s*([\d.]+)\s*%)?\s*$/,
+    /^the duty provided in the applicable subheading\s*(?:(?:\+|plus)\s*([\d.]+)\s*%)?\s*$/,
   );
   if (additional) {
     if (additional[1] === undefined) return { kind: "none" };
@@ -57,6 +61,21 @@ export function parseBaseRate(text: string): ParsedBaseRate {
   if (hasAdValorem && hasSpecific) return { rateType: "compound", rate: null };
   if (hasSpecific) return { rateType: "specific", rate: null };
   return { rateType: "other", rate: null };
+}
+
+/** The column-1 rate threshold a ceiling heading names in its article
+ *  text — "with an ad valorem (or ad valorem equivalent) rate of duty under
+ *  column 1 less than 15 percent" (autos: "under column 1-General or column
+ *  1-Special less than 15 percent") → 0.15. Null when the text names none;
+ *  the sibling "equal to or greater than" heading is an exemption row and
+ *  never needs one. */
+export function parseColumnOneThreshold(description: string): number | null {
+  const m = description.match(
+    /rate of duty under column 1[\s\S]{0,60}?less than\s+([\d.]+)\s*percent/i,
+  );
+  if (!m) return null;
+  const pct = Number(m[1]);
+  return Number.isFinite(pct) && pct > 0 ? round6(pct / 100) : null;
 }
 
 const round6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;

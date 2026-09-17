@@ -1,0 +1,1 @@
+ALTER TABLE "trade_measures" ADD COLUMN "col1_rate_below" numeric(10, 6);

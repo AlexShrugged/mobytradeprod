@@ -8,7 +8,7 @@ import { findDuplicateDocument, sha256Hex } from "@/lib/documents/content-hash";
 import type { DuplicateUpload } from "@/lib/documents/duplicates";
 import { resolveSourceId } from "@/lib/documents/source";
 import { UPLOAD_KEY_RE } from "@/lib/documents/upload-key";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 import { inferDocType } from "@/lib/processing";
 import { getFileStore } from "@/lib/storage";
 
@@ -44,6 +44,9 @@ export async function POST(request: Request) {
   }
 
   const orgId = await getCurrentOrgId();
+  // Same stamp as the server upload route: the person behind a native
+  // upload, shown as the Data page's Source.
+  const uploadedBy = await getCurrentActorName();
 
   const resolved = await resolveSourceId(orgId, parsed.data.sourceId ?? null);
   if (!resolved.ok) {
@@ -106,6 +109,7 @@ export async function POST(request: Request) {
         docType: inferDocType(uploadItem.fileName),
         status: "pending",
         sourceId,
+        uploadedBy,
         contentHash,
       })
       .returning();

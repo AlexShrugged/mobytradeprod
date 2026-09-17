@@ -24,7 +24,7 @@ import {
   STACKING_SEED,
 } from "../src/lib/db/seed-data/tariff";
 import { ADCVD_ORDER_SEED } from "../src/lib/db/seed-data/adcvd-orders";
-import { buildStory, VENDOR_SEED } from "../src/lib/db/seed-data/story";
+import { buildStory, ORG_SEED, VENDOR_SEED } from "../src/lib/db/seed-data/story";
 import type { DocLinkSeed } from "../src/lib/db/seed-data/story";
 import { normalizeHts } from "../src/lib/duty/calculator";
 import { loadReferenceData } from "../src/lib/duty/reference";
@@ -170,6 +170,8 @@ async function main() {
         sailedOnOrAfter: m.sailedOnOrAfter ?? null,
         sailedOnOrBefore: m.sailedOnOrBefore ?? null,
         inLieuOfBaseDuty: m.inLieuOfBaseDuty,
+        col1RateBelow:
+          m.col1RateBelow == null ? null : m.col1RateBelow.toFixed(6),
         notes: m.notes,
       })
       .returning({ id: schema.tradeMeasures.id });
@@ -292,6 +294,9 @@ async function main() {
         docType: d.docType,
         status: "processed",
         sourceId: sourceIdByKind[d.sourceKind],
+        // Native uploads name the operator; channel-delivered files do not.
+        uploadedBy:
+          d.sourceKind === "manual_upload" ? ORG_SEED.defaultActorName : null,
         extractedData: d.extractedData,
         processedBy: "stub",
         uploadedAt: d.uploadedAt,

@@ -2,6 +2,7 @@
 // and (per the roadmap's design principles) never an LLM output. Money is
 // integer cents throughout; rates are decimal fractions.
 
+import type { HtsRateTypeValue } from "../db/schema";
 import { resolveSpiEligibility } from "./special-rates";
 import type {
   ExpectedLineCharges,
@@ -111,11 +112,71 @@ export function applyStacking(
   return { applicable, suppressed };
 }
 
+/** The column-1 rate that governs a line before any Chapter 99 measure:
+ *  the schedule row of the entry's day, with an eligible SPI claim's
+ *  special rate swapped in. `rateType` null = the code is not in the
+ *  reference (or is itself a Chapter 98/99 code) — no base duty at all;
+ *  `rate` null with a rateType = known but not computable (specific/
+ *  compound). Shared by the base-duty expectation and the ceiling gate so
+ *  both read the same rate. */
+export type ColumnOneRate = {
+  schedule: HtsRef | undefined;
+  rate: number | null;
+  rateType: HtsRateTypeValue | null;
+  claim: ExpectedLineCharges["baseDutyClaim"];
+};
+
+export function resolveColumnOneRate(
+  line: Pick<ExpectedLineInput, "htsDigits" | "entryDate" | "spi">,
+  ref: ReferenceData,
+): ColumnOneRate {
+  const schedule = resolveBaseSchedule(line.htsDigits, line.entryDate, ref);
+  if (!schedule || schedule.chapter >= 98) {
+    return { schedule, rate: null, rateType: null, claim: null };
+  }
+  // A declared SPI is the broker claiming an FTA/GSP preference — the same
+  // claim doctrine as a $0 exclusion code. A schedule-supported claim swaps
+  // the special rate in as the expectation; an unsupported or unverifiable
+  // one leaves the general rate standing and lets the audit decide what
+  // the claim's status permits it to say.
+  const spi = line.spi?.trim() || null;
+  let claim: ExpectedLineCharges["baseDutyClaim"] = null;
+  if (spi) {
+    const eligibility = resolveSpiEligibility(schedule.col1Special, spi);
+    claim = {
+      spi,
+      status: eligibility.status,
+      rateText: eligibility.status === "eligible" ? eligibility.rateText : null,
+    };
+    if (eligibility.status === "eligible") {
+      // Specific/compound special rate: known but not computable.
+      if (eligibility.rate === null) {
+        return { schedule, rate: null, rateType: "other", claim };
+      }
+      return {
+        schedule,
+        rate: eligibility.rate,
+        rateType: eligibility.rate === 0 ? "free" : "ad_valorem",
+        claim,
+      };
+    }
+  }
+  if (schedule.rateType === "free") {
+    return { schedule, rate: 0, rateType: "free", claim };
+  }
+  if (schedule.rateType === "ad_valorem" && schedule.rate !== null) {
+    return { schedule, rate: schedule.rate, rateType: "ad_valorem", claim };
+  }
+  // Specific/compound/other: known but not computable in v1.
+  return { schedule, rate: null, rateType: schedule.rateType, claim };
+}
+
 /**
  * Which trade measures should appear on a declaration line, given its HTS,
  * country of origin, entry date, and sail window. Gate order mirrors the
  * legacy engine: active window -> product scope (all-products or prefix
- * match) -> country of origin (null = all) -> sail conditions -> stacking.
+ * match) -> country of origin (null = all) -> column-1 rate gate (ceiling
+ * headings) -> sail conditions -> stacking.
  *
  * Sail gate semantics (measures are always liability rows — exemption
  * Chapter 99 rows never become MeasureRefs): a sail-conditioned measure is
@@ -127,7 +188,7 @@ export function applyStacking(
 export function resolveExpectedMeasures(
   input: Pick<
     ExpectedLineInput,
-    "htsDigits" | "countryOfOrigin" | "entryDate" | "sail"
+    "htsDigits" | "countryOfOrigin" | "entryDate" | "sail" | "spi"
   >,
   ref: ReferenceData,
 ): {
@@ -138,6 +199,9 @@ export function resolveExpectedMeasures(
   const sail = input.sail ?? null;
   let sailEvaluated = false;
   let sailAssumed = false;
+  // Resolved once per line for the ceiling gate; the same resolution feeds
+  // the base-duty expectation in computeExpectedCharges.
+  const col1Rate = resolveColumnOneRate(input, ref).rate;
 
   const candidates = ref.measures.filter((m) => {
     if (!activeOn(input.entryDate, m.effectiveDate, m.endDate)) return false;
@@ -163,6 +227,18 @@ export function resolveExpectedMeasures(
       m.countriesExcluded &&
       input.countryOfOrigin !== null &&
       m.countriesExcluded.includes(input.countryOfOrigin)
+    ) {
+      return false;
+    }
+    // Column-1 rate gate: a ceiling heading reaches only lines whose
+    // column-1 rate is below its threshold — at or above it, the sibling
+    // exemption heading files at $0 and the column-1 rate stands. An
+    // unknown or non-computable column-1 rate cannot be gated and keeps
+    // the measure (expectations bias toward duty owed, same as sail).
+    if (
+      m.col1RateBelow != null &&
+      col1Rate !== null &&
+      col1Rate >= m.col1RateBelow - 1e-9
     ) {
       return false;
     }
@@ -329,56 +405,24 @@ export function computeExpectedCharges(
 
   const inLieu = applicable.find((m) => m.inLieuOfBaseDuty) ?? null;
   // Base rates are entry-date-aware: the schedule row of the entry's day,
-  // not necessarily today's (change-tiling windows; see resolveBaseSchedule).
-  const schedule = resolveBaseSchedule(line.htsDigits, line.entryDate, ref);
-
+  // not necessarily today's (change-tiling windows; see resolveBaseSchedule
+  // via resolveColumnOneRate). An in-lieu measure — a ceiling heading —
+  // replaces the column-1 rate: the amount zeroes, the rate stays for
+  // display.
+  const col1 = resolveColumnOneRate(line, ref);
   let baseDuty: ExpectedLineCharges["baseDuty"] = null;
-  let baseDutyClaim: ExpectedLineCharges["baseDutyClaim"] = null;
-  if (schedule && schedule.chapter < 98) {
-    // A declared SPI is the broker claiming an FTA/GSP preference — the
-    // same claim doctrine as a $0 exclusion code. A schedule-supported
-    // claim swaps the special rate in as the expectation; an unsupported or
-    // unverifiable one leaves the general rate standing and lets the audit
-    // decide what the claim's status permits it to say.
-    const spi = line.spi?.trim() || null;
-    if (spi) {
-      const eligibility = resolveSpiEligibility(schedule.col1Special, spi);
-      baseDutyClaim = {
-        spi,
-        status: eligibility.status,
-        rateText: eligibility.status === "eligible" ? eligibility.rateText : null,
-      };
-      if (eligibility.status === "eligible") {
-        baseDuty =
-          eligibility.rate === null
-            ? // Specific/compound special rate: known but not computable.
-              { rate: null, amountCents: null, rateType: "other" }
-            : {
-                rate: eligibility.rate,
-                amountCents:
-                  inLieu || eligibility.rate === 0
-                    ? 0
-                    : Math.round(eligibility.rate * line.enteredValueCents),
-                rateType: eligibility.rate === 0 ? "free" : "ad_valorem",
-              };
-      }
-    }
-    if (baseDuty === null) {
-      if (schedule.rateType === "free") {
-        baseDuty = { rate: 0, amountCents: 0, rateType: "free" };
-      } else if (schedule.rateType === "ad_valorem" && schedule.rate !== null) {
-        baseDuty = {
-          rate: schedule.rate,
-          amountCents: inLieu
-            ? 0
-            : Math.round(schedule.rate * line.enteredValueCents),
-          rateType: "ad_valorem",
-        };
-      } else {
-        // Specific/compound/other: known but not computable in v1.
-        baseDuty = { rate: null, amountCents: null, rateType: schedule.rateType };
-      }
-    }
+  if (col1.rateType !== null) {
+    baseDuty =
+      col1.rate === null
+        ? { rate: null, amountCents: null, rateType: col1.rateType }
+        : {
+            rate: col1.rate,
+            amountCents:
+              inLieu || col1.rate === 0
+                ? 0
+                : Math.round(col1.rate * line.enteredValueCents),
+            rateType: col1.rateType,
+          };
   }
 
   return {
@@ -393,7 +437,10 @@ export function computeExpectedCharges(
     })),
     suppressed,
     baseDutyZeroedBy: inLieu ? inLieu.authority : null,
-    baseDutyClaim,
+    baseDutyReplacedBy: inLieu
+      ? { name: inLieu.name, ch99Code: inLieu.ch99Code, rate: inLieu.rate }
+      : null,
+    baseDutyClaim: col1.claim,
     sailBasis,
   };
 }

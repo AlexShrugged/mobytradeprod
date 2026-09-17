@@ -4,7 +4,7 @@ import { db, schema } from "@/lib/db";
 import { findDuplicateDocument, sha256Hex } from "@/lib/documents/content-hash";
 import type { DuplicateUpload } from "@/lib/documents/duplicates";
 import { resolveSourceId } from "@/lib/documents/source";
-import { getCurrentOrgId } from "@/lib/org";
+import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 import { inferDocType } from "@/lib/processing";
 import { getFileStore } from "@/lib/storage";
 
@@ -27,6 +27,9 @@ export async function POST(request: Request) {
   }
 
   const orgId = await getCurrentOrgId();
+  // The person behind a native upload — the Data page's Source for rows
+  // that came through the dropzone rather than an automated channel.
+  const uploadedBy = await getCurrentActorName();
 
   const rawSourceId = formData.get("sourceId");
   const resolved = await resolveSourceId(
@@ -62,6 +65,7 @@ export async function POST(request: Request) {
         docType: inferDocType(file.name),
         status: "pending",
         sourceId,
+        uploadedBy,
         contentHash,
       })
       .returning();

@@ -36,6 +36,22 @@ export function countriesLabel(v: {
     : "all countries";
 }
 
+/** How the rate relates to the column-1 rate: an additive surcharge, or a
+ *  ceiling heading charged in lieu of it (optionally gated to lines below
+ *  a column-1 threshold). */
+export function baseDutyLabel(v: {
+  inLieuOfBaseDuty?: boolean;
+  col1RateBelow?: number | null;
+}): string {
+  const gate =
+    v.col1RateBelow != null
+      ? `, only on lines with a column-1 rate below ${pct(v.col1RateBelow)}`
+      : "";
+  return v.inLieuOfBaseDuty
+    ? `in lieu of the column-1 rate${gate}`
+    : `added to the column-1 rate${gate}`;
+}
+
 export function coverageLabel(v: {
   scope: "all_products" | "hts_list";
   prefixes: string[];
@@ -67,6 +83,9 @@ export function diffRevisionFields(
     rateLabel({ rate: live.rate, rateText: live.rateText, exemption: live.exemption }),
     rateLabel({ rate: proposed.rate, rateText: proposed.rateText, exemption: proposed.exemption }),
   );
+  if (!proposed.exemption) {
+    push("Base duty", baseDutyLabel(live), baseDutyLabel(proposed));
+  }
   push("Countries", countriesLabel(live), countriesLabel(proposed));
   push(
     "Coverage",

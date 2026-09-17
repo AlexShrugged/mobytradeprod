@@ -39,8 +39,23 @@ const AUTHORITY_LABEL: Record<string, string> = {
 
 function memberRateLabel(m: OpenMeasureGroup["members"][number]): string {
   if (m.exemption) return "exempt";
-  if (m.rate !== null) return formatRate(m.rate);
-  return m.rateText ?? "?";
+  const rate = m.rate !== null ? formatRate(m.rate) : (m.rateText ?? "?");
+  return m.inLieuOfBaseDuty ? `${rate} in lieu` : rate;
+}
+
+/** Hover text for the rate cell: the raw text of a non-ad-valorem rate, or
+ *  a ceiling heading's column-1 gate. */
+function memberRateTitle(
+  m: OpenMeasureGroup["members"][number],
+): string | undefined {
+  if (m.exemption) return undefined;
+  if (m.rate === null) return m.rateText ?? undefined;
+  if (m.inLieuOfBaseDuty) {
+    return m.col1RateBelow != null
+      ? `In lieu of the column-1 rate, on lines with a column-1 rate below ${formatRate(m.col1RateBelow)}`
+      : "In lieu of the column-1 rate";
+  }
+  return undefined;
 }
 
 export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
@@ -207,7 +222,7 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
                     </td>
                     <td
                       className="max-w-40 truncate px-2 py-1 font-mono"
-                      title={m.rate === null && !m.exemption ? (m.rateText ?? undefined) : undefined}
+                      title={memberRateTitle(m)}
                     >
                       {memberRateLabel(m)}
                     </td>

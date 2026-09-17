@@ -579,6 +579,13 @@ export const documents = pgTable(
     sourceId: uuid("source_id").references(() => integrationSources.id, {
       onDelete: "set null",
     }),
+    // Who delivered it when a person did: the uploading user's display name
+    // (same vocabulary as field_changes.actor), stamped by the two upload
+    // routes and the catalog importer, inherited by packet children. Null
+    // on automated channels (the source row is the provenance there) and on
+    // rows uploaded before this existed. The Data page's Source column shows
+    // the channel for automated sources and this name for native uploads.
+    uploadedBy: text("uploaded_by"),
     // Entry-packet parent-child: a packet child is an ordinary document row
     // (own status/extraction/links lifecycle) pointing at its packet parent.
     // Children share the parent's storage_key — page_range (1-indexed pages
@@ -985,8 +992,23 @@ export const tradeMeasures = pgTable(
     predecessorId: uuid("predecessor_id").references(
       (): AnyPgColumn => tradeMeasures.id,
     ),
-    // When true, an applicable measure replaces (zeroes) the base duty.
+    // When true, an applicable measure replaces (zeroes) the base duty: the
+    // Chapter 99 rate is charged INSTEAD of the column-1 rate. The USITC
+    // idiom for this is a bare rate in the heading's general column ("10%");
+    // additive surcharges read "The duty provided in the applicable
+    // subheading + 10%".
     inLieuOfBaseDuty: boolean("in_lieu_of_base_duty").notNull().default(false),
+    // Column-1 rate gate: the measure applies only to lines whose column-1
+    // ad valorem rate (the eligible special rate when an SPI is claimed,
+    // else the general rate) is strictly BELOW this decimal fraction. Null =
+    // no gate. Together with in_lieu_of_base_duty this is a CEILING heading
+    // ("articles of Taiwan with a column 1 rate less than 10 percent" at
+    // 10%): the line's total duty becomes max(column-1, ceiling), and the
+    // sibling heading for lines at or above the threshold is a plain $0
+    // exemption row. A non-computable column-1 rate (specific/compound, or
+    // a code absent from the schedule) cannot be gated and keeps the measure
+    // applicable — expectations bias toward duty owed, as with sail.
+    col1RateBelow: numeric("col1_rate_below", { precision: 10, scale: 6 }),
     notes: text("notes"),
     ...timestamps,
   },

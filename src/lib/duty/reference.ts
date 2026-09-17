@@ -162,6 +162,8 @@ export function buildReferenceData(
       sailedOnOrAfter: m.sailedOnOrAfter,
       sailedOnOrBefore: m.sailedOnOrBefore,
       inLieuOfBaseDuty: m.inLieuOfBaseDuty,
+      col1RateBelow:
+        m.col1RateBelow === null ? null : Number(m.col1RateBelow),
       ch99Code: h.code,
       ch99Digits: h.codeDigits,
       rate: h.rate === null ? null : Number(h.rate),

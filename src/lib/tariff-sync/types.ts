@@ -95,7 +95,16 @@ export type ProposedMeasureChange = {
    *  fraction ("$80/net ton", "4.4¢/kg + 3.2%"). */
   rateText?: string | null;
   exemption: boolean;
+  /** The rate is charged INSTEAD of the column-1 rate — the USITC idiom is
+   *  a bare "10%" in the general column (additive surcharges read "The
+   *  duty provided in the applicable subheading + 10%"). */
   inLieuOfBaseDuty: boolean;
+  /** Column-1 rate gate (trade_measures.col1_rate_below): the measure
+   *  reaches only lines whose column-1 rate is strictly below this decimal
+   *  fraction. With inLieuOfBaseDuty this is a CEILING heading. Optional —
+   *  absent on proposals staged before the field existed (change
+   *  revisions then preserve the live measure's gate); null = no gate. */
+  col1RateBelow?: number | null;
   prefixes: string[];
   notes: string | null;
 };
@@ -134,6 +143,9 @@ export type LiveMeasureSnapshot = {
   rateType?: HtsRateTypeValue;
   rateText?: string | null;
   exemption: boolean;
+  /** Optional — absent on snapshots taken before the fields existed. */
+  inLieuOfBaseDuty?: boolean;
+  col1RateBelow?: number | null;
   description: string;
   prefixes: string[];
 };

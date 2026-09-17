@@ -46,7 +46,9 @@ const duplicateColumns = {
 };
 
 // The documents table's Source column: which intake channel delivered the
-// file (manual upload / SFTP / email inbox / ERP). Null on legacy rows.
+// file (manual upload / SFTP / email inbox / ERP), null on legacy rows —
+// paired on read with documents.uploaded_by (documents/source-label.ts):
+// the channel for automated sources, the person for native uploads.
 export type DocumentWithSource = DocumentListItem & {
   sourceName: string | null;
   sourceKind: IntegrationKind | null;

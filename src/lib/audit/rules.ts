@@ -14,7 +14,12 @@
 // Relative imports on purpose — this module runs under the tsx seed script.
 
 import { computeExpectedCharges, isExemptionActive } from "../duty/calculator";
-import type { ReferenceData, SailBasis, SailInfo } from "../duty/types";
+import type {
+  ExpectedLineCharges,
+  ReferenceData,
+  SailBasis,
+  SailInfo,
+} from "../duty/types";
 import type {
   AuditAlertTypeValue,
   AuditSeverityValue,
@@ -192,6 +197,44 @@ export const fmt = (cents: number) =>
     maximumFractionDigits: 2,
   })}`;
 const pctLabel = (rate: number) => `${Math.round(rate * 10000) / 100}%`;
+
+/** The base-duty expectation the audit compares against. The calculator
+ *  zeroes the column-1 rate under an in-lieu (ceiling) heading on SCOPE;
+ *  the audit is claim-aware: a declared $0 exclusion code of that heading's
+ *  family asserts the heading does not reach the line, so the replacement
+ *  is dropped and the column-1 rate stands at its schedule amount. */
+function auditBaseDuty(
+  expected: ExpectedLineCharges,
+  declaredDigits: Set<string | null>,
+  enteredCents: number,
+): {
+  rate: number | null;
+  amountCents: number | null;
+  replacedBy: ExpectedLineCharges["baseDutyReplacedBy"];
+} | null {
+  const base = expected.baseDuty;
+  if (base === null) return null;
+  const replacedBy = expected.baseDutyReplacedBy;
+  if (replacedBy === null) {
+    return { rate: base.rate, amountCents: base.amountCents, replacedBy: null };
+  }
+  const inLieu = expected.measures.find((m) => m.inLieuOfBaseDuty);
+  const claimedAway =
+    inLieu?.exclusionDigits.some((d) => declaredDigits.has(d)) ?? false;
+  if (!claimedAway) {
+    return { rate: base.rate, amountCents: base.amountCents, replacedBy };
+  }
+  return {
+    rate: base.rate,
+    amountCents:
+      base.rate === null
+        ? null
+        : base.rate === 0
+          ? 0
+          : Math.round(base.rate * enteredCents),
+    replacedBy: null,
+  };
+}
 
 /** error > $50 or > 10%; warning > $5 or > 2%; else info. */
 export function moneySeverity(
@@ -457,6 +500,14 @@ export function computeEntryAlerts(
         expected.measures.map((m) => m.authority),
       );
 
+      // The base-duty expectation the audit compares against, claim-aware:
+      // an in-lieu heading zeroes the column-1 rate on SCOPE, but a
+      // declared $0 exclusion of that heading's family asserts the heading
+      // does not reach the line (a metals line claiming 9903.05.90 beside
+      // its 232 charge) — and then the column-1 rate stands, exactly as a
+      // declared trigger-family exclusion negates a carve-out displacement.
+      const auditBase = auditBaseDuty(expected, declaredDigits, enteredCents);
+
       // Rule 1: expected measure with no matching charge. A declared
       // exclusion code ($0 claim) satisfies its parent measure.
       for (const m of expected.measures) {
@@ -509,16 +560,16 @@ export function computeEntryAlerts(
       if (
         !hasBaseCharge &&
         claim?.status !== "unverifiable" &&
-        expected.baseDuty !== null &&
-        expected.baseDuty.rate !== null &&
-        expected.baseDuty.rate > 0 &&
-        expected.baseDuty.amountCents !== null &&
-        expected.baseDuty.amountCents > 0
+        auditBase !== null &&
+        auditBase.rate !== null &&
+        auditBase.rate > 0 &&
+        auditBase.amountCents !== null &&
+        auditBase.amountCents > 0
       ) {
         const rateClause =
           claim?.status === "eligible"
-            ? `a ${pctLabel(expected.baseDuty.rate)} special rate under SPI ${claim.spi}`
-            : `a ${pctLabel(expected.baseDuty.rate)} general rate`;
+            ? `a ${pctLabel(auditBase.rate)} special rate under SPI ${claim.spi}`
+            : `a ${pctLabel(auditBase.rate)} general rate`;
         const claimClause =
           claim?.status === "ineligible"
             ? ` The declared SPI ${claim.spi} is not among this code's special-rate programs.`
@@ -528,10 +579,10 @@ export function computeEntryAlerts(
           alertType: "missing_measure",
           severity: "warning",
           label: "Missing base duty",
-          message: `Line ${line.lineNumber} (${line.htsCode}) has ${rateClause} (expected ${fmt(expected.baseDuty.amountCents)}), but no base duty charge was declared.${claimClause}`,
+          message: `Line ${line.lineNumber} (${line.htsCode}) has ${rateClause} (expected ${fmt(auditBase.amountCents)}), but no base duty charge was declared.${claimClause}`,
           details: {
-            expected_rate: expected.baseDuty.rate,
-            expected_amount: dollars(expected.baseDuty.amountCents),
+            expected_rate: auditBase.rate,
+            expected_amount: dollars(auditBase.amountCents),
             claimed_spi: claim?.spi ?? null,
             line_number: line.lineNumber,
             sku: line.sku,
@@ -624,13 +675,18 @@ export function computeEntryAlerts(
         let expectedAmountCents: number | null = null;
         let chargeRefKey: string | null = null;
 
+        // A ceiling heading replaces the column-1 rate: the correct filing
+        // is $0 base duty beside the heading's own charge, so the base
+        // comparison rate is 0 — a base duty charged anyway is an
+        // overpayment, never the schedule rate "mismatching" itself.
+        // (auditBase already dropped the replacement when the line claims
+        // the heading's exclusion.)
+        const replacedBy =
+          c.chargeType === "base_duty" ? (auditBase?.replacedBy ?? null) : null;
         if (c.chargeType === "base_duty") {
-          if (
-            expected.baseDuty?.rate != null &&
-            expected.baseDuty.amountCents !== null
-          ) {
-            expectedRate = expected.baseDuty.rate;
-            expectedAmountCents = expected.baseDuty.amountCents;
+          if (auditBase?.rate != null && auditBase.amountCents !== null) {
+            expectedRate = replacedBy ? 0 : auditBase.rate;
+            expectedAmountCents = auditBase.amountCents;
             chargeRefKey = "base";
           }
         } else if (
@@ -674,7 +730,9 @@ export function computeEntryAlerts(
             alertType: "rate_mismatch",
             severity: moneySeverity(impliedDiff, expectedAmountCents),
             label: "Rate mismatch",
-            message: `Line ${line.lineNumber} ${c.htsCode ?? "base duty"} is declared at ${pctLabel(declaredRate)}; the official rate${spiClause} is ${pctLabel(expectedRate)}.`,
+            message: replacedBy
+              ? `Line ${line.lineNumber} base duty is declared at ${pctLabel(declaredRate)}; ${replacedBy.name} (${replacedBy.ch99Code}) applies in lieu of the column-1 rate on this line, so no base duty is due.`
+              : `Line ${line.lineNumber} ${c.htsCode ?? "base duty"} is declared at ${pctLabel(declaredRate)}; the official rate${spiClause} is ${pctLabel(expectedRate)}.`,
             details: {
               expected_rate: expectedRate,
               actual_rate: declaredRate,
@@ -700,7 +758,9 @@ export function computeEntryAlerts(
             alertType: "amount_mismatch",
             severity: moneySeverity(diff, expectedAmountCents),
             label: "Duty amount mismatch",
-            message: `Line ${line.lineNumber} ${c.htsCode ?? "base duty"} was charged ${fmt(amountCents)}; ${pctLabel(expectedRate)} of the ${fmt(enteredCents)} entered value is ${fmt(expectedAmountCents)} (${amountCents > expectedAmountCents ? "overpaid" : "underpaid"} ${fmt(diff)}).`,
+            message: replacedBy
+              ? `Line ${line.lineNumber} base duty was charged ${fmt(amountCents)}; ${replacedBy.name} (${replacedBy.ch99Code}) applies in lieu of the column-1 rate on this line, so the expected base duty is $0 (overpaid ${fmt(diff)}).`
+              : `Line ${line.lineNumber} ${c.htsCode ?? "base duty"} was charged ${fmt(amountCents)}; ${pctLabel(expectedRate)} of the ${fmt(enteredCents)} entered value is ${fmt(expectedAmountCents)} (${amountCents > expectedAmountCents ? "overpaid" : "underpaid"} ${fmt(diff)}).`,
             details: {
               expected_amount: dollars(expectedAmountCents),
               actual_amount: dollars(amountCents),

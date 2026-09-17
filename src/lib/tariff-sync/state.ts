@@ -56,6 +56,8 @@ export async function loadTariffSyncState(db: DbClient): Promise<TariffSyncState
       rateType: h.rateType,
       rateText: h.col1General,
       exemption: h.exemption,
+      inLieuOfBaseDuty: m.inLieuOfBaseDuty,
+      col1RateBelow: m.col1RateBelow === null ? null : Number(m.col1RateBelow),
       description: h.description,
       prefixes: prefixesByMeasure.get(m.id) ?? [],
     };

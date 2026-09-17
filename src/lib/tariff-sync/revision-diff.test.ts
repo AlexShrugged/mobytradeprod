@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  baseDutyLabel,
   countriesLabel,
   coverageLabel,
   diffRevisionFields,
@@ -122,5 +123,42 @@ describe("diffRevisionFields", () => {
     expect(rows).toEqual([
       { field: "Rate", live: "25%", proposed: "$80/net ton" },
     ]);
+  });
+});
+
+describe("base duty relation (ceiling headings)", () => {
+  it("labels additive, in-lieu, and gated shapes", () => {
+    expect(baseDutyLabel({ inLieuOfBaseDuty: false })).toBe(
+      "added to the column-1 rate",
+    );
+    expect(baseDutyLabel({ inLieuOfBaseDuty: true })).toBe(
+      "in lieu of the column-1 rate",
+    );
+    expect(baseDutyLabel({ inLieuOfBaseDuty: true, col1RateBelow: 0.1 })).toBe(
+      "in lieu of the column-1 rate, only on lines with a column-1 rate below 10%",
+    );
+  });
+
+  it("diffs the shape when a flat live measure gains the ceiling", () => {
+    const rows = diffRevisionFields(
+      live(),
+      proposed({ inLieuOfBaseDuty: true, col1RateBelow: 0.125 }),
+    );
+    expect(rows).toEqual([
+      {
+        field: "Base duty",
+        live: "added to the column-1 rate",
+        proposed:
+          "in lieu of the column-1 rate, only on lines with a column-1 rate below 12.5%",
+      },
+    ]);
+  });
+
+  it("never diffs the shape of an exemption row", () => {
+    const rows = diffRevisionFields(
+      live({ exemption: true, rate: 0 }),
+      proposed({ exemption: true, rate: 0, inLieuOfBaseDuty: true }),
+    );
+    expect(rows.map((r) => r.field)).not.toContain("Base duty");
   });
 });

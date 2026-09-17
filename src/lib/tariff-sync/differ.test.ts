@@ -334,3 +334,88 @@ describe("classifyAuthority — prefix beats weak product cues", () => {
     ).toBe("section_301");
   });
 });
+
+describe("ceiling headings: rate idiom → in lieu + column-1 gate", () => {
+  it("a bare rate with a 'less than N percent' clause stages in lieu, gated", () => {
+    const taiwan = row({
+      htsno: "9903.05.76",
+      description:
+        "Except for products described in headings 9903.05.85–9903.05.92 and 9903.06.14–9903.06.15, articles the product of Taiwan, with an ad valorem (or ad valorem equivalent) rate of duty under column 1 less than 10 percent, as provided for in U.S. note 52 to this subchapter",
+      general: "10%",
+    });
+    const { revisions } = diffRelease([taiwan], stateWith(), []);
+    expect(revisions).toHaveLength(1);
+    const p = revisions[0].proposed;
+    expect(p.exemption).toBe(false);
+    expect(p.rate).toBe(0.1);
+    expect(p.inLieuOfBaseDuty).toBe(true);
+    expect(p.col1RateBelow).toBe(0.1);
+    expect(p.countries).toEqual(["TW"]);
+  });
+
+  it("a bare rate with no clause is a ceiling at its own rate", () => {
+    const timber = row({
+      htsno: "9903.76.24",
+      description:
+        "Wood products of Taiwan as provided for in subdivisions (d) and (f) of U.S. note 37 of this subchapter",
+      general: "15%",
+    });
+    const { revisions } = diffRelease([timber], stateWith(), []);
+    expect(revisions[0].proposed.inLieuOfBaseDuty).toBe(true);
+    expect(revisions[0].proposed.col1RateBelow).toBe(0.15);
+  });
+
+  it("the additive idiom stays additive and ungated", () => {
+    const algeria = row({
+      htsno: "9903.05.20",
+      description:
+        "Except for products described in headings 9903.05.85–9903.05.92, articles the product of Algeria, as provided for in U.S. note 52 to this subchapter",
+      general: "The duty provided in the applicable subheading + 12.5%",
+    });
+    const { revisions } = diffRelease([algeria], stateWith(), []);
+    expect(revisions[0].proposed.inLieuOfBaseDuty).toBe(false);
+    expect(revisions[0].proposed.col1RateBelow).toBeNull();
+  });
+
+  it("a live measure stored flat under a bare-rate heading stages a rate_change carrying the ceiling", () => {
+    const description =
+      "articles the product of Taiwan, with an ad valorem rate of duty under column 1 less than 10 percent";
+    const flat = live({
+      measureId: "tw",
+      ch99Code: "9903.05.76",
+      ch99Digits: "99030576",
+      name: "Trade measure — 9903.05.76",
+      authority: "other",
+      scope: "all_products",
+      countries: ["TW"],
+      rate: 0.1,
+      description,
+      prefixes: [],
+      inLieuOfBaseDuty: false,
+      col1RateBelow: null,
+    });
+    const r = row({ htsno: "9903.05.76", description, general: "10%" });
+    const { revisions } = diffRelease([r], stateWith(flat), []);
+    expect(revisions.map((x) => x.changeType)).toEqual(["rate_change"]);
+    expect(revisions[0].proposed.inLieuOfBaseDuty).toBe(true);
+    expect(revisions[0].proposed.col1RateBelow).toBe(0.1);
+
+    // Once live agrees with the published shape, nothing stages.
+    const settled = live({ ...flat, inLieuOfBaseDuty: true, col1RateBelow: 0.1 });
+    expect(diffRelease([r], stateWith(settled), []).revisions).toEqual([]);
+  });
+
+  it("end_measure carries the live measure's ceiling shape", () => {
+    const ceiling = live({
+      ch99Code: "9903.05.76",
+      ch99Digits: "99030576",
+      rate: 0.1,
+      inLieuOfBaseDuty: true,
+      col1RateBelow: 0.1,
+    });
+    const { revisions } = diffRelease([], stateWith(ceiling), []);
+    expect(revisions[0].changeType).toBe("end_measure");
+    expect(revisions[0].proposed.inLieuOfBaseDuty).toBe(true);
+    expect(revisions[0].proposed.col1RateBelow).toBe(0.1);
+  });
+});

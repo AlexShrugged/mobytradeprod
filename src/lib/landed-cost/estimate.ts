@@ -90,8 +90,8 @@ export function computeEstimatedLandedCost(
       amountCents: expected.baseDuty.amountCents,
       source: "computed",
       rate: expected.baseDuty.rate,
-      note: expected.baseDutyZeroedBy
-        ? `Zeroed: an in-lieu-of measure (${expected.baseDutyZeroedBy}) replaces the base duty`
+      note: expected.baseDutyReplacedBy
+        ? `Zeroed: ${expected.baseDutyReplacedBy.name} (${expected.baseDutyReplacedBy.ch99Code}) applies in lieu of the column-1 rate`
         : undefined,
     });
   }

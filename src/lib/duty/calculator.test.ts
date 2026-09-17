@@ -719,3 +719,146 @@ describe("non-ad-valorem (presence-only) measures", () => {
     expect(result.measures[0].rateText).toBe("$80/net ton");
   });
 });
+
+describe("ceiling headings (in lieu of the column-1 rate, gated on it)", () => {
+  // The seed's 4% motor row, plus a 12% twin and a specific-rate twin.
+  const motor = ref.htsByDigits.get("8501314000")!;
+  const dear: HtsRef = {
+    ...motor,
+    code: "8501.31.9999",
+    codeDigits: "8501319999",
+    rate: 0.12,
+  };
+  const specific: HtsRef = {
+    ...motor,
+    code: "8501.31.8888",
+    codeDigits: "8501318888",
+    rateType: "specific",
+    rate: null,
+  };
+  const hts = new Map(ref.htsByDigits)
+    .set(dear.codeDigits, dear)
+    .set(specific.codeDigits, specific);
+  // Taiwan's note-52 heading: 10% charged instead of the column-1 rate, on
+  // lines whose column-1 rate is below 10%.
+  const ceiling = measure({
+    id: "tw-ceiling",
+    name: "Taiwan 10% ceiling",
+    authority: "other",
+    program: null,
+    scope: "all_products",
+    prefixes: [],
+    countries: ["TW"],
+    inLieuOfBaseDuty: true,
+    col1RateBelow: 0.1,
+    rate: 0.1,
+    ch99Code: "9903.05.76",
+    ch99Digits: "99030576",
+  });
+  const synthetic: ReferenceData = {
+    htsByDigits: hts,
+    measures: [ceiling],
+    stackingRules: [],
+  };
+
+  it("below the gate: the heading charges its rate in lieu of the column-1 rate", () => {
+    const r = computeExpectedCharges(line("8501.31.4000", "TW"), synthetic);
+    expect(r.measures.map((m) => m.ch99Code)).toEqual(["9903.05.76"]);
+    expect(r.measures[0].amountCents).toBe(1_000_000);
+    expect(r.baseDuty).toEqual({
+      rate: 0.04,
+      amountCents: 0,
+      rateType: "ad_valorem",
+    });
+    expect(r.baseDutyZeroedBy).toBe("other");
+    expect(r.baseDutyReplacedBy).toEqual({
+      name: "Taiwan 10% ceiling",
+      ch99Code: "9903.05.76",
+      rate: 0.1,
+    });
+  });
+
+  it("at or above the gate: the heading does not apply and the column-1 rate stands", () => {
+    const r = computeExpectedCharges(line("8501.31.9999", "TW"), synthetic);
+    expect(r.measures).toEqual([]);
+    expect(r.suppressed).toEqual([]);
+    expect(r.baseDuty).toEqual({
+      rate: 0.12,
+      amountCents: 1_200_000,
+      rateType: "ad_valorem",
+    });
+    expect(r.baseDutyReplacedBy).toBeNull();
+
+    // Exactly at the threshold is not below it.
+    const atGate: ReferenceData = {
+      ...synthetic,
+      htsByDigits: new Map(hts).set(dear.codeDigits, { ...dear, rate: 0.1 }),
+    };
+    expect(
+      computeExpectedCharges(line("8501.31.9999", "TW"), atGate).measures,
+    ).toEqual([]);
+  });
+
+  it("a non-computable or unknown column-1 rate cannot be gated and keeps the heading", () => {
+    const spec = computeExpectedCharges(line("8501.31.8888", "TW"), synthetic);
+    expect(spec.measures.map((m) => m.ch99Code)).toEqual(["9903.05.76"]);
+    expect(spec.baseDuty).toEqual({
+      rate: null,
+      amountCents: null,
+      rateType: "specific",
+    });
+
+    const unknown = computeExpectedCharges(line("7777.77.7777", "TW"), synthetic);
+    expect(unknown.measures.map((m) => m.ch99Code)).toEqual(["9903.05.76"]);
+    expect(unknown.baseDuty).toBeNull();
+  });
+
+  it("the gate reads the line's governing rate — an eligible SPI's special rate", () => {
+    // 20% general, Free under KORUS: a Korea 12.5% ceiling reaches the
+    // line only through the preference claim.
+    const korea = measure({
+      ...ceiling,
+      id: "kr-ceiling",
+      name: "Korea 12.5% ceiling",
+      countries: ["KR"],
+      col1RateBelow: 0.125,
+      rate: 0.125,
+      ch99Code: "9903.05.71",
+      ch99Digits: "99030571",
+    });
+    const korus: HtsRef = {
+      ...dear,
+      rate: 0.2,
+      col1Special: "Free (A*, AU, BH, CL, CO, IL, JO, KR, MA, OM, S, SG)",
+    };
+    const refKr: ReferenceData = {
+      htsByDigits: new Map(hts).set(dear.codeDigits, korus),
+      measures: [korea],
+      stackingRules: [],
+    };
+
+    const noClaim = computeExpectedCharges(line("8501.31.9999", "KR"), refKr);
+    expect(noClaim.measures).toEqual([]);
+    expect(noClaim.baseDuty?.amountCents).toBe(2_000_000);
+
+    const claimed = computeExpectedCharges(
+      { ...line("8501.31.9999", "KR"), spi: "KR" },
+      refKr,
+    );
+    expect(claimed.measures.map((m) => m.ch99Code)).toEqual(["9903.05.71"]);
+    expect(claimed.measures[0].amountCents).toBe(1_250_000);
+    expect(claimed.baseDuty).toEqual({ rate: 0, amountCents: 0, rateType: "free" });
+    expect(claimed.baseDutyClaim?.status).toBe("eligible");
+    expect(claimed.baseDutyReplacedBy?.ch99Code).toBe("9903.05.71");
+  });
+
+  it("an ungated in-lieu measure still replaces the base duty on every covered line", () => {
+    const flat: ReferenceData = {
+      ...synthetic,
+      measures: [measure({ ...ceiling, col1RateBelow: null })],
+    };
+    const r = computeExpectedCharges(line("8501.31.9999", "TW"), flat);
+    expect(r.measures.map((m) => m.ch99Code)).toEqual(["9903.05.76"]);
+    expect(r.baseDuty?.amountCents).toBe(0);
+  });
+});

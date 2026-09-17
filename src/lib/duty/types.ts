@@ -50,7 +50,17 @@ export type MeasureRef = {
   // on-the-water savings clauses are expressed.
   sailedOnOrAfter: string | null;
   sailedOnOrBefore: string | null;
+  // The measure's rate is charged INSTEAD of the column-1 rate (the
+  // calculator zeroes the base duty amount and keeps its rate for display).
   inLieuOfBaseDuty: boolean;
+  // Column-1 rate gate (trade_measures.col1_rate_below): the measure applies
+  // only to lines whose column-1 ad valorem rate — the eligible special
+  // rate when an SPI is claimed, else the general rate — is strictly below
+  // this decimal fraction. Absent/null = no gate. Together with
+  // inLieuOfBaseDuty this is a CEILING heading: total duty on the line
+  // becomes max(column-1, ceiling). A non-computable column-1 rate cannot
+  // be gated and keeps the measure applicable (duty-owed bias).
+  col1RateBelow?: number | null;
   ch99Code: string;
   ch99Digits: string;
   // Null = non-ad-valorem (specific/compound) — the measure is still
@@ -173,6 +183,15 @@ export type ExpectedLineCharges = {
   measures: (MeasureRef & { amountCents: number | null })[];
   suppressed: SuppressedMeasure[];
   baseDutyZeroedBy: MeasureAuthorityValue | null;
+  // The in-lieu measure whose rate replaced the column-1 rate on this line
+  // (baseDutyZeroedBy is its authority; this names it). Null = the base
+  // duty stands. A $0 base duty filed beside this measure is the correct
+  // filing, never a shortfall — CBP collects the heading's rate alone.
+  baseDutyReplacedBy: {
+    name: string;
+    ch99Code: string;
+    rate: number | null;
+  } | null;
   // The line's SPI preference claim, resolved against the schedule's
   // special-rates column. "eligible" = the claim is schedule-supported and
   // baseDuty above already carries the special rate; "ineligible" = the

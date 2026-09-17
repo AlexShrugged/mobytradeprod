@@ -55,7 +55,12 @@ reprocess the twin instead), reporting it in `duplicates`; the dropzone shows
 "Already on file". Rows that got in before hashing are hashed by the document
 sweep's backfill leg and flagged "Duplicate" on read (`duplicateOfId`, derived,
 never stored). ASC re-dragged all 15 packets of a batch on 2026-09-11 (~450 Reducto
-credits) before this existed.
+credits) before this existed. Every document records where it came from:
+`documents.source_id` (the intake channel row) plus `documents.uploaded_by` (the
+uploading user's display name on native uploads — both upload routes and the
+catalog importer stamp it, packet children inherit it; null on automated channels
+and pre-2026-09-17 rows). The Data page Source column (`documents/source-label.ts`,
+pure) shows the channel for SFTP/email/ERP and the person for native uploads.
 
 ## Customs data ingestion
 
@@ -270,6 +275,29 @@ Stop only stops rendering — the turn finishes via `after()` and
   (dry-run default). Null program =
   lineage unknown: never deduped — sync-created measures stay null until a human
   assigns the program.
+- **Ceiling headings charge in lieu of the column-1 rate, gated on it.** Two
+  Chapter 99 rate idioms exist and the sync reads them (`tariff-sync/rate-parse.ts`,
+  `differ.ts`): "The duty provided in the applicable subheading + 10%" is an
+  additive surcharge; a bare "10%" in the general column is charged INSTEAD of the
+  column-1 rate (`trade_measures.in_lieu_of_base_duty`) and, when the article text
+  says "with a column 1 rate less than 10 percent", only on lines below that gate
+  (`col1_rate_below`; a bare rate with no clause is read as a ceiling at its own
+  rate). Together they make the line's total duty max(column-1, ceiling): the
+  note-52 deal headings (Taiwan 9903.05.76 at 10%, EU .39, Japan .49, Korea .71,
+  Switzerland .74), the Korea/Taiwan 232 auto-parts headings and the four 232
+  timber deal headings all take this shape, and their siblings for lines at or
+  above the gate are plain $0 exemption rows. The calculator resolves the
+  column-1 rate first (`resolveColumnOneRate`: the eligible special rate when an
+  SPI is claimed, else the general rate; non-computable = ungated, duty-owed
+  bias), gates the measure, then zeroes the base duty amount and names the
+  heading in `baseDutyReplacedBy`. Brokers file it exactly that way ($0 base
+  duty beside the heading at its full rate — ASC 7501s, 2026-09-17), so the audit
+  compares the base rate as 0 under an in-lieu measure and the analyst prompt
+  carries the doctrine. Diagnosed 2026-09-17 from a customer report: 9903.05.76
+  stored flat made every Taiwanese line since 2026-07-24 read as 15.6% and
+  "underpaying" 5.6% base duty. `scripts/apply-ceiling-headings.ts` (dry-run
+  default) derives the shape from the live USITC text for every tracked heading
+  and flips the flags on existing reference data.
 - **SPI preference claims are claim-aware, like $0 exclusions.**
   `entry_line_items.spi` (the 7501's column-27 prefix — "KR", "A") is the broker's
   declared FTA/GSP claim; `duty/special-rates.ts` parses `hts_codes.col1_special` on
@@ -306,13 +334,27 @@ Stop only stops rendering — the turn finishes via `after()` and
   (`/api/quote-reconsider/[itemId]`). An in-place correction never fires
   (before = after). The seed derives its one demo item by running the sweep
   against the Section 301 List 1 window (QS5, EB-MTR-500W).
-- **Catalog import overwrites, for now.** The Parts page CSV/XLSX import
+- **Catalog import overwrites, for now — but an HTS change dates from the import
+  day.** The Parts page CSV/XLSX import
   (`parts/import-service.ts`; upload filed as a processed `part_catalog` document on
   the Data page) last-write-wins over existing SKUs — right for the launch use case of
   seeding an empty catalog, wrong once catalogs are live and a difference means "which
   one is correct?". Future: SKU-level conflict resolution that stages differences for
   human review instead of overwriting. Every overwrite records `field_changes` with
-  source `catalog_import`, so the history to build that on already exists.
+  source `catalog_import`, so the history to build that on already exists. The one
+  overwrite that is NOT a rewrite of history: a file code differing from a part's
+  COMMITTED code is a reclassification effective the import day (`effectiveDate:
+  today` into `updatePartHts`, since 2026-09-16) — the old classification window
+  closes yesterday, entries filed under it keep auditing against it and pick up the
+  info-level `hts_reclassified` signal instead of an `hts_discrepancy`. A blank
+  effective date ("this code was always right", the in-place correction) is only
+  expressible through the one-by-one edit on the part's classification card; a bulk
+  file cannot carry that intent. A first commit (never classified, provisional
+  classifier pick, brand-new SKU) opens open-start — and because as-of resolution
+  falls back to the current window for entries predating every window, past entries
+  on such a SKU are still judged against the imported code. Per-vendor sourcing facts
+  (COO, unit cost) stay undated in-place updates: each vendor row is its own fact and
+  the import only touches the row for the vendor the file names.
 
 ## Database
 

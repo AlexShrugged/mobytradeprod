@@ -25,6 +25,7 @@ import type { OpenRevision, OverlapNote } from "@/lib/db/queries/tariffs";
 import { formatDate } from "@/lib/format";
 import { inferProgram } from "@/lib/tariff-sync/programs";
 import {
+  baseDutyLabel,
   coverageLabel,
   diffRevisionFields,
   rateLabel,
@@ -99,6 +100,15 @@ function parseCountriesInput(text: string): string[] | null {
   return codes.length > 0 ? codes : null;
 }
 
+/** "10" / "12.5" → 0.1 / 0.125; blank or garbage → null (= no gate). */
+function parsePercentInput(text: string): number | null {
+  const t = text.trim().replace(/%$/, "");
+  if (t === "") return null;
+  const pct = Number(t);
+  if (!Number.isFinite(pct) || pct <= 0 || pct > 100) return null;
+  return Math.round((pct / 100) * 1_000_000) / 1_000_000;
+}
+
 export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
   const router = useRouter();
   const proposed = revision.proposed;
@@ -128,6 +138,17 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
         ) ?? ""),
   );
   const [worldwide, setWorldwide] = React.useState(proposed.worldwide ?? false);
+  // Ceiling semantics, reviewer-confirmed: charged in lieu of the column-1
+  // rate, on lines whose column-1 rate is below the gate. Staged from the
+  // heading's rate idiom; the reviewer corrects it from the article text.
+  const editsBaseDuty =
+    !proposed.exemption && revision.changeType !== "end_measure";
+  const [inLieu, setInLieu] = React.useState(proposed.inLieuOfBaseDuty);
+  const [thresholdText, setThresholdText] = React.useState(
+    proposed.col1RateBelow != null
+      ? String(Math.round(proposed.col1RateBelow * 10000) / 100)
+      : "",
+  );
 
   async function decide(payload: Record<string, unknown>, pending: string) {
     setBusy(true);
@@ -189,6 +210,12 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
           ? {
               program: programText.trim() === "" ? null : programText.trim(),
               worldwide,
+            }
+          : {}),
+        ...(editsBaseDuty
+          ? {
+              inLieuOfBaseDuty: inLieu,
+              col1RateBelow: parsePercentInput(thresholdText),
             }
           : {}),
       },
@@ -257,6 +284,12 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
             <span className="text-muted-foreground">Coverage: </span>
             {coverageLabel(proposed)}
           </span>
+          {!proposed.exemption ? (
+            <span>
+              <span className="text-muted-foreground">Base duty: </span>
+              {baseDutyLabel(proposed)}
+            </span>
+          ) : null}
           {proposed.exemption ? <Badge variant="secondary">exemption</Badge> : null}
         </div>
         {proposed.notes ? (
@@ -395,6 +428,35 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
             />
           </div>
         </div>
+
+        {editsBaseDuty ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex items-center gap-2 sm:mt-5">
+              <Checkbox
+                id={`inlieu-${revision.revisionId}`}
+                checked={inLieu}
+                disabled={busy}
+                onCheckedChange={(v) => setInLieu(v === true)}
+              />
+              <Label
+                htmlFor={`inlieu-${revision.revisionId}`}
+                className="text-xs"
+              >
+                In lieu of column-1 rate
+              </Label>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Column-1 rate below (%)</Label>
+              <Input
+                value={thresholdText}
+                placeholder="e.g. 10"
+                inputMode="decimal"
+                disabled={busy}
+                onChange={(e) => setThresholdText(e.target.value)}
+              />
+            </div>
+          </div>
+        ) : null}
 
         {revision.changeType === "create_measure" ? (
           <>

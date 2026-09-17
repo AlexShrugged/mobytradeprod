@@ -560,6 +560,15 @@ async function applyOne(
     sailedOnOrAfter: proposed.sailedOnOrAfter,
     sailedOnOrBefore: proposed.sailedOnOrBefore,
     inLieuOfBaseDuty: proposed.inLieuOfBaseDuty,
+    // Same contract as program: a proposal staged before the gate existed
+    // inherits the live measure's gate on tile/update — absent inherits,
+    // null clears.
+    col1RateBelow:
+      proposed.col1RateBelow === undefined
+        ? (live?.col1RateBelow ?? null)
+        : proposed.col1RateBelow === null
+          ? null
+          : proposed.col1RateBelow.toFixed(6),
     notes: proposed.notes,
   };
 

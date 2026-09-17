@@ -89,6 +89,8 @@ export type MeasureSeed = {
   sailedOnOrAfter?: string | null;
   sailedOnOrBefore?: string | null;
   inLieuOfBaseDuty: boolean;
+  // Column-1 rate gate (see trade_measures.col1_rate_below); omitted = none.
+  col1RateBelow?: number | null;
   notes: string | null;
   // Chapter 99 rows belonging to this measure. The measure's rate lives on
   // its (non-exemption) Chapter 99 row, never on the measure itself.
@@ -481,6 +483,7 @@ export function buildSeedReferenceData(day: DayFn): ReferenceData {
         sailedOnOrAfter: seed.sailedOnOrAfter ?? null,
         sailedOnOrBefore: seed.sailedOnOrBefore ?? null,
         inLieuOfBaseDuty: seed.inLieuOfBaseDuty,
+        col1RateBelow: seed.col1RateBelow ?? null,
         ch99Code: c.code,
         ch99Digits: codeDigits,
         rate: c.rate,

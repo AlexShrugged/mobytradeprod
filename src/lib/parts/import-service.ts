@@ -263,16 +263,28 @@ export async function applyCatalogImport(opts: {
       // (window tiling, review-item supersede, re-audit). Skipped when the
       // committed code already matches — a same-code import should not
       // disturb a pending review.
+      //
+      // A different code over a COMMITTED one is a reclassification from
+      // the import day, never a correction of history: the old window
+      // closes yesterday, the new one opens today, and entries filed under
+      // the old code keep auditing against it (they pick up the info-level
+      // "reclassified after filing" signal instead of a discrepancy). Only
+      // the one-by-one edit lets a human say "this code was always right"
+      // by leaving the date blank; a bulk file cannot carry that intent.
+      // A first commit (never classified, or a provisional classifier pick)
+      // has no history to protect and opens open-start like a new SKU.
       if (
         item.htsCode !== null &&
         (part.htsCode === null ||
           part.htsCodeProvisional ||
           normalizeHts(part.htsCode) !== normalizeHts(item.htsCode))
       ) {
+        const committed = part.htsCode !== null && !part.htsCodeProvisional;
         await updatePartHts(tx, orgId, part.id, item.htsCode, {
           actor,
           source: IMPORT_SOURCE,
           note: `Imported from ${file.fileName}`,
+          effectiveDate: committed ? todayIso() : null,
         });
         changed = true;
       }
@@ -402,6 +414,7 @@ export async function applyCatalogImport(opts: {
         // pipeline (sweep, process route) must never pick it up.
         status: "processed",
         sourceId: file.sourceId,
+        uploadedBy: actor,
         extractedData: {
           kind: "part_catalog_import",
           rows: opts.rowCount,

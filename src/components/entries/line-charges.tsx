@@ -107,6 +107,15 @@ export function LineCharges({ line }: { line: LineItemDetail }) {
                           should not apply
                         </Badge>
                       ) : null}
+                      {c.replacedByNote ? (
+                        <Badge
+                          variant="outline"
+                          className="font-normal text-muted-foreground"
+                          title={c.replacedByNote}
+                        >
+                          in lieu
+                        </Badge>
+                      ) : null}
                     </div>
                   </TableCell>
                 </TableRow>

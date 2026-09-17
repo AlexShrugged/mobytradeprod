@@ -41,6 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DocumentListItem, IntegrationKind } from "@/lib/db/schema";
+import { documentSourceLabel } from "@/lib/documents/source-label";
 import { docTypeLabel, formatBytes, formatDateTime } from "@/lib/format";
 import { packetRoleLabel, pageRangeLabel } from "@/lib/processing/packet";
 
@@ -51,13 +52,6 @@ export type DocumentRow = DocumentListItem & {
   sourceKind: IntegrationKind | null;
   duplicateOfId: string | null;
   duplicateOfName: string | null;
-};
-
-const sourceKindLabels: Record<IntegrationKind, string> = {
-  manual_upload: "Manual",
-  sftp: "SFTP",
-  email_inbox: "Email",
-  erp: "ERP",
 };
 
 // Packet children render directly under their parent, indented; a child
@@ -265,7 +259,7 @@ export function DocumentsTable({
                       className="text-muted-foreground"
                       title={doc.sourceName ?? undefined}
                     >
-                      {doc.sourceKind ? sourceKindLabels[doc.sourceKind] : "—"}
+                      {documentSourceLabel(doc) ?? "—"}
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={status} />

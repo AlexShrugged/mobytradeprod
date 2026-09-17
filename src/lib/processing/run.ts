@@ -116,6 +116,7 @@ export async function processDocumentRow(
             docType: part.doc_type,
             status: "pending" as const,
             sourceId: doc.sourceId,
+            uploadedBy: doc.uploadedBy,
             parentDocumentId: doc.id,
             packetRole: part.role,
             pageRange: part.pages,

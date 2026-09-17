@@ -64,6 +64,11 @@ const bodySchema = z.discriminatedUnion("action", [
     /** Explicit confirmation that null countries means every country —
      *  create_measure applies refuse worldwide scope without it. */
     worldwide: z.boolean().optional(),
+    /** Ceiling semantics, reviewer-confirmed: the rate is charged in lieu
+     *  of the column-1 rate, and only on lines whose column-1 rate is
+     *  below the threshold (decimal fraction; null clears the gate). */
+    inLieuOfBaseDuty: z.boolean().optional(),
+    col1RateBelow: z.number().gt(0).lte(1).nullish(),
     notes: z.string().nullish(),
   }),
   z.object({
@@ -183,6 +188,12 @@ export async function PATCH(
       }
       if (body.program !== undefined) proposed.program = body.program;
       if (body.worldwide !== undefined) proposed.worldwide = body.worldwide;
+      if (body.inLieuOfBaseDuty !== undefined) {
+        proposed.inLieuOfBaseDuty = body.inLieuOfBaseDuty;
+      }
+      if (body.col1RateBelow !== undefined) {
+        proposed.col1RateBelow = body.col1RateBelow;
+      }
       await tx
         .update(schema.measureRevisions)
         .set({ proposed, updatedAt: new Date() })
