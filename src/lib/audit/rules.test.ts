@@ -1719,3 +1719,103 @@ describe("ceiling headings (in lieu of the column-1 rate)", () => {
     ).toEqual([]);
   });
 });
+
+describe("rule 17: MPF within the statutory bounds", () => {
+  const mpfAlerts = (e: AuditableEntry) =>
+    computeEntryAlerts(e, ref).filter((a) => a.alertType === "mpf_bounds");
+  // FY2026 (entry() dates land in it): minimum $33.58, maximum $651.50.
+  const smallLine = cleanMotorLine({ enteredValue: "4386.00" });
+  const hugeLine = cleanMotorLine({ enteredValue: "280587.00" });
+
+  it("stays silent on a fee inside the window and on fixtures without one", () => {
+    // $10,000 × 0.3464% = $34.64, inside the window.
+    expect(mpfAlerts(entry({ mpfAmount: "34.64" }))).toEqual([]);
+    expect(mpfAlerts(entry())).toEqual([]);
+  });
+
+  it("flags the line-level ad valorem working persisted where Block 43 printed the minimum", () => {
+    // 231-7385625-0 as extracted before fee-summary.ts: $15.19 vs $33.58.
+    const [a] = mpfAlerts(
+      entry({ mpfAmount: "15.19", totalEnteredValue: "4386.00", lines: [smallLine] }),
+    );
+    expect(a.alertKey).toBe("mpf_bounds:entry");
+    expect(a.label).toBe("MPF below the minimum");
+    expect(a.severity).toBe("error");
+    expect(a.lineItemId).toBeNull();
+    expect(a.details).toMatchObject({
+      expected_amount: 33.58,
+      actual_amount: 15.19,
+      difference_amount: -18.39,
+      ad_valorem_amount: 15.19,
+      minimum_amount: 33.58,
+      maximum_amount: 651.5,
+      fiscal_year: 2026,
+      bound: "minimum",
+      exempt_line_numbers: [],
+    });
+    expect(a.message).toContain("FY2026 per-entry minimum of $33.58");
+    expect(a.message).toContain("underpaid $18.39");
+  });
+
+  it("flags an uncapped header working where Block 43 printed the maximum", () => {
+    // 231-7383835-7: $972.56 extracted, $651.50 collected.
+    const [a] = mpfAlerts(
+      entry({ mpfAmount: "972.56", totalEnteredValue: "280587.00", lines: [hugeLine] }),
+    );
+    expect(a.label).toBe("MPF above the maximum");
+    expect(a.details).toMatchObject({
+      expected_amount: 651.5,
+      actual_amount: 972.56,
+      difference_amount: 321.06,
+      bound: "maximum",
+    });
+    expect(a.message).toContain("overpaid $321.06");
+  });
+
+  it("accepts the collected minimum and maximum as filed", () => {
+    expect(mpfAlerts(entry({ mpfAmount: "33.58", lines: [smallLine] }))).toEqual([]);
+    expect(mpfAlerts(entry({ mpfAmount: "651.50", lines: [hugeLine] }))).toEqual([]);
+  });
+
+  it("is claim-aware: exempt SPI lines leave the basis, an all-exempt entry expects no fee", () => {
+    const korus = cleanMotorLine({ id: "k1", lineNumber: 1, enteredValue: "100000.00", spi: "KR" });
+    const plain = cleanMotorLine({ id: "p2", lineNumber: 2, enteredValue: "20000.00" });
+    // Basis = the $20,000 line only: $69.28.
+    expect(mpfAlerts(entry({ mpfAmount: "69.28", lines: [korus, plain] }))).toEqual([]);
+    const [mixed] = mpfAlerts(entry({ mpfAmount: "415.68", lines: [korus, plain] }));
+    expect(mixed.details).toMatchObject({
+      expected_amount: 69.28,
+      basis_amount: 20000,
+      exempt_line_numbers: [1],
+      bound: "ad_valorem",
+    });
+    expect(mixed.message).toContain("lines without an exempt claim");
+    const [exempt] = mpfAlerts(entry({ mpfAmount: "50.00", lines: [korus] }));
+    expect(exempt.label).toBe("MPF on an exempt claim");
+    expect(exempt.details).toMatchObject({ expected_amount: 0, bound: "exempt" });
+    expect(exempt.message).toContain("SPI KR");
+  });
+
+  it("never turns an absent fee into a shortfall", () => {
+    // No SPI, $0 collected: an exemption ACE accepted (LDBDC origin, chapter
+    // 98), not a broker slip — the rule has no affirmative grounds.
+    expect(mpfAlerts(entry({ mpfAmount: "0.00", lines: [hugeLine] }))).toEqual([]);
+    expect(mpfAlerts(entry({ mpfAmount: null, lines: [hugeLine] }))).toEqual([]);
+  });
+
+  it("skips entry classes that owe no ad valorem MPF and dates before the known fiscal years", () => {
+    expect(mpfAlerts(entry({ mpfAmount: "15.19", entryType: "11", lines: [smallLine] }))).toEqual([]);
+    expect(mpfAlerts(entry({ mpfAmount: "15.19", entryType: "21", lines: [smallLine] }))).toEqual([]);
+    expect(mpfAlerts(entry({ mpfAmount: "15.19", entryType: "03", lines: [smallLine] }))).toHaveLength(1);
+    expect(mpfAlerts(entry({ mpfAmount: "15.19", entryDate: "2024-01-15", lines: [smallLine] }))).toEqual([]);
+  });
+
+  it("allows a cent a line of proration rounding", () => {
+    const lines = [1, 2, 3].map((n) =>
+      cleanMotorLine({ id: `r${n}`, lineNumber: n, enteredValue: "10000.00" }),
+    );
+    // $30,000 × 0.3464% = $103.92.
+    expect(mpfAlerts(entry({ mpfAmount: "103.95", lines }))).toEqual([]);
+    expect(mpfAlerts(entry({ mpfAmount: "103.96", lines }))).toHaveLength(1);
+  });
+});

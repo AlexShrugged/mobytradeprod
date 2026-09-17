@@ -131,6 +131,7 @@ function ExpectedVsFiled({ row }: { row: VarianceQueueRow }) {
       );
     case "value_mismatch":
     case "data_unreconciled":
+    case "mpf_bounds":
       return (
         <span className="inline-flex items-center gap-2 tabular-nums">
           <span>{formatMoney(numV("expected_amount"))}</span>

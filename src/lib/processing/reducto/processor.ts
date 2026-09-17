@@ -7,6 +7,7 @@ import {
 } from "reductoai";
 
 import { getFileStore } from "@/lib/storage";
+import { applyFeeSummary } from "../fee-summary";
 import { parseResultText, scrubEntryLineSkus } from "../line-sku";
 import { mapSplitToManifest } from "../packet";
 import type {
@@ -196,11 +197,17 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
           // A 7501 line's sku is the extractor's weakest field (no part
           // number is printed on a broker ABI 7501): drop the values that
           // are provably a shipment/PO reference or Chapter 99 article
-          // text before they persist as declared facts.
+          // text before they persist as declared facts. Then take the
+          // header fees from Block 43 as printed — the extractor picks the
+          // line-level ad valorem working over the collected figure about
+          // one time in six.
           if (mapped.docType !== "port_entry") return mapped;
           const scrubbed: ExtractionResult = {
             docType: "port_entry",
-            fields: scrubEntryLineSkus(mapped.fields, parseText),
+            fields: applyFeeSummary(
+              scrubEntryLineSkus(mapped.fields, parseText),
+              parseText,
+            ),
           };
           return scrubbed;
         };

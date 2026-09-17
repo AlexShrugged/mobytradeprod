@@ -21,7 +21,7 @@ import {
 import type { ReferenceData } from "../duty/types";
 import type { SuppressionSpec } from "../org-rules";
 import { findingsReportSchema, type FindingsReport } from "./findings";
-import { resolveRegulatoryParams } from "./regulatory-params";
+import { resolveRegulatoryParams } from "../duty/regulatory-params";
 import type { EntryBundle, ToolTraceEntry } from "./types";
 
 export type ToolContext = {
@@ -59,7 +59,7 @@ export function buildAnalystTools(
   const readDocument = betaZodTool({
     name: "read_document",
     description:
-      "Read one linked document's typed extraction (the parsed fields of the 7501, commercial invoice, BOL, packet child, etc.). Use the document ids from the document list in your briefing.",
+      "Read one linked document's typed extraction (the parsed fields of the 7501, commercial invoice, BOL, packet child, etc.). Use the document ids from the document list in your briefing. A 7501's fee_summary is Block 43 as printed — the fees CBP collected (499 MPF, 501 HMF, 012/013 AD/CVD deposits); its line-level 499/501 charges are the broker's ad valorem workings.",
     inputSchema: z.object({ documentId: z.string() }),
     run: (input) => {
       const doc = bundle.documents.find((d) => d.id === input.documentId);

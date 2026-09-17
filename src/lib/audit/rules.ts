@@ -14,6 +14,7 @@
 // Relative imports on purpose — this module runs under the tsx seed script.
 
 import { computeExpectedCharges, isExemptionActive } from "../duty/calculator";
+import { computeExpectedMpf } from "../duty/mpf";
 import type {
   ExpectedLineCharges,
   ReferenceData,
@@ -122,12 +123,19 @@ export type AuditableInvoice = {
 
 export type AuditableEntry = {
   entryDate: string | null;
+  /** CBP entry type code ("01", "03", "11"). Rule 17 skips the classes that
+   *  owe no ad valorem MPF. Optional so rule-test fixtures stay untouched. */
+  entryType?: string | null;
   /** Whether the org has ANY catalog part — the gate on rule 16 (unknown
    *  SKU). Optional so rule-test fixtures stay untouched (omitted = no
    *  catalog, rule dormant). */
   orgHasCatalog?: boolean;
   totalEnteredValue: string | null;
   totalDuty: string | null;
+  /** The MPF the 7501 collected (Block 43 code 499; the entry header).
+   *  Feeds rule 17 only. Optional so rule-test fixtures stay untouched
+   *  (omitted = rule dormant). */
+  mpfAmount?: string | null;
   /** Resolved sail window of the linked shipments (resolveSailInfo);
    *  null = the loader had no shipment data. */
   sail: SailInfo | null;
@@ -837,7 +845,112 @@ export function computeEntryAlerts(
   // family lives in invoice-rules.ts.
   alerts.push(...computeInvoiceAlerts(entry, config));
 
+  // ---- Rule 17: MPF within the statutory bounds (runs regardless of the
+  // trust gate — fees sit outside the duty totals the gate reconciles) ---
+  const mpfAlert = mpfBoundsAlert(entry);
+  if (mpfAlert) alerts.push(mpfAlert);
+
   return alerts;
+}
+
+// Entry classes whose fee is not the ad valorem MPF: informal entries (11,
+// 12) pay a flat fee; warehouse, TIB and transportation entries (2x) pay it
+// on withdrawal, not on entry. Consumption entries (01/02/03/06/07) and
+// warehouse withdrawals (3x) owe the rule's expectation.
+const MPF_OUT_OF_SCOPE_ENTRY_TYPE = /^[12]/;
+
+// Rounding slack: a broker prorates the fee per line and sums the rounded
+// figures, so a multi-line ad valorem can miss the header by a cent a line.
+const mpfToleranceCents = (lineCount: number) => Math.max(2, lineCount);
+
+const mpfRateLabel = (rate: number) => `${(rate * 100).toFixed(4)}%`;
+
+/** Rule 17. The MPF a 7501 collected (Block 43 code 499, the entry header)
+ *  against the statute: 0.3464% of the entered value on the lines without
+ *  an MPF-exempt preference claim, clamped to the fiscal year's per-entry
+ *  minimum and maximum (duty/mpf.ts, duty/regulatory-params.ts). Claim-aware
+ *  like the SPI base-duty rule: an exempt SPI takes its line out of the
+ *  basis, and an ABSENT fee ($0, no 499 row) is never a finding — CBP
+ *  exempts by origin and entry class in ways the line does not show
+ *  (products of least-developed beneficiary countries, chapter 98), and
+ *  ACE assessed the fee on transmission, so a missing row is an exemption
+ *  ACE accepted, not a broker slip. What the rule catches is a collected
+ *  figure off the statute: the extractor's line-level working persisted as
+ *  the header ($15.19 where Block 43 prints $33.58), a fee collected on an
+ *  all-exempt entry, or a genuine mis-assessment. Replaces ASC's two
+ *  hand-written MPF org rules (2026-09-02/03), which asked the analyst to
+ *  read a block it could not see. */
+function mpfBoundsAlert(entry: AuditableEntry): DesiredAlert | null {
+  const declaredCents = toCents(entry.mpfAmount ?? null);
+  if (declaredCents === null || declaredCents === 0) return null;
+  if (!entry.entryDate || entry.lines.length === 0) return null;
+  const entryType = entry.entryType?.trim() ?? "";
+  if (MPF_OUT_OF_SCOPE_ENTRY_TYPE.test(entryType)) return null;
+  const expectation = computeExpectedMpf(
+    entry.entryDate,
+    entry.lines.map((l) => ({
+      lineNumber: l.lineNumber,
+      enteredCents: toCents(l.enteredValue) ?? 0,
+      spi: l.spi ?? null,
+    })),
+  );
+  if (!expectation) return null;
+  const { params, expectedCents, adValoremCents, basisCents, bound } =
+    expectation;
+  const diff = declaredCents - expectedCents;
+  if (Math.abs(diff) <= mpfToleranceCents(entry.lines.length)) return null;
+  const direction = diff > 0 ? "overpaid" : "underpaid";
+  const fy = `FY${params.fiscalYear}`;
+  const declared = `MPF was declared at ${fmt(declaredCents)}`;
+  let label: string;
+  let message: string;
+  if (bound === "exempt") {
+    const claims = [
+      ...new Set(
+        entry.lines.map((l) => (l.spi ?? "").trim().toUpperCase()),
+      ),
+    ].join(", ");
+    label = "MPF on an exempt claim";
+    message = `${declared}, but every line claims an MPF-exempt preference (SPI ${claims}), so no MPF is expected (overpaid ${fmt(diff)}).`;
+  } else {
+    const basis =
+      expectation.exemptLineNumbers.length > 0
+        ? `the ${fmt(basisCents)} entered value of the lines without an exempt claim`
+        : `the ${fmt(basisCents)} entered value`;
+    const working = `${mpfRateLabel(params.mpf.rate)} of ${basis} is ${fmt(adValoremCents)}`;
+    if (bound === "minimum") {
+      label = diff < 0 ? "MPF below the minimum" : "MPF mismatch";
+      message = `${declared}; ${working}, so the ${fy} per-entry minimum of ${fmt(params.mpf.minCents)} applies (${direction} ${fmt(diff)}).`;
+    } else if (bound === "maximum") {
+      label = diff > 0 ? "MPF above the maximum" : "MPF mismatch";
+      message = `${declared}; ${working}, so the ${fy} per-entry maximum of ${fmt(params.mpf.maxCents)} applies (${direction} ${fmt(diff)}).`;
+    } else {
+      label = "MPF mismatch";
+      message = `${declared}; ${working}, inside the ${fy} per-entry minimum and maximum of ${fmt(params.mpf.minCents)} and ${fmt(params.mpf.maxCents)} (${direction} ${fmt(diff)}).`;
+    }
+  }
+  return {
+    alertKey: "mpf_bounds:entry",
+    alertType: "mpf_bounds",
+    severity: moneySeverity(diff, expectedCents),
+    label,
+    message,
+    details: {
+      expected_amount: dollars(expectedCents),
+      actual_amount: dollars(declaredCents),
+      difference_amount: dollars(diff),
+      ad_valorem_amount: dollars(adValoremCents),
+      basis_amount: dollars(basisCents),
+      minimum_amount: dollars(params.mpf.minCents),
+      maximum_amount: dollars(params.mpf.maxCents),
+      rate: params.mpf.rate,
+      fiscal_year: params.fiscalYear,
+      source: params.source,
+      bound,
+      exempt_line_numbers: expectation.exemptLineNumbers,
+    },
+    lineItemId: null,
+  };
 }
 
 function declaredMatchesExpected(

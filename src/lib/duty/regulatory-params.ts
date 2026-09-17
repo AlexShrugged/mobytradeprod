@@ -1,10 +1,13 @@
 // Effective-dated regulatory fee parameters (COBRA-adjusted MPF limitations,
-// HMF rate) so the entry analyst can CITE the statutory floor/cap when a
-// declared fee looks wrong. This never computes MPF/HMF for storage or
-// display — fees remain ingested facts (see duty/fees.ts); the deterministic
-// rules deliberately skip them, which is exactly why the analyst needs the
-// bounds. Constant array today; a future regulatory_params table replaces it
-// behind the same resolve function.
+// HMF rate): the platform's statutory floor and cap. Audit rule 17
+// (audit/rules.ts, via duty/mpf.ts) checks the MPF a 7501 declares against
+// them, and the entry analyst cites them through get_regulatory_params. Fees
+// are still never COMPUTED for storage or display — the declared figure stays
+// the ingested fact (see duty/fees.ts); these parameters only say what CBP
+// would have assessed. Constant array today, one row per fiscal year added
+// when CBP's annual notice lands (early August, effective October 1); a
+// future regulatory_params table replaces it behind the same resolve
+// function.
 //
 // Figures transcribed from CBP's annual Federal Register COBRA fee-adjustment
 // notices (19 CFR 24.23), verified against the govinfo full text — never
@@ -14,7 +17,7 @@
 //
 // Relative imports on purpose — this module runs under the tsx eval script.
 
-import { HMF_RATE, MPF_RATE } from "../duty/fees";
+import { HMF_RATE, MPF_RATE } from "./fees";
 
 export type RegulatoryParams = {
   fiscalYear: number;

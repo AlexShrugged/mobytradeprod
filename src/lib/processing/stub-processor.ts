@@ -1,6 +1,7 @@
 import type { DbClient } from "@/lib/db";
 import { computeExpectedCharges, normalizeHts } from "@/lib/duty/calculator";
 import { HMF_RATE, MPF_RATE } from "@/lib/duty/fees";
+import { resolveRegulatoryParams } from "@/lib/duty/regulatory-params";
 import { loadReferenceData } from "@/lib/duty/reference";
 import type { MeasureRef, ReferenceData } from "@/lib/duty/types";
 import type {
@@ -434,6 +435,18 @@ export class StubDocumentProcessor implements DocumentProcessor {
         const fromName = input.fileName.match(/\d{3}-\d{7}-\d/)?.[0];
         const entryDate = iso(seed % 20);
         const lineItems = this.buildLineItems(seed, entryDate);
+        // Like a real ABI printout: the lines carry the ad valorem MPF
+        // working, Block 43 carries what CBP collects — the working
+        // clamped to the fiscal year's per-entry minimum/maximum.
+        const mpfWorking = sumCharges(lineItems, (c) => c.charge_type === "mpf");
+        const params = resolveRegulatoryParams(entryDate);
+        const mpfCollected = params
+          ? Math.min(
+              Math.max(Math.round(mpfWorking * 100), params.mpf.minCents),
+              params.mpf.maxCents,
+            ) / 100
+          : mpfWorking;
+        const hmfCollected = sumCharges(lineItems, (c) => c.charge_type === "hmf");
         return {
           docType: "port_entry",
           fields: {
@@ -455,8 +468,12 @@ export class StubDocumentProcessor implements DocumentProcessor {
             total_duty: sumCharges(lineItems, (c) =>
               DUTY_CHARGE_TYPES.has(c.charge_type),
             ),
-            mpf_amount: sumCharges(lineItems, (c) => c.charge_type === "mpf"),
-            hmf_amount: sumCharges(lineItems, (c) => c.charge_type === "hmf"),
+            mpf_amount: mpfCollected,
+            hmf_amount: hmfCollected,
+            fee_summary: [
+              { code: "501", amount: hmfCollected },
+              { code: "499", amount: mpfCollected },
+            ],
             line_items: lineItems,
           },
         };

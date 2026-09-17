@@ -79,6 +79,12 @@ export function fieldIssue(a: {
         expected: formatMoney(n("expected_amount")),
         filed: formatMoney(n("actual_amount")),
       };
+    case "mpf_bounds":
+      return {
+        field: "MPF",
+        expected: formatMoney(n("expected_amount")),
+        filed: formatMoney(n("actual_amount")),
+      };
     case "quantity_discrepancy":
       return {
         field: "Quantity",

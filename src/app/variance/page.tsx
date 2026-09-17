@@ -45,11 +45,11 @@ const TYPE_FILTERS: Record<string, { label: string; types: string[] }> = {
       "ai_duty_calculation",
     ],
   },
-  // Axes only the analyst covers (the deterministic rules deliberately
-  // skip fees, and no rule reads AD/CVD case numbers or cross-document
-  // narratives).
+  // AD/CVD case numbers and cross-document narratives are the analyst's
+  // alone; rule 17 owns the MPF arithmetic and the analyst covers HMF and
+  // exemption eligibility beside it.
   adcvd: { label: "AD/CVD", types: ["ai_adcvd_discrepancy"] },
-  fees: { label: "Fees", types: ["ai_fee_error"] },
+  fees: { label: "Fees", types: ["mpf_bounds", "ai_fee_error"] },
   documents: {
     label: "Documents",
     types: ["ai_document_inconsistency", "ai_other"],

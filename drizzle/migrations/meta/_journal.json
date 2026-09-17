@@ -204,6 +204,13 @@
       "when": 1789676034660,
       "tag": "0028_measure_col1_rate_below",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789677382591,
+      "tag": "0029_mpf_bounds_alert",
+      "breakpoints": true
     }
   ]
 }

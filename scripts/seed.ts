@@ -824,15 +824,17 @@ async function main() {
     "quantity_discrepancy:invoice_sku:EB-BAT-52V",
   ]);
 
-  // The analysis-defect entries (see seed-data/analysis-defects.ts) must be
-  // INVISIBLE to the deterministic engine — their defects live in fee
-  // bounds, document extracted_data, and the description-vs-code axis, which
-  // only the AI entry analyst reads. A key appearing here means a plant
-  // leaked into deterministic territory. The one expected key: the
-  // misclassified battery's SKU is deliberately absent from the catalog,
-  // which rule 16 flags as a coverage gap — the defect itself (wrong code
-  // for the description) stays analyst-only.
-  assertExactKeys("231-4501352-6", []);
+  // The analysis-defect entries (see seed-data/analysis-defects.ts): the
+  // AD/CVD and description-vs-code plants live in document extracted_data
+  // and the description axis, which only the AI entry analyst reads, so
+  // they must stay INVISIBLE to the deterministic engine — a key appearing
+  // on those means a plant leaked. Two expected keys: the misclassified
+  // battery's SKU is deliberately absent from the catalog, which rule 16
+  // flags as a coverage gap (the defect itself stays analyst-only), and
+  // the sub-minimum MPF plant became deterministic territory on 2026-09-17
+  // (rule 17) — the analyst now corroborates that alert instead of
+  // discovering it.
+  assertExactKeys("231-4501352-6", ["mpf_bounds:entry"]);
   assertExactKeys("231-4501358-3", []);
   assertExactKeys("231-4501364-1", ["unknown_sku:line2"]);
 

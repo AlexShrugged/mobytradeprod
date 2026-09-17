@@ -193,6 +193,10 @@ export const auditAlertType = pgEnum("audit_alert_type", [
   // HAS a catalog — either a catalog gap or a bad SKU on the filing, and
   // the catalog checks (HTS, origin) silently skip the line until fixed.
   "unknown_sku",
+  // The collected MPF (Block 43) disagrees with the statutory expectation:
+  // the ad valorem rate on the non-exempt entered value, clamped to the
+  // fiscal year's per-entry minimum/maximum (rule 17, duty/mpf.ts).
+  "mpf_bounds",
 ]);
 export const auditSeverity = pgEnum("audit_severity", [
   "error",

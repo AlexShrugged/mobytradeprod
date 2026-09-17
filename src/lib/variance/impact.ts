@@ -113,6 +113,15 @@ export function computeAlertImpact(
       if (actual === null || expected === null) return NO_IMPACT;
       return fromCents(Math.round((actual - expected) * 100));
     }
+    case "mpf_bounds": {
+      // Block 43's collected MPF against the statutory clamp. Fees sit
+      // outside the duty totals the trust gate reconciles, so the gate
+      // does not apply.
+      const actual = num(d?.actual_amount);
+      const expected = num(d?.expected_amount);
+      if (actual === null || expected === null) return NO_IMPACT;
+      return fromCents(Math.round((actual - expected) * 100));
+    }
     case "rate_mismatch": {
       // details carry no dollar figure — recompute the implied delta the
       // severity ladder used: (actual - expected) x entered value.

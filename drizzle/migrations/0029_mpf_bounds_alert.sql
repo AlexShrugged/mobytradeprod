@@ -1,0 +1,1 @@
+ALTER TYPE "public"."audit_alert_type" ADD VALUE 'mpf_bounds';

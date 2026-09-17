@@ -48,8 +48,9 @@
 // CLEAN — seed.ts asserts it:
 // Entry 231-4501352-6 — MPF below the statutory minimum: a tiny entry
 //   ($2,940) whose broker filed the uncapped ad valorem MPF ($10.18) instead
-//   of applying the per-entry minimum. The deterministic rules skip MPF/HMF
-//   entirely (ingested facts), so only the analyst can catch it.
+//   of applying the per-entry minimum. Since 2026-09-17 audit rule 17 owns
+//   this check (mpf_bounds:entry, asserted in seed.ts); the analyst's job
+//   on it is corroboration, and the eval still accepts a fee_error finding.
 // Entry 231-4501358-3 — AD/CVD case-number discrepancy: a type 03 entry
 //   whose 7501 references case A-570-121 while the commercial invoice
 //   (INV-2026-215) prints A-570-133. Case numbers live only in document

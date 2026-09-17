@@ -309,7 +309,27 @@ Stop only stops rendering — the turn finishes via `after()` and
   eligibility (originating-goods rules, certificates) is the AI analyst's job, per the
   exclusion-claim doctrine in its prompt.
 - **MPF/HMF are ingested facts** on entries — never computed (CBP per-entry mins/caps).
-  Nominal rates appear only in estimates, labeled as such.
+  Nominal rates appear only in estimates, labeled as such. The ingested MPF is the
+  7501's Block 43 "Other Fee Summary" figure: `processing/fee-summary.ts` reads the
+  block deterministically from the parse text (499 MPF, 501 HMF, 012/013 AD/CVD
+  deposits, self-checked against "Total Other Fees") and overrides the header
+  fields, because the line-level 499 charges are the broker's ad valorem workings
+  and the extractor took one for the collected fee about one time in six (five ASC
+  sub-minimum entries read $4.83–$21.22 where Block 43 printed $33.58, one above-cap
+  entry read $972.56 against $651.50; found 2026-09-17). Audit rule 17 (`duty/mpf.ts`
+  over `duty/regulatory-params.ts` — one row per fiscal year, add the next each
+  October from CBP's COBRA notice) checks the collected MPF against the statute:
+  0.3464% of the entered value of the lines without an MPF-exempt preference claim
+  (19 CFR 24.23(c) programs by SPI — KR, S, IL, A+, E, P, …; general GSP "A" and
+  AGOA "D" are not exempt), clamped to the year's minimum/maximum. It is
+  claim-aware like the SPI base-duty rule and SILENT on an absent fee ($0, no 499
+  row): CBP exempts by origin and entry class in ways the line does not show
+  (Cambodian LDBDC products print no 499 at all), so a missing row is an exemption
+  ACE accepted, never a shortfall. ASC's two hand-written MPF org rules
+  (2026-09-02/03) asked the analyst to check a block it could not see; the analyst
+  now corroborates rule 17 and keeps HMF and exemption eligibility.
+  `scripts/backfill-fee-summary.ts` re-reads Block 43 from the stored parse text
+  (no Reducto credit), rewrites the header fields, re-audits and re-queues analysis.
 - **Quotes are compared as landed cost, and re-compared when tariffs move.**
   `quotes/compare.ts` (pure) prices every sourcing option of a SKU — the
   current `(part, vendor)` sources and every quote line whatever its status —

@@ -40,6 +40,10 @@ export type EntryLineItemExtraction = {
   manufacturer_id?: string | null;
 };
 
+/** One row of a 7501's Block 43 "Other Fee Summary": a CBP collection code
+ *  and the dollars collected under it, as printed. */
+export type FeeSummaryRow = { code: string; amount: number };
+
 export type PortEntryExtraction = {
   entry_number: string;
   entry_date: string | null;
@@ -54,8 +58,17 @@ export type PortEntryExtraction = {
   referenced_invoices: string[];
   total_entered_value: number | null;
   total_duty: number | null;
+  // The fees CBP collected — Block 43's 499/501 rows, after the per-entry
+  // minimum/maximum. Set from fee_summary when the parse text carries the
+  // block (processing/fee-summary.ts); the line-level 499/501 charges are
+  // the broker's ad valorem workings and never the collected figure.
   mpf_amount: number | null;
   hmf_amount: number | null;
+  /** Block 43 "Other Fee Summary" as printed, one row per CBP collection
+   *  code (499 MPF, 501 HMF, 012/013 AD/CVD deposits). Read
+   *  deterministically from the parse text; absent on extractions that
+   *  predate it (2026-09-17) or whose text carries no parseable block. */
+  fee_summary?: FeeSummaryRow[] | null;
   line_items: EntryLineItemExtraction[];
   // Document-only compliance facts (see EntryLineItemExtraction note).
   /** Every distinct AD/CVD case number appearing anywhere on the entry. */

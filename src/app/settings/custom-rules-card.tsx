@@ -55,6 +55,7 @@ const ALERT_TYPES: { value: string; label: string }[] = [
   { value: "invoice_sku_missing", label: "Invoice SKU missing" },
   { value: "invoice_comparison_skipped", label: "Invoice comparison skipped" },
   { value: "unknown_sku", label: "Unknown SKU" },
+  { value: "mpf_bounds", label: "MPF bounds" },
 ];
 
 const typeLabel = (value: string) =>

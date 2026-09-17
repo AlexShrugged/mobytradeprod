@@ -127,9 +127,11 @@ export async function loadAuditableSnapshot(
 
   const auditable: AuditableEntry = {
     entryDate: entry.entryDate,
+    entryType: entry.entryType,
     orgHasCatalog: anyPart !== undefined,
     totalEnteredValue: entry.totalEnteredValue,
     totalDuty: entry.totalDuty,
+    mpfAmount: entry.mpfAmount,
     sail: resolveSailInfo(entry.entryShipments.map((es) => es.shipment)),
     lines: entry.lineItems.map((li) => ({
       id: li.id,
