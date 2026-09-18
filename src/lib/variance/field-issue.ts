@@ -4,6 +4,10 @@
 // findings and the variance CSV export.
 
 import { formatHts, formatMoney, formatRate } from "@/lib/format";
+import {
+  formatQuantity,
+  normalizeQuantityUnit,
+} from "@/lib/audit/quantity-unit";
 
 export type FieldIssue = { field: string; expected: string; filed: string };
 
@@ -85,12 +89,14 @@ export function fieldIssue(a: {
         expected: formatMoney(n("expected_amount")),
         filed: formatMoney(n("actual_amount")),
       };
-    case "quantity_discrepancy":
+    case "quantity_discrepancy": {
+      const unit = normalizeQuantityUnit(s("unit"));
       return {
         field: "Quantity",
-        expected: String(n("expected_quantity") ?? "—"),
-        filed: String(n("actual_quantity") ?? "—"),
+        expected: formatQuantity(n("expected_quantity"), unit),
+        filed: formatQuantity(n("actual_quantity"), unit),
       };
+    }
     case "missing_measure":
       return {
         field: s("measure_name") ?? "Measure",

@@ -53,6 +53,7 @@ export function buildReferenceData(
     rateType: h.rateType,
     rate: h.rate === null ? null : Number(h.rate),
     col1Special: h.col1Special,
+    unitOfQuantity: h.unitOfQuantity,
     exemption: h.exemption,
     tradeMeasureId: h.tradeMeasureId,
     validFrom: h.validFrom,

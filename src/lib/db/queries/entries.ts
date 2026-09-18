@@ -37,6 +37,10 @@ import { resolveWindow } from "@/lib/effective-dating";
 import { hasActionableDiff } from "@/lib/variance/field-issue";
 import { invoiceGoodsCents } from "@/lib/audit/invoice-rules";
 import {
+  quantityUnitLabel,
+  resolveEntryLineUnit,
+} from "@/lib/audit/quantity-unit";
+import {
   ENTRY_PHASES,
   SUBMISSION_WINDOW_DAYS,
   type EntryPhase,
@@ -841,6 +845,9 @@ export type LineItemDetail = {
   /** Per-line supplier as declared on the 7501 — entries can span vendors. */
   supplierName: string | null;
   quantity: string | null;
+  /** Display label of the unit the quantity is in ("kg", "pcs"): the
+   *  declared 7501 code, else the HTS reporting unit. Null = unknown. */
+  quantityUnit: string | null;
   unitValue: string | null;
   enteredValue: string;
   partId: string | null;
@@ -1372,6 +1379,13 @@ export async function getEntryDetail(
       countryOfOrigin: li.countryOfOrigin,
       supplierName: li.supplierName,
       quantity: li.quantity,
+      quantityUnit:
+        quantityUnitLabel(
+          resolveEntryLineUnit(
+            li.quantityUnit,
+            ref.htsByDigits.get(li.htsCodeDigits)?.unitOfQuantity,
+          ),
+        ) || null,
       unitValue: li.unitValue,
       enteredValue: li.enteredValue,
       partId: li.partId,

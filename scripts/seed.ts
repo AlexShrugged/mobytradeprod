@@ -508,6 +508,10 @@ async function main() {
           supplierName: line.supplierName,
           vendorId: vendorIdByName(line.supplierName),
           quantity: line.quantity.toFixed(4),
+          // The demo book is piece-counted goods (motors, packs, frames):
+          // the 7501 reports "NO" and the invoices bill "PCS" — one unit
+          // family, so rule 12 compares them.
+          quantityUnit: "NO",
           unitValue: line.unitValue.toFixed(4),
           enteredValue: line.enteredValue.toFixed(2),
         })
@@ -584,6 +588,7 @@ async function main() {
         htsCode: l.htsCode,
         htsCodeDigits: l.htsCode ? normalizeHts(l.htsCode) : null,
         quantity: l.quantity.toFixed(4),
+        quantityUnit: "PCS",
         unitPrice: l.unitPrice.toFixed(4),
         totalPrice: (
           l.totalPrice ?? Math.round(l.quantity * l.unitPrice * 100) / 100

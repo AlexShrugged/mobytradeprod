@@ -324,6 +324,8 @@ describe("commercial_invoice mapping", () => {
           // The 6-digit HS code as printed — kept verbatim.
           hts_code: "850760",
           quantity: 100,
+          // As printed — normalized on read, never at extraction.
+          quantity_unit: "pcs.",
           unit_price: 312,
           total_price: 31200,
           adcvd_case_number: "A-570-133",
@@ -338,6 +340,7 @@ describe("commercial_invoice mapping", () => {
           country_of_origin: null,
           hts_code: null,
           quantity: null,
+          quantity_unit: null,
           unit_price: null,
           total_price: 10700,
           adcvd_case_number: null,

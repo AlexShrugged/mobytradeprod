@@ -399,6 +399,7 @@ export class StubDocumentProcessor implements DocumentProcessor {
         country_of_origin: source.countryOfOrigin,
         supplier_name: supplierName,
         quantity,
+        quantity_unit: "NO",
         unit_value: unitValue,
         entered_value: enteredValue,
         charges,
@@ -651,6 +652,7 @@ export class StubDocumentProcessor implements DocumentProcessor {
             // entries built from the same catalog.
             hts_code: part.htsCode,
             quantity,
+            quantity_unit: "PCS",
             unit_price: unitPrice,
             total_price: centsToDollars(totalCents),
           });

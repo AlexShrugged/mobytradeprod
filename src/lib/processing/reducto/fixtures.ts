@@ -59,6 +59,7 @@ export const PORT_ENTRY_RESPONSE = [
         adcvd_case_number: cite("A-570-121"),
         manufacturer_id: cite("CNSHEVOL123SHE"),
         quantity: cite(100),
+        quantity_unit: cite("NO"),
         unit_value: cite("$105.00"),
         entered_value: cite("$10,500.00"),
         charges: [
@@ -271,6 +272,8 @@ export const COMMERCIAL_INVOICE_RESPONSE = [
         // 6-digit HS code as suppliers often print — captured verbatim.
         hts_code: cite("850760"),
         quantity: cite("100"),
+        // Lowercase with a trailing period, as sellers print it.
+        quantity_unit: cite("pcs."),
         unit_price: cite("$312.00"),
         total_price: cite("$31,200.00"),
         adcvd_case_number: cite("A-570-133"),

@@ -28,6 +28,13 @@ import type {
   DesiredAlert,
 } from "./rules";
 import { dollars, fmt, moneySeverity, toCents } from "./rules";
+import type { ReferenceData } from "../duty/types";
+import {
+  formatQuantity,
+  resolveEntryLineUnit,
+  resolveInvoiceLineUnit,
+  type QuantityUnit,
+} from "./quantity-unit";
 
 // The money figures a commercial invoice prints. total is the final amount
 // payable; subtotal the goods total when printed; goods the total less the
@@ -130,6 +137,10 @@ type SkuAgg = {
   valueCents: number;
   quantity: number | null;
   quantitySeen: boolean;
+  /** Distinct unit families the contributing lines declare their quantity
+   *  in (null = unknown). A quantity is comparable only when exactly one
+   *  known unit contributed — see skuUnit. */
+  units: (QuantityUnit | null)[];
   htsDigits: string[]; // sorted unique
   htsDisplay: string[]; // as printed, sorted unique
   coos: string[]; // sorted unique
@@ -140,10 +151,21 @@ function newAgg(): SkuAgg {
     valueCents: 0,
     quantity: 0,
     quantitySeen: false,
+    units: [],
     htsDigits: [],
     htsDisplay: [],
     coos: [],
   };
+}
+
+function noteUnit(agg: SkuAgg, unit: QuantityUnit | null) {
+  if (!agg.units.includes(unit)) agg.units.push(unit);
+}
+
+/** The one unit a SKU's summed quantity is in; null when any contributing
+ *  line's unit is unknown or the lines disagree. */
+function skuUnit(agg: SkuAgg): QuantityUnit | null {
+  return agg.units.length === 1 ? agg.units[0] : null;
 }
 
 function addUnique(list: string[], value: string) {
@@ -156,6 +178,7 @@ function addUnique(list: string[], value: string) {
 export function computeInvoiceAlerts(
   entry: AuditableEntry,
   config: AuditConfig,
+  ref: ReferenceData,
 ): DesiredAlert[] {
   const alerts: DesiredAlert[] = [];
   if (entry.linkedInvoices.length === 0) return alerts;
@@ -276,6 +299,15 @@ export function computeInvoiceAlerts(
       agg.quantity =
         Math.round((agg.quantity + Number(line.quantity)) * 10000) / 10000;
     agg.quantitySeen = true;
+    // The 7501 reports net quantity in HTSUS units: the printed unit code
+    // when captured, else the schedule's reporting unit for the code.
+    noteUnit(
+      agg,
+      resolveEntryLineUnit(
+        line.quantityUnit,
+        ref.htsByDigits.get(line.htsCodeDigits)?.unitOfQuantity,
+      ),
+    );
     addUnique(agg.htsDigits, line.htsCodeDigits);
     addUnique(agg.htsDisplay, line.htsCode);
     if (line.countryOfOrigin) addUnique(agg.coos, line.countryOfOrigin);
@@ -301,6 +333,7 @@ export function computeInvoiceAlerts(
           agg.quantity =
             Math.round((agg.quantity + Number(line.quantity)) * 10000) / 10000;
         agg.quantitySeen = true;
+        noteUnit(agg, resolveInvoiceLineUnit(line.quantityUnit));
         // CI codes under 6 digits carry no comparable signal — a chapter or
         // heading prefix cannot ground an HTS variance.
         if (line.htsCodeDigits && line.htsCodeDigits.length >= 6) {
@@ -495,7 +528,12 @@ export function computeInvoiceAlerts(
   // ---- Rule 12: SKU-grouped quantity mismatch ----------------------------
   // Not gated on rule 9 (there is no quantity header), but it needs every
   // linked invoice money-eligible — a skipped invoice's quantities would
-  // read as a shortfall. Skips SKUs where either side omits a quantity.
+  // read as a shortfall. Skips SKUs where either side omits a quantity, and
+  // — the unit gate — where the two sides are not provably in the SAME
+  // unit: the 7501 reports net quantity in HTSUS units (kilograms for most
+  // metal goods) while the invoice bills pieces, and 1,065 kg against
+  // 1,500 pcs is two measurements, not a variance. Unknown on either side
+  // means not comparable, never a discrepancy.
   if (allMoneyEligible) {
     for (const sku of entrySkus) {
       const ciAgg = ciMoney.bySku.get(sku);
@@ -508,6 +546,8 @@ export function computeInvoiceAlerts(
         !ciAgg.quantitySeen
       )
         continue;
+      const unit = skuUnit(entryAgg);
+      if (unit === null || skuUnit(ciAgg) !== unit) continue;
       // Round before comparing — 4dp quantities summed as floats can carry
       // 1e-15 artifacts that would breach the tolerance boundary.
       const diff =
@@ -520,9 +560,10 @@ export function computeInvoiceAlerts(
         alertType: "quantity_discrepancy",
         severity: "warning",
         label: "Quantity differs from invoice",
-        message: `${sku} is entered with quantity ${entryAgg.quantity}, but the commercial invoice bills ${ciAgg.quantity}.`,
+        message: `${sku} is entered with ${formatQuantity(entryAgg.quantity, unit)}, but the commercial invoice bills ${formatQuantity(ciAgg.quantity, unit)}.`,
         details: {
           sku,
+          unit,
           expected_quantity: ciAgg.quantity,
           actual_quantity: entryAgg.quantity,
           difference_quantity: diff,

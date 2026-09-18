@@ -253,7 +253,18 @@ Stop only stops rendering — the turn finishes via `after()` and
   an entry matching the adjusted total instead is an info comparison with no
   dollar claim — whether an adjustment belongs in transaction value (a trade
   discount does, a prior-year rebate credit does not) is the AI analyst's
-  valuation call, per its prompt.
+  valuation call, per its prompt. Quantities are compared only in a
+  shared unit (rule 12 through `audit/quantity-unit.ts`): a 7501 line's
+  quantity is its net quantity in HTSUS units — the printed unit code
+  (`entry_line_items.quantity_unit`), else the schedule's reporting unit
+  (`hts_codes.unit_of_quantity`; a two-unit code like "No., kg" resolves to
+  nothing) — and a CI line's unit is only what the invoice prints
+  (`invoice_line_items.quantity_unit`). Unknown on either side is not
+  comparable, never a discrepancy; the analyst prompt carries the same
+  doctrine and its briefing names both units per line. Diagnosed
+  2026-09-17 from ASC's kg-reported metal lines audited against
+  piece-count invoices (~20 false AI quantity findings, rule 12 never
+  fired there because broker 7501 lines carry no SKU).
 - **Pure calculators**: integer cents, decimal-fraction rates, no IO; db handle passed as
   a parameter (`DbClient`). Tests colocated (`*.test.ts`).
 - **One charge per program.** `trade_measures.program` is the stable legal-program

@@ -116,7 +116,7 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
           max_tokens: MAX_TOKENS,
           system,
           messages: [
-            { role: "user", content: buildInitialUserMessage(bundle) },
+            { role: "user", content: buildInitialUserMessage(bundle, ref) },
           ],
           tools,
           max_iterations: this.maxIterations,

@@ -267,7 +267,13 @@ export function LineItemsTable({
         header: () => <div className="text-right">Qty</div>,
         cell: ({ row }) => (
           <div className="text-right tabular-nums">
-            {row.original.quantity ? Number(row.original.quantity) : "—"}
+            {row.original.quantity
+              ? `${Number(row.original.quantity)}${
+                  row.original.quantityUnit
+                    ? ` ${row.original.quantityUnit}`
+                    : ""
+                }`
+              : "—"}
           </div>
         ),
       },

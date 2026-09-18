@@ -145,6 +145,7 @@ export async function loadAuditableSnapshot(
       vendorId: li.vendorId,
       enteredValue: li.enteredValue,
       quantity: li.quantity,
+      quantityUnit: li.quantityUnit,
       description: li.description,
       supplierName: li.supplierName,
       // Classification windows hold committed codes only (provisional codes
@@ -230,6 +231,7 @@ export async function loadAuditableSnapshot(
           htsCodeDigits: li.htsCodeDigits,
           countryOfOrigin: li.countryOfOrigin,
           quantity: li.quantity,
+          quantityUnit: li.quantityUnit,
           totalPrice: li.totalPrice,
         })),
         linkedEntryCount: entryCount.get(invoice.id) ?? 1,

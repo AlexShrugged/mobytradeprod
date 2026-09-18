@@ -66,6 +66,12 @@ function toStr(v: unknown): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+/** A printed unit-of-measure code, capped to the column width. */
+function toUnit(v: unknown): string | null {
+  const s = toStr(v);
+  return s ? s.slice(0, 16) : null;
+}
+
 /** true/false (or their common string spellings) → boolean; else null. */
 function toBool(v: unknown): boolean | null {
   if (typeof v === "boolean") return v;
@@ -240,6 +246,7 @@ function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
       country_of_origin: toCountry(line.country_of_origin),
       supplier_name: toStr(line.supplier_name),
       quantity: toNum(line.quantity),
+      quantity_unit: toUnit(line.quantity_unit),
       unit_value: toNum(line.unit_value),
       entered_value: toNum(line.entered_value) ?? 0,
       charges: asRecordArray(line.charges).map(mapCharge),
@@ -415,6 +422,7 @@ function mapCommercialInvoice(
           country_of_origin: toCountry(line.country_of_origin),
           hts_code: toStr(line.hts_code),
           quantity: toNum(line.quantity),
+          quantity_unit: toUnit(line.quantity_unit),
           unit_price: toNum(line.unit_price),
           total_price: toNum(line.total_price),
           adcvd_case_number: toStr(line.adcvd_case_number),

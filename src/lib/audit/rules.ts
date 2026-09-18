@@ -56,6 +56,11 @@ export type AuditableLine = {
   vendorId: string | null;
   enteredValue: string;
   quantity: string | null;
+  /** Unit code printed beside the 7501 net quantity ("KG", "NO"); null on
+   *  extractions predating unit capture, where the HTS reporting unit
+   *  stands in (audit/quantity-unit.ts). Optional so rule-test fixtures
+   *  stay untouched. */
+  quantityUnit?: string | null;
   /** Catalog HTS AS OF THE ENTRY DATE when the line matched a part; null
    *  otherwise. The governing expectation: what the catalog said the code
    *  was on the day this entry was filed. */
@@ -93,6 +98,10 @@ export type AuditableInvoiceLine = {
   htsCodeDigits: string | null;
   countryOfOrigin: string | null;
   quantity: string | null;
+  /** Unit the invoice bills the quantity in, as printed ("PCS", "KG");
+   *  null = none printed, so the quantity is never compared. Optional so
+   *  rule-test fixtures stay untouched. */
+  quantityUnit?: string | null;
   totalPrice: string;
 };
 
@@ -843,7 +852,7 @@ export function computeEntryAlerts(
   // ---- Rules 8-15: commercial-invoice document comparisons ---------------
   // The CI is the primary document the entry is checked against; the whole
   // family lives in invoice-rules.ts.
-  alerts.push(...computeInvoiceAlerts(entry, config));
+  alerts.push(...computeInvoiceAlerts(entry, config, ref));
 
   // ---- Rule 17: MPF within the statutory bounds (runs regardless of the
   // trust gate — fees sit outside the duty totals the gate reconciles) ---

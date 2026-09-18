@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildSeedReferenceData, type DayFn } from "../db/seed-data/tariff";
-import type { MeasureRef } from "../duty/types";
+import type { MeasureRef, ReferenceData } from "../duty/types";
 import {
   computeEntryAlerts,
   type AuditableCharge,
@@ -51,6 +51,7 @@ function cleanMotorLine(over: Partial<AuditableLine> = {}): AuditableLine {
     vendorId: null,
     enteredValue: "10000.00",
     quantity: "100.0000",
+    quantityUnit: "NO",
     partHtsCode: "8501.31.4000",
     partHtsCodeCurrent: "8501.31.4000",
     partHtsCurrentSince: null,
@@ -70,6 +71,19 @@ function cleanMotorLine(over: Partial<AuditableLine> = {}): AuditableLine {
     merged.partHtsCodeCurrent = over.partHtsCode;
   }
   return merged;
+}
+
+/** The seed reference with one code's USITC reporting unit overridden. */
+function refWithUnit(
+  base: ReferenceData,
+  digits: string,
+  unitOfQuantity: string | null,
+): ReferenceData {
+  const row = base.htsByDigits.get(digits);
+  if (!row) throw new Error(`no seed HTS row for ${digits}`);
+  const htsByDigits = new Map(base.htsByDigits);
+  htsByDigits.set(digits, { ...row, unitOfQuantity });
+  return { ...base, htsByDigits };
 }
 
 function entry(over: Partial<AuditableEntry> = {}): AuditableEntry {
@@ -95,6 +109,7 @@ function invoiceLine(
     htsCodeDigits: "8501314000",
     countryOfOrigin: "CN",
     quantity: "100.0000",
+    quantityUnit: "PCS",
     totalPrice: "10000.00",
     ...over,
   };
@@ -1075,10 +1090,14 @@ describe("rule 12: SKU-grouped quantity mismatch", () => {
     expect(alerts[0].severity).toBe("warning");
     expect(alerts[0].alertType).toBe("quantity_discrepancy");
     expect(alerts[0].details).toMatchObject({
+      unit: "no",
       expected_quantity: 90,
       actual_quantity: 100,
       difference_quantity: 10,
     });
+    expect(alerts[0].message).toBe(
+      "EB-MTR-500W is entered with 100 pcs, but the commercial invoice bills 90 pcs.",
+    );
   });
 
   it("boundary: silent at 0.01 units, fires above", () => {
@@ -1107,6 +1126,132 @@ describe("rule 12: SKU-grouped quantity mismatch", () => {
       ref,
     );
     expect(alerts).toEqual([]);
+  });
+
+  // The unit gate: a 7501 reports net quantity in HTSUS units (kilograms
+  // for most metal goods) while the invoice bills pieces — 1,065 kg against
+  // 1,500 pcs is two measurements, never a variance.
+  it("skips when the two sides are in different units (kg line vs piece-count invoice)", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        lines: [cleanMotorLine({ quantity: "1065.0000", quantityUnit: "KG" })],
+        linkedInvoices: [
+          invoice({
+            lines: [invoiceLine({ quantity: "1500.0000", quantityUnit: "PCS" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(alerts).toEqual([]);
+  });
+
+  it("skips when either side's unit is unknown", () => {
+    // The invoice prints no unit.
+    expect(
+      computeEntryAlerts(
+        entry({
+          linkedInvoices: [
+            invoice({
+              lines: [invoiceLine({ quantity: "90.0000", quantityUnit: null })],
+            }),
+          ],
+        }),
+        ref,
+      ),
+    ).toEqual([]);
+    // The 7501 prints no unit code and the schedule names none either
+    // (the seed reference carries no reporting units).
+    expect(
+      computeEntryAlerts(
+        entry({
+          lines: [cleanMotorLine({ quantityUnit: null })],
+          linkedInvoices: [
+            invoice({ lines: [invoiceLine({ quantity: "90.0000" })] }),
+          ],
+        }),
+        ref,
+      ),
+    ).toEqual([]);
+    // An unrecognized spelling is unknown, not a new unit.
+    expect(
+      computeEntryAlerts(
+        entry({
+          linkedInvoices: [
+            invoice({
+              lines: [invoiceLine({ quantity: "90.0000", quantityUnit: "CTN" })],
+            }),
+          ],
+        }),
+        ref,
+      ),
+    ).toEqual([]);
+  });
+
+  it("falls back to the schedule's reporting unit for a unit-less 7501 line", () => {
+    const unitLess = (r: ReferenceData) =>
+      computeEntryAlerts(
+        entry({
+          lines: [cleanMotorLine({ quantityUnit: null })],
+          linkedInvoices: [
+            invoice({ lines: [invoiceLine({ quantity: "90.0000" })] }),
+          ],
+        }),
+        r,
+      );
+    // Column 32 is net quantity in HTSUS units: a "No." code makes the
+    // bare figure a piece count, comparable to the invoice's pieces.
+    expect(keys(unitLess(refWithUnit(ref, "8501314000", "No.")))).toEqual([
+      "quantity_discrepancy:invoice_sku:EB-MTR-500W",
+    ]);
+    // A kg code makes it a weight — not comparable to pieces.
+    expect(unitLess(refWithUnit(ref, "8501314000", "kg"))).toEqual([]);
+    // A two-unit code prints two figures on the 7501; one extracted number
+    // cannot be attributed, so it stays unknown.
+    expect(unitLess(refWithUnit(ref, "8501314000", "No., kg"))).toEqual([]);
+  });
+
+  it("recognizes spelling variants of one unit family", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        lines: [cleanMotorLine({ quantityUnit: "NO" })],
+        linkedInvoices: [
+          invoice({
+            lines: [invoiceLine({ quantity: "90.0000", quantityUnit: "pieces" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual([
+      "quantity_discrepancy:invoice_sku:EB-MTR-500W",
+    ]);
+  });
+
+  it("skips a SKU whose entry lines disagree on unit", () => {
+    const alerts = computeEntryAlerts(
+      entry({
+        totalEnteredValue: "20000.00",
+        totalDuty: "7800.00",
+        lines: [
+          cleanMotorLine({ quantity: "50.0000", quantityUnit: "NO" }),
+          cleanMotorLine({
+            id: "l2",
+            lineNumber: 2,
+            quantity: "40.0000",
+            quantityUnit: "KG",
+          }),
+        ],
+        linkedInvoices: [
+          invoice({
+            totalAmount: "20000.00",
+            lines: [invoiceLine({ quantity: "90.0000", totalPrice: "20000.00" })],
+          }),
+        ],
+      }),
+      ref,
+    );
+    expect(keys(alerts).filter((k) => k.startsWith("quantity_"))).toEqual([]);
   });
 
   it("skips on non-USD invoices (gated with the value checks)", () => {

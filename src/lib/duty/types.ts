@@ -19,6 +19,10 @@ export type HtsRef = {
   // on read by duty/special-rates.ts when a line claims an SPI. Optional so
   // in-memory test refs stay untouched; absent = no special rates known.
   col1Special?: string | null;
+  // USITC reporting unit(s) as synced ("kg", "No.", "doz., kg") — the unit a
+  // 7501 line's net quantity is declared in (audit/quantity-unit.ts).
+  // Optional so in-memory test refs stay untouched; absent = unknown.
+  unitOfQuantity?: string | null;
   exemption: boolean;
   tradeMeasureId: string | null;
   // Base-schedule change-tiling window (hts_codes.valid_from/valid_to);

@@ -374,6 +374,7 @@ export async function linkExtraction(
                   ? (vendorIdByName.get(li.supplier_name) ?? null)
                   : null,
                 quantity: li.quantity?.toFixed(4) ?? null,
+                quantityUnit: li.quantity_unit ?? null,
                 unitValue: li.unit_value?.toFixed(4) ?? null,
                 enteredValue: li.entered_value.toFixed(2),
               })
@@ -897,6 +898,7 @@ export async function linkExtraction(
               htsCode: li.hts_code,
               htsCodeDigits: li.hts_code ? normalizeHts(li.hts_code) : null,
               quantity: li.quantity?.toFixed(4) ?? null,
+              quantityUnit: li.quantity_unit ?? null,
               unitPrice: li.unit_price?.toFixed(4) ?? null,
               totalPrice: li.total_price.toFixed(2),
             })),

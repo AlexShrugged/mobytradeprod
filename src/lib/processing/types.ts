@@ -27,6 +27,10 @@ export type EntryLineItemExtraction = {
   // vendors, and the (vendor, SKU) pair is what defines the expected origin.
   supplier_name: string | null;
   quantity: number | null;
+  // Unit code printed beside the net quantity ("KG", "NO", "PCS"). Optional
+  // so pre-widening writers (stub, fixtures) stay valid; the Reducto mapper
+  // always emits it.
+  quantity_unit?: string | null;
   unit_value: number | null;
   entered_value: number;
   charges: EntryChargeExtraction[];
@@ -144,6 +148,9 @@ export type InvoiceLineItemExtraction = {
   // frequently absent. Feeds the CI-vs-entry HTS variance check.
   hts_code: string | null;
   quantity: number | null;
+  // Unit the quantity is billed in, as printed ("PCS", "SETS", "KG").
+  // Optional like quantity_unit on the 7501 line.
+  quantity_unit?: string | null;
   unit_price: number | null;
   total_price: number;
   // Document-only compliance facts (see EntryLineItemExtraction note).

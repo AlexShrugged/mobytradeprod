@@ -1270,6 +1270,11 @@ export const entryLineItems = pgTable(
       onDelete: "set null",
     }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
+    // Unit code printed beside the 7501 net quantity ("KG", "NO", "PCS").
+    // Column 32 is net quantity in HTSUS units, so when this is null (an
+    // extraction predating unit capture) the schedule's reporting unit
+    // (hts_codes.unit_of_quantity) stands in on read — audit/quantity-unit.ts.
+    quantityUnit: varchar("quantity_unit", { length: 16 }),
     unitValue: numeric("unit_value", { precision: 12, scale: 4 }),
     enteredValue: numeric("entered_value", {
       precision: 12,
@@ -1406,6 +1411,10 @@ export const invoiceLineItems = pgTable(
     htsCode: varchar("hts_code", { length: 12 }),
     htsCodeDigits: varchar("hts_code_digits", { length: 10 }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
+    // Unit the invoice bills the quantity in, as printed ("PCS", "SETS",
+    // "KG"). Null = the invoice prints none — then the quantity is never
+    // compared against the entry (audit/quantity-unit.ts).
+    quantityUnit: varchar("quantity_unit", { length: 16 }),
     unitPrice: numeric("unit_price", { precision: 12, scale: 4 }),
     totalPrice: numeric("total_price", { precision: 12, scale: 2 }).notNull(),
     ...timestamps,

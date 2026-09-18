@@ -187,9 +187,17 @@ const ENTRY_LINE_ITEM_SCHEMA = {
         "The line's net quantity in HTSUS units, printed on the commodity " +
         "row (the same row as the 10-digit HTS classification) and " +
         "followed by a unit-of-measure code (NO, KG, PCS, DOZ, X). " +
-        "Extract only the number. Never copy the entered value — a figure " +
-        "without a unit code is a dollar amount, not a quantity. Null when " +
-        "the line prints no unit-suffixed figure.",
+        "Extract only the number here; the code goes in quantity_unit. " +
+        "Never copy the entered value — a figure without a unit code is a " +
+        "dollar amount, not a quantity. Null when the line prints no " +
+        "unit-suffixed figure.",
+    },
+    quantity_unit: {
+      type: ["string", "null"],
+      description:
+        "The unit-of-measure code printed right after the net quantity on " +
+        "the commodity row (KG, NO, PCS, DOZ, X, M, M2, L), copied as " +
+        "printed. Null when the line prints no unit-suffixed quantity.",
     },
     unit_value: money(
       "Per-unit value, only if the document explicitly prints one. 7501s " +
@@ -525,6 +533,13 @@ const COMMERCIAL_INVOICE_SCHEMA = {
               "doesn't log one.",
           },
           quantity: { type: ["number", "null"] },
+          quantity_unit: {
+            type: ["string", "null"],
+            description:
+              "The unit the quantity is billed in, from the line or its " +
+              "column heading (PCS, SETS, PRS, KG, M). Null when the " +
+              "invoice prints none.",
+          },
           unit_price: money("Per-unit price"),
           total_price: money("Extended line total"),
           adcvd_case_number: {

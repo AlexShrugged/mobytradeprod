@@ -1295,6 +1295,7 @@ export function buildStory(day: DayFn, at: AtFn, hoursAgo: (h: number) => Date):
         country_of_origin: l.countryOfOrigin,
         hts_code: l.htsCode,
         quantity: l.quantity,
+        quantity_unit: "PCS",
         unit_price: l.unitPrice,
         total_price: l.totalPrice ?? round2(l.quantity * l.unitPrice),
         // Document-only fact: no invoice column carries case numbers.
