@@ -111,7 +111,26 @@ rows, so a broker-declared $0 exception code (9903.82.01 "no alu/steel
 content") satisfies the audit's missing-measure check for its family
 (9903.82.02) — linkage only suppresses alerts, never changes duty math.
 `scripts/repair-exemption-linkage.ts` re-establishes the invariant for
-reference data staged before this existed (ran against prod 2026-08-19). `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
+reference data staged before this existed (ran against prod 2026-08-19).
+An exemption heading is never classified from its own text: it describes
+what its program carves OUT, so it names other programs' goods by
+construction. `familyAuthorities` (differ.ts) gives an untracked exemption
+row the authority its 6-digit family's liability headings agree on (a
+split family like 9903.04 decides nothing), and `classifyAuthority` reads
+product cues from the heading's subject only (`headingSubject`: the
+leading noun phrase, never a use clause or a list item). A Chapter 99
+row's `description` is the schedule's article text, never our label
+(the measure name lives on `trade_measures`): it is what `get_measures`
+and the assistant read when asked what a declared code is, and what the
+differ compares to detect a wording change. Diagnosed 2026-09-18 from an
+ASC complaint: the weak "pharmaceutical" cue had staged the note 52
+carve-out for Section 232 goods (9903.05.90, on 134 ASC charges of steel
+and brass fittings) and three siblings as "Section 232 Pharma", the
+label was all the analyst could read, and it contested the heading as a
+pharma provision on pipe fittings (10 open findings).
+`scripts/repair-ch99-labels.ts` (dry-run default, `--apply
+--queue-analyses`) relabels by the family rule and backfills the article
+text from the latest applied revision. `scripts/import-legacy-tariff.ts` (env `MOBY_DIR`, dry-run by default,
 `--apply` to stage) bootstraps the queue from `../moby`'s hand-curated measures. Base
 windows still stamped release `"SEED"` are demo approximations — the first certified
 release corrects them in place instead of tiling them into history. Reference reads go

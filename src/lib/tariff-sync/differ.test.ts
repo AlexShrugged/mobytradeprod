@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyAuthority, contentHashOf, detectCountries, diffRelease } from "./differ";
+import {
+  classifyAuthority,
+  contentHashOf,
+  detectCountries,
+  diffRelease,
+  familyAuthorities,
+  headingSubject,
+} from "./differ";
 import { parseCh99Rows } from "./usitc";
 import type {
   Ch99Row,
@@ -332,6 +339,173 @@ describe("classifyAuthority — prefix beats weak product cues", () => {
     expect(
       classifyAuthority("Section 301 duties on certain articles", "9903.02.99"),
     ).toBe("section_301");
+  });
+});
+
+// Live USITC text, 2026-09-18. 9903.05.89/.90 (and their Brazil twins
+// .06/.07) were labeled "Section 232 Pharma" on prod because the weak
+// product cue read "pharmaceutical" anywhere in the text; ASC files
+// 9903.05.90 on 134 charges of steel and brass pipe fittings.
+const NOTE_52_METALS_EXEMPTION =
+  "Articles of aluminum, of steel or of copper or derivative aluminum or steel articles; passenger vehicles (sedans, sport utility vehicles, crossover utility vehicles, minivans and cargo vans) and light trucks; parts of passenger vehicles (sedans, sport utility vehicles, crossover utility vehicles, minivans and cargo vans) and light trucks; medium- and heavy-duty vehicles; parts of medium- and heavy-duty vehicles; wood products; patented pharmaceutical articles; and semiconductor articles, as provided in subdivision (f) of U.S. note 52 to this subchapter";
+const NOTE_52_PHARMA_USE_EXEMPTION =
+  "Articles for use in pharmaceutical applications, as provided for in subdivision (e) of U.S. note 52 to this subchapter";
+const EXEMPT = "The duty provided in the applicable subheading";
+
+describe("classifyAuthority — pharma is read from the heading's subject", () => {
+  const notPharma: [string, string][] = [
+    [NOTE_52_METALS_EXEMPTION, "9903.05.90"],
+    [NOTE_52_PHARMA_USE_EXEMPTION, "9903.05.89"],
+    [
+      "Articles the product of Brazil that are articles for use in pharmaceutical applications, as provided for in subdivision (a)(v) of U.S. note 50 to this subchapter",
+      "9903.05.06",
+    ],
+    [
+      "Articles that are donations by persons subject to the jurisdiction of the United States, such as food, clothing and medicine, intended to be used to relieve human suffering",
+      "9903.05.91",
+    ],
+  ];
+  for (const [description, htsno] of notPharma) {
+    it(`${htsno} is not the pharma tariff`, () => {
+      expect(classifyAuthority(description, htsno)).toBe("other");
+    });
+  }
+
+  // The genuine Section 232 pharma action (U.S. note 40) — none of these
+  // name the statute, so the subject cue is all that classifies them.
+  const pharma: [string, string][] = [
+    [
+      "Except as provided in heading 9903.04.61, patented pharmaceutical articles as provided for in subdivisions (c) and (d) of U.S. note 40 to this subchapter",
+      "9903.04.60",
+    ],
+    [
+      "Patented pharmaceutical articles entered before 12:01 a.m. eastern time on September 29, 2026 as provided for in subdivisions (c) and (e) of U.S. note 40 to this subchapter",
+      "9903.04.61",
+    ],
+    [
+      "Patented pharmaceutical articles that are the product of Japan, of a European Union member country, of South Korea, of Switzerland, or of Liechtenstein as provided for in subdivisions (c) and (f) of U.S. note 40 to this subchapter",
+      "9903.04.62",
+    ],
+    [
+      "Pharmaceutical articles subject to a qualifying onshoring plan and a Most-Favored-Nation pharmaceutical pricing agreement, as provided for in subdivisions (c) and (h)(ii) of U.S. note 40 to this subchapter",
+      "9903.04.65",
+    ],
+    [
+      "Drugs and pharmaceutical articles for the specific uses provided in subdivisions (c) and (h)(iii) of U.S. note 40 to this subchapter",
+      "9903.04.66",
+    ],
+    [
+      "Generic pharmaceutical articles, as provided for in subdivision (c) of U.S. note 40 to this subchapter",
+      "9903.04.67",
+    ],
+    [
+      "Pharmaceutical products with an active pharmaceutical ingredient packaged in dosage form that is a product of the United States",
+      "9903.04.68",
+    ],
+  ];
+  for (const [description, htsno] of pharma) {
+    it(`${htsno} is the pharma tariff`, () => {
+      expect(classifyAuthority(description, htsno)).toBe("section_232_pharma");
+    });
+  }
+
+  it("a Section 232 carve-out list naming pharmaceuticals is not bucketed pharma", () => {
+    expect(
+      classifyAuthority(
+        "Articles subject to Section 232 actions: articles of steel; wood products; patented pharmaceutical articles",
+        "9903.07.01",
+      ),
+    ).not.toBe("section_232_pharma");
+  });
+
+  it("the subject stops at the first qualifier, use clause or list item", () => {
+    expect(headingSubject(NOTE_52_METALS_EXEMPTION)).toBe("articles of aluminum");
+    expect(headingSubject(NOTE_52_PHARMA_USE_EXEMPTION)).toBe("articles");
+    expect(
+      headingSubject(
+        "Except as provided in heading 9903.04.61, patented pharmaceutical articles as provided for in note 40",
+      ),
+    ).toBe("patented pharmaceutical articles");
+  });
+});
+
+describe("an exemption heading takes its family's authority", () => {
+  const vietnam = row({
+    htsno: "9903.05.84",
+    description:
+      "Except for products described in headings 9903.05.85–9903.05.92, articles the product of Vietnam, as provided for in U.S. note 52 to this subchapter",
+    general: "The duty provided in the applicable subheading + 12.5%",
+  });
+  const metals = row({
+    htsno: "9903.05.90",
+    description: NOTE_52_METALS_EXEMPTION,
+    general: EXEMPT,
+  });
+
+  it("stages 9903.05.90 under its family, never under the goods it lists", () => {
+    const { revisions } = diffRelease([vietnam, metals], stateWith(), []);
+    const rev = revisions.find((r) => r.ch99Code === "9903.05.90")!;
+    expect(rev.proposed.exemption).toBe(true);
+    expect(rev.authority).toBe("other");
+    expect(rev.proposed.name).toBe("Trade measure — 9903.05.90");
+  });
+
+  it("the family's LIVE authority wins over the classifier", () => {
+    const state = stateWith(
+      live({
+        measureId: "vn",
+        ch99Code: "9903.05.84",
+        ch99Digits: "99030584",
+        authority: "reciprocal",
+      }),
+    );
+    expect(familyAuthorities([vietnam, metals], state).get("990305")).toBe(
+      "reciprocal",
+    );
+    const { revisions } = diffRelease([vietnam, metals], state, []);
+    expect(
+      revisions.find((r) => r.ch99Code === "9903.05.90")!.authority,
+    ).toBe("reciprocal");
+  });
+
+  it("an exemption text naming another statute still follows its family", () => {
+    const steelCarveOut = row({
+      htsno: "9903.05.99",
+      description:
+        "Articles of iron or steel subject to Section 232 duties, as provided for in U.S. note 52",
+      general: EXEMPT,
+    });
+    const { revisions } = diffRelease([vietnam, steelCarveOut], stateWith(), []);
+    expect(
+      revisions.find((r) => r.ch99Code === "9903.05.99")!.authority,
+    ).toBe("other");
+  });
+
+  it("a split family decides nothing: the row is read from its own text", () => {
+    const gin = row({
+      htsno: "9903.04.55",
+      description:
+        "Gin, in containers each holding not over 3.8 liters (provided for in subheading 2208.50)",
+      general: "200%",
+    });
+    const pharmaRate = row({
+      htsno: "9903.04.60",
+      description:
+        "Except as provided in heading 9903.04.61, patented pharmaceutical articles as provided for in subdivisions (c) and (d) of U.S. note 40 to this subchapter",
+      general: "100%",
+    });
+    const generic = row({
+      htsno: "9903.04.67",
+      description:
+        "Generic pharmaceutical articles, as provided for in subdivision (c) of U.S. note 40 to this subchapter",
+      general: EXEMPT,
+    });
+    const rows = [gin, pharmaRate, generic];
+    expect(familyAuthorities(rows, stateWith()).has("990304")).toBe(false);
+    const { revisions } = diffRelease(rows, stateWith(), []);
+    expect(
+      revisions.find((r) => r.ch99Code === "9903.04.67")!.authority,
+    ).toBe("section_232_pharma");
   });
 });
 

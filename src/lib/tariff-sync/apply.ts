@@ -624,7 +624,7 @@ async function applyOne(
         .insert(schema.tradeMeasures)
         .values({ ...measureValues, predecessorId })
         .returning();
-      await insertCh99Row(db, rev.ch99Code!, proposed, measure.id);
+      await insertCh99Row(db, rev.ch99Code!, proposed, measure.id, articleTextOf(rev));
       await insertPrefixes(db, measure.id, proposed.prefixes);
       // Family linkage both ways: a new exemption heading must satisfy the
       // family's live liability measures, and a new liability heading must
@@ -646,7 +646,7 @@ async function applyOne(
         .insert(schema.tradeMeasures)
         .values({ ...measureValues, predecessorId: live!.id })
         .returning();
-      await insertCh99Row(db, rev.ch99Code!, proposed, successor.id);
+      await insertCh99Row(db, rev.ch99Code!, proposed, successor.id, articleTextOf(rev));
       // The successor inherits the predecessor's exemption codes — an
       // in-transit exception outlives a rate change.
       const exemptionRows = await db.query.htsCodes.findMany({
@@ -693,6 +693,22 @@ async function applyOne(
             and(
               eq(schema.htsCodes.codeDigits, normalizeHts(rev.ch99Code)),
               eq(schema.htsCodes.tradeMeasureId, live!.id),
+            ),
+          );
+      }
+      // The published wording belongs to the CODE, not to one measure: every
+      // row carrying it takes the new text, the family link copies included.
+      // Without this an approved note_change never lands, and the differ
+      // (row.description !== live.description) re-stages it on every sync.
+      const articleText = articleTextOf(rev);
+      if (articleText && rev.ch99Code) {
+        await db
+          .update(schema.htsCodes)
+          .set({ description: articleText, updatedAt: new Date() })
+          .where(
+            and(
+              eq(schema.htsCodes.chapter, 99),
+              eq(schema.htsCodes.codeDigits, normalizeHts(rev.ch99Code)),
             ),
           );
       }
@@ -762,16 +778,30 @@ export async function loadProgramMeasures(
   }));
 }
 
+/** The heading's published article text, when the revision came from the
+ *  schedule (legacy-import and hand-staged revisions carry none). */
+function articleTextOf(rev: { evidence: unknown }): string | null {
+  const text = (rev.evidence as RevisionEvidence | null)?.description?.trim();
+  return text ? text : null;
+}
+
 async function insertCh99Row(
   db: DbClient,
   ch99Code: string,
   proposed: ProposedMeasureChange,
   measureId: string,
+  articleText: string | null,
 ): Promise<void> {
   await db.insert(schema.htsCodes).values({
     code: ch99Code,
     codeDigits: normalizeHts(ch99Code),
-    description: proposed.name,
+    // The row describes the HEADING, in the schedule's own words — it is
+    // what get_measures and the assistant read when asked what a declared
+    // Chapter 99 code is. The measure's name is our label for the program
+    // and lives on trade_measures; storing it here too left the analyst
+    // nothing but the label to reason from ("Section 232 Pharma —
+    // 9903.05.90" on the note 52 metals exemption, 2026-09-18).
+    description: articleText ?? proposed.name,
     chapter: 99,
     rateType: proposed.rateType ?? "ad_valorem",
     // Null rate = non-ad-valorem, presence-only; the raw text goes to
