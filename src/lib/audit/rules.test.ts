@@ -445,6 +445,35 @@ describe("rules 3 & 4: rate and amount mismatches", () => {
     for (const a of alerts) expect(a.severity).toBe("error");
   });
 
+  it("stays silent on a misread rate when the dollars close against the official rate", () => {
+    // ASC 231-7370776-8: the extractor read the printed 2.5% as 25% beside
+    // a correctly charged amount. The dollars are the fact.
+    const line = cleanMotorLine();
+    const base = line.charges.find((ch) => ch.chargeType === "base_duty")!;
+    base.rate = "0.4"; // 4% misread as 40%; the $400.00 is right
+    expect(computeEntryAlerts(entry({ lines: [line] }), ref)).toEqual([]);
+
+    const measure = cleanMotorLine();
+    const c = measure.charges.find((ch) => ch.htsCode === "9903.88.01")!;
+    c.rate = "0.025"; // 25% misread as 2.5%; the $2,500.00 is right
+    expect(computeEntryAlerts(entry({ lines: [measure] }), ref)).toEqual([]);
+  });
+
+  it("still flags a wrong rate the amount follows, even inside the amount tolerance", () => {
+    // 4.9% charged against the 4% schedule rate: $90 over on $10k entered
+    // sits inside the 1% amount tolerance, so the rate rule is the only
+    // thing that sees it.
+    const line = cleanMotorLine();
+    const base = line.charges.find((ch) => ch.chargeType === "base_duty")!;
+    base.rate = "0.049";
+    base.amount = "490.00";
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "3990.00" }),
+      ref,
+    );
+    expect(keys(alerts)).toEqual(["rate_mismatch:line1:base"]);
+  });
+
   it("tolerates amounts within max($0.02, 1% of entered value)", () => {
     const line = cleanMotorLine();
     const c = line.charges.find((ch) => ch.htsCode === "9903.88.01")!;
@@ -1557,12 +1586,18 @@ describe("rule 5b: reclassified after filing", () => {
       partHtsCodeCurrent: "8501.31.6000",
       partHtsCurrentSince: "2026-07-01",
     });
-    // Tamper the 301 rate only (amount stays right) — the trust gate holds
-    // and the rate check must still fire alongside the reclassified signal.
+    // Charge the 301 at the wrong rate (the amount follows it, the header
+    // total agrees so the trust gate holds) — the rate and amount checks
+    // must still fire alongside the reclassified signal.
     const c301 = line.charges.find((c) => c.htsCode === "9903.88.01")!;
     c301.rate = "0.2";
-    const alerts = computeEntryAlerts(entry({ lines: [line] }), ref);
-    expect(keys(alerts)).toEqual([
+    c301.amount = "2000.00";
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "3400.00" }),
+      ref,
+    );
+    expect(keys(alerts).sort()).toEqual([
+      "amount_mismatch:line1:99038801",
       "hts_reclassified:line1",
       "rate_mismatch:line1:99038801",
     ]);

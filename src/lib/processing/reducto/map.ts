@@ -59,6 +59,75 @@ export function unwrapCitations(node: unknown): unknown {
   return node;
 }
 
+/** A cited leaf's plain value and the page text its citations point at. */
+function citedLeaf(node: unknown): { value: unknown; printed: string[] } {
+  if (node && typeof node === "object" && !Array.isArray(node)) {
+    const record = node as Record<string, unknown>;
+    if ("value" in record && Array.isArray(record.citations)) {
+      return {
+        value: record.value,
+        printed: record.citations.flatMap((c) => {
+          const content = (c as { content?: unknown } | null)?.content;
+          return typeof content === "string" ? [content] : [];
+        }),
+      };
+    }
+  }
+  return { value: node, printed: [] };
+}
+
+const PRINTED_PERCENT = /^\s*(\d+(?:\.\d+)?)\s*%\s*$/;
+
+/** The extractor turns a printed "2.5%" into a decimal fraction itself and
+ *  now and then slips a place (0.25 beside a citation reading "2.5%" and a
+ *  correct $177.48 — ASC 231-7370776-8, 2026-09-18). A 7501 charge is
+ *  self-checking, so the printed figure wins only when BOTH witnesses agree:
+ *  every percent the rate cites is the same number, and the charge's own
+ *  amount closes against that rate on the line's entered value better than
+ *  against the extracted one. Anything else (no percent-shaped citation, a
+ *  $0 claim, a 232 metal-content basis) is left exactly as extracted. Runs
+ *  on the cited tree, before unwrapCitations discards the page text — and
+ *  on a copy: the response is also persisted verbatim as raw_extraction. */
+export function repairCitedRates(
+  response: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(response.line_items)) return response;
+  const data = structuredClone(response);
+  for (const line of data.line_items as unknown[]) {
+    if (!line || typeof line !== "object") continue;
+    const lineRecord = line as Record<string, unknown>;
+    const entered = toNum(citedLeaf(lineRecord.entered_value).value);
+    if (entered === null || entered <= 0) continue;
+    if (!Array.isArray(lineRecord.charges)) continue;
+    for (const charge of lineRecord.charges) {
+      if (!charge || typeof charge !== "object") continue;
+      const chargeRecord = charge as Record<string, unknown>;
+      const rate = citedLeaf(chargeRecord.rate);
+      const extracted = toNum(rate.value);
+      const amount = toNum(citedLeaf(chargeRecord.amount).value);
+      if (extracted === null || amount === null || amount <= 0) continue;
+      const printed = new Set(
+        rate.printed.flatMap((text) => {
+          const match = PRINTED_PERCENT.exec(text);
+          return match ? [Number(match[1]) / 100] : [];
+        }),
+      );
+      if (printed.size !== 1) continue;
+      const [printedRate] = printed;
+      if (Math.abs(printedRate - extracted) < 1e-9) continue;
+      const missPrinted = Math.abs(amount - printedRate * entered);
+      const missExtracted = Math.abs(amount - extracted * entered);
+      if (
+        missPrinted <= Math.max(0.05, entered * 0.001) &&
+        missPrinted < missExtracted
+      ) {
+        (chargeRecord.rate as Record<string, unknown>).value = printedRate;
+      }
+    }
+  }
+  return data;
+}
+
 function toStr(v: unknown): string | null {
   if (typeof v === "number") return String(v);
   if (typeof v !== "string") return null;
@@ -558,7 +627,12 @@ export function mapExtractToResult(
   docType: ExtractableDocType,
   result: unknown,
 ): ExtractionResult {
-  const data = asRecord(unwrapCitations(mergeResultChunks(result)));
+  const merged = mergeResultChunks(result);
+  const data = asRecord(
+    unwrapCitations(
+      docType === "port_entry" ? repairCitedRates(merged) : merged,
+    ),
+  );
   switch (docType) {
     case "port_entry":
       return { docType, fields: mapPortEntry(data) };

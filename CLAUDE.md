@@ -39,7 +39,18 @@ shift): it joins the retry, and if it alone persists the quantity is
 blanked rather than persisted. Prompt wording was measured on real ASC
 packets (2026-09-01): naming the gross-weight column in the hints made
 quantity WORSE, so the deterministic checks carry the load — replay a
-suspect PDF locally before changing the prompt text. The 7501 line `sku` is
+suspect PDF locally before changing the prompt text. On a 7501 charge the
+dollars are the fact and the rate is a label: the extractor converts
+printed percents itself and slipped a place once in 1,860 prod charges
+("2.5%" cited, 0.25 emitted beside a correct $177.48; ASC 231-7370776-8,
+2026-09-18), so `repairCitedRates` (`reducto/map.ts`, on a copy — the
+response is also `raw_extraction`) takes the printed percent the rate
+cites when the charge's own amount closes against it on the entered
+value, and audit rule 3 stays silent on a declared rate whose amount
+closes against the official rate and sits nearer to it than to the
+declared one (an amount that FOLLOWS a wrong rate still fires, even
+inside rule 4's tolerance); the analyst prompt carries the same
+doctrine. The 7501 line `sku` is
 the extractor's weakest field (broker ABI printouts print no part number):
 `processing/line-sku.ts` blanks values that are provably a labeled or
 header-referenced shipment/PO/invoice number, a bare value the page prints

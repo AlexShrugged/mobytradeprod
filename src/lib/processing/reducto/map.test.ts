@@ -23,6 +23,7 @@ import {
   classifyFromResponse,
   mapExtractToResult,
   mergeResultChunks,
+  repairCitedRates,
   unwrapCitations,
 } from "./map";
 
@@ -54,6 +55,82 @@ describe("unwrapCitations", () => {
   it("does not unwrap objects with a value key but no citations array", () => {
     const notCited = { value: 10, unit: "kg" };
     expect(unwrapCitations(notCited)).toEqual(notCited);
+  });
+});
+
+describe("repairCitedRates", () => {
+  /** A cited value whose citation reads `printed` on the page. */
+  const printedAs = (value: number, printed: string) => ({
+    value,
+    citations: [{ type: "text", content: printed }],
+  });
+  // ASC 231-7370776-8 line 1: three rates in column 37A, the base duty's
+  // "2.5%" converted to 0.25 beside a correct $177.48.
+  const response = (baseRate: number, baseAmount = 177.48) => ({
+    entry_number: cite("231-7370776-8"),
+    line_items: [
+      {
+        line_number: cite(1),
+        hts_code: cite("4016.93.5050"),
+        entered_value: cite(7099),
+        charges: [
+          {
+            charge_type: cite("additional_duty"),
+            hts_code: cite("9903.88.03"),
+            rate: printedAs(0.25, "25.0%"),
+            amount: cite(1774.75),
+          },
+          {
+            charge_type: cite("base_duty"),
+            hts_code: cite(null),
+            rate: printedAs(baseRate, "2.5%"),
+            amount: cite(baseAmount),
+          },
+        ],
+      },
+    ],
+  });
+  const rates = (result: unknown) =>
+    (
+      mapExtractToResult("port_entry", result).fields as {
+        line_items: { charges: { rate: number | null }[] }[];
+      }
+    ).line_items[0].charges.map((c) => c.rate);
+
+  it("takes the printed percent when the dollars agree with it", () => {
+    expect(rates(response(0.25))).toEqual([0.25, 0.025]);
+  });
+
+  it("never edits the provider response it was handed", () => {
+    const raw = response(0.25);
+    const before = structuredClone(raw);
+    const repaired = repairCitedRates(raw);
+    expect(raw).toEqual(before);
+    expect(repaired).not.toBe(raw);
+  });
+
+  it("leaves a rate alone when the dollars follow the extracted value", () => {
+    // Charged at 25%: the citation may be the stray, the money says 0.25.
+    expect(rates(response(0.25, 1774.75))).toEqual([0.25, 0.25]);
+  });
+
+  it("leaves a rate alone when the dollars back neither reading", () => {
+    // A metal-content basis: the amount is a rate on some other value.
+    expect(rates(response(0.25, 60))).toEqual([0.25, 0.25]);
+  });
+
+  it("is a no-op on a correct conversion, a $0 claim, and uncited data", () => {
+    expect(rates(response(0.025))).toEqual([0.25, 0.025]);
+    expect(rates(response(0.25, 0))).toEqual([0.25, 0.25]);
+    const plain = { line_items: [{ entered_value: 100, charges: [{ rate: 0.5, amount: 5 }] }] };
+    expect(repairCitedRates(plain)).toEqual(plain);
+  });
+
+  it("stands down when the citations disagree on the printed percent", () => {
+    const raw = response(0.25);
+    const rate = raw.line_items[0].charges[1].rate;
+    rate.citations.push({ type: "text", content: "25.0%" });
+    expect(rates(raw)).toEqual([0.25, 0.25]);
   });
 });
 

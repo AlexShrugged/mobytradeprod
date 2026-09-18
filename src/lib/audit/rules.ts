@@ -735,9 +735,27 @@ export function computeEntryAlerts(
             ? ` under SPI ${expected.baseDutyClaim.spi}`
             : "";
         const declaredRate = c.rate === null ? null : Number(c.rate);
+        const diff = Math.abs(amountCents - expectedAmountCents);
+        const tolerance = Math.max(
+          config.amountToleranceAbsCents,
+          Math.round(enteredCents * config.amountTolerancePct),
+        );
+        // A 7501 charge prints rate AND amount, and the dollars are the
+        // fact: when the amount closes against the official rate and sits
+        // nearer to it than to what the declared rate would have charged,
+        // the printed rate is a misread (2.5% taken as 25% beside a correct
+        // $177.48 — ASC 231-7370776-8, 2026-09-18), not a filing error. An
+        // amount that FOLLOWS the declared rate still fires, even inside
+        // the amount tolerance.
+        const dollarsBackSchedule =
+          declaredRate !== null &&
+          diff <= tolerance &&
+          diff <
+            Math.abs(amountCents - Math.round(declaredRate * enteredCents));
         if (
           declaredRate !== null &&
-          Math.abs(declaredRate - expectedRate) > 0.00005
+          Math.abs(declaredRate - expectedRate) > 0.00005 &&
+          !dollarsBackSchedule
         ) {
           const impliedDiff = Math.round(
             Math.abs(declaredRate - expectedRate) * enteredCents,
@@ -764,11 +782,6 @@ export function computeEntryAlerts(
         // Rule 4: declared amount deviates from rate x entered value.
         // $0 is an exclusion claim, never an underpayment.
         if (amountCents === 0) continue;
-        const diff = Math.abs(amountCents - expectedAmountCents);
-        const tolerance = Math.max(
-          config.amountToleranceAbsCents,
-          Math.round(enteredCents * config.amountTolerancePct),
-        );
         if (diff > tolerance) {
           alerts.push({
             alertKey: `amount_mismatch:line${line.lineNumber}:${chargeRefKey}`,
