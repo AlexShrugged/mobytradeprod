@@ -203,7 +203,7 @@ async function main() {
     where: all
       ? eq(schema.entries.orgId, org.id)
       : inArray(schema.entries.entryNumber, entryNumbers),
-    columns: { id: true, entryNumber: true },
+    columns: { id: true, entryNumber: true, orgId: true },
     orderBy: [asc(schema.entries.entryDate)],
   });
   if (entries.length === 0) throw new Error("no matching entries");
@@ -214,7 +214,17 @@ async function main() {
   }
 
   const analyst = stub ? new StubEntryAnalyst() : getEntryAnalyst();
-  const ref = await loadReferenceDataForOrg(db, org.id);
+  // Named entries run under their OWN org (a multi-org database: the first
+  // org is not necessarily theirs); reference data loads once per org.
+  const refByOrg = new Map<
+    string,
+    Awaited<ReturnType<typeof loadReferenceDataForOrg>>
+  >();
+  const refFor = async (orgId: string) => {
+    let ref = refByOrg.get(orgId);
+    if (!ref) refByOrg.set(orgId, (ref = await loadReferenceDataForOrg(db, orgId)));
+    return ref;
+  };
 
   const runDir = path.join(
     ".analysis",
@@ -234,8 +244,9 @@ async function main() {
     errors: 0,
   };
 
-  for (const { id, entryNumber } of entries) {
-    const bundle = await loadEntryBundle(db, org.id, id);
+  for (const { id, entryNumber, orgId } of entries) {
+    const ref = await refFor(orgId);
+    const bundle = await loadEntryBundle(db, orgId, id);
     if (!bundle) throw new Error(`bundle load failed for ${entryNumber}`);
 
     const started = Date.now();
