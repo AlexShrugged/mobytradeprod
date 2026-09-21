@@ -218,6 +218,13 @@
       "when": 1789678160131,
       "tag": "0030_line_quantity_unit",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790016558728,
+      "tag": "0031_part_section_232",
+      "breakpoints": true
     }
   ]
 }

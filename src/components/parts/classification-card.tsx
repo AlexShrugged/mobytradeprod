@@ -12,6 +12,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { PartRow } from "@/lib/db/queries/parts";
 import { formatDate, formatRate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -67,6 +74,69 @@ export function ClassificationCard({
       ) : (
         <SimpleBody part={part} onReview={onReview} />
       )}
+      <Section232Row part={part} />
+    </div>
+  );
+}
+
+// The importer's own Section 232 designation for the SKU. Three states on
+// purpose: a catalog that has not said is not a catalog that said no.
+const SECTION_232_OPTIONS = [
+  { value: "unset", label: "Not specified", stored: null },
+  { value: "yes", label: "Applies", stored: true },
+  { value: "no", label: "Does not apply", stored: false },
+] as const;
+
+function Section232Row({ part }: { part: PartRow }) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+  const current =
+    SECTION_232_OPTIONS.find((o) => o.stored === part.section232) ??
+    SECTION_232_OPTIONS[0];
+
+  async function save(value: string) {
+    const next = SECTION_232_OPTIONS.find((o) => o.value === value);
+    if (!next || next.value === current.value) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/parts/${part.id}/fields`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section232: next.stored }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(payload?.error ?? "Save failed.");
+      toast.success(`Section 232 updated on ${part.sku}.`);
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between gap-3 border-t px-3 py-2"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="text-sm text-muted-foreground">Section 232</span>
+      <Select value={current.value} onValueChange={save} disabled={busy}>
+        <SelectTrigger
+          size="sm"
+          className="h-7 text-xs"
+          aria-label="Section 232"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent align="end">
+          {SECTION_232_OPTIONS.map((o) => (
+            <SelectItem key={o.value} value={o.value} className="text-xs">
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

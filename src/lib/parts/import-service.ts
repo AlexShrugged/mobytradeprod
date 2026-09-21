@@ -8,8 +8,10 @@ import {
 import { db, schema } from "@/lib/db";
 import { normalizeHts } from "@/lib/duty/calculator";
 import { adoptEntryLinesForParts } from "@/lib/processing/linker";
+import { queueReanalysesForParts } from "@/lib/analysis/service";
 import { normalizeVendorName } from "@/lib/vendors/normalize";
 import { findOrCreateVendor, type ResolvedVendor } from "@/lib/vendors/service";
+import { section232ToCell } from "./section-232";
 import { buildSkuIndex, normalizeSku, resolveSku } from "./sku";
 import { skuKeySql } from "./sku-sql";
 
@@ -52,6 +54,8 @@ export type CatalogImportSummary = {
   unchanged: number;
   sourcesCreated: number;
   sourcesUpdated: number;
+  /** SKUs whose Section 232 designation this file set or changed. */
+  section232Set: number;
   /** Orphaned entry lines (processed before their part existed) adopted
    *  onto imported SKUs — what flips those parts to Active. */
   entryLinesLinked: number;
@@ -101,6 +105,10 @@ export async function applyCatalogImport(opts: {
     let unchanged = 0;
     let sourcesCreated = 0;
     let sourcesUpdated = 0;
+    let section232Set = 0;
+    // A changed 232 designation moves what the analyst reads on entries
+    // carrying the SKU — those re-analyze (previously analyzed ones only).
+    const section232ChangedPartIds: string[] = [];
     const touched: { partId: string; created: boolean }[] = [];
     const reauditPartIds = new Set<string>();
 
@@ -172,6 +180,7 @@ export async function applyCatalogImport(opts: {
             // The projection; seedClassificationsForNewParts writes the
             // window rows behind it below.
             htsCode: item.htsCode,
+            section232: item.section232,
             status: "active" as const,
           })),
         )
@@ -184,6 +193,10 @@ export async function applyCatalogImport(opts: {
         const partId = idBySku.get(item.sku);
         if (partId === undefined) continue; // unreachable: insert returned
         touched.push({ partId, created: true });
+        if (item.section232 !== null) {
+          section232Set++;
+          section232ChangedPartIds.push(partId);
+        }
         if (item.htsCode !== null) {
           classificationRows.push({ partId, htsCode: item.htsCode });
         }
@@ -257,6 +270,27 @@ export async function applyCatalogImport(opts: {
             await recordChange(part.id, null, field, oldValue, patch[key] as string);
           }
         }
+      }
+
+      // Blank means "not specified", so only a stated answer overwrites —
+      // a file without the column (or a blank cell) never clears a mark.
+      if (item.section232 !== null && item.section232 !== part.section232) {
+        const before = part.section232;
+        [part] = await tx
+          .update(schema.parts)
+          .set({ section232: item.section232, updatedAt: new Date() })
+          .where(eq(schema.parts.id, part.id))
+          .returning();
+        await recordChange(
+          part.id,
+          null,
+          "section_232",
+          section232ToCell(before),
+          section232ToCell(item.section232),
+        );
+        section232Set++;
+        section232ChangedPartIds.push(part.id);
+        changed = true;
       }
 
       // Committed through the classification service like every HTS writer
@@ -400,6 +434,11 @@ export async function applyCatalogImport(opts: {
       await reauditEntriesForPart(tx, orgId, partId);
     }
 
+    // After adoption, so lines the file just linked count as carrying the
+    // SKU. Only a stated 232 answer queues anything: adoption alone never
+    // re-analyzes the book.
+    await queueReanalysesForParts(tx, orgId, section232ChangedPartIds);
+
     const summaryIssues = opts.issues.slice(0, 200);
     const [document] = await tx
       .insert(schema.documents)
@@ -424,6 +463,7 @@ export async function applyCatalogImport(opts: {
           unchanged,
           sources_created: sourcesCreated,
           sources_updated: sourcesUpdated,
+          section_232_set: section232Set,
           entry_lines_linked: adopted.linkedLines,
           columns: opts.columns,
           issues: summaryIssues,
@@ -454,6 +494,7 @@ export async function applyCatalogImport(opts: {
       unchanged,
       sourcesCreated,
       sourcesUpdated,
+      section232Set,
       entryLinesLinked: adopted.linkedLines,
       issues: opts.issues,
     };

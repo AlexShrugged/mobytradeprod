@@ -432,6 +432,84 @@ export async function queueReanalysesForEntries(
 }
 
 /**
+ * Catalog sibling of the tariff-apply queues: a fact the analyst reads off
+ * the catalog (the importer's Section 232 designation) changed on these
+ * parts, so its judgments on the entries carrying them need re-deriving.
+ * "Carrying" is the Parts page's usage predicate (parts/usage-sql.ts): a
+ * 7501 line naming the part, a broker tariff sheet row, or a line of an
+ * invoice attached to the entry. Still filtered to entries the analyst has
+ * cleanly analyzed — the rest get their first run from the sweep, under the
+ * catalog as it stands then. Returns the number queued.
+ */
+export async function queueReanalysesForParts(
+  db: DbClient,
+  orgId: string,
+  partIds: string[],
+): Promise<number> {
+  const ids = [...new Set(partIds)];
+  const entryIds = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const batch = ids.slice(i, i + 500);
+    const [declared, sheet, invoiced] = await Promise.all([
+      db
+        .selectDistinct({ entryId: schema.entryLineItems.entryId })
+        .from(schema.entryLineItems)
+        .where(
+          and(
+            eq(schema.entryLineItems.orgId, orgId),
+            inArray(schema.entryLineItems.partId, batch),
+          ),
+        ),
+      db
+        .selectDistinct({ entryId: schema.entryLineParts.entryId })
+        .from(schema.entryLineParts)
+        .where(
+          and(
+            eq(schema.entryLineParts.orgId, orgId),
+            inArray(schema.entryLineParts.partId, batch),
+          ),
+        ),
+      db
+        .selectDistinct({ entryId: schema.entryInvoices.entryId })
+        .from(schema.invoiceLineItems)
+        .innerJoin(
+          schema.entryInvoices,
+          eq(schema.entryInvoices.invoiceId, schema.invoiceLineItems.invoiceId),
+        )
+        .where(
+          and(
+            eq(schema.invoiceLineItems.orgId, orgId),
+            inArray(schema.invoiceLineItems.partId, batch),
+          ),
+        ),
+    ]);
+    for (const r of [...declared, ...sheet, ...invoiced]) entryIds.add(r.entryId);
+  }
+  if (entryIds.size === 0) return 0;
+
+  const analyzed: { entryId: string; orgId: string }[] = [];
+  const all = [...entryIds];
+  for (let i = 0; i < all.length; i += 500) {
+    analyzed.push(
+      ...(await db
+        .selectDistinct({
+          entryId: schema.analysisRuns.entryId,
+          orgId: schema.analysisRuns.orgId,
+        })
+        .from(schema.analysisRuns)
+        .where(
+          and(
+            eq(schema.analysisRuns.orgId, orgId),
+            eq(schema.analysisRuns.status, "succeeded"),
+            inArray(schema.analysisRuns.entryId, all.slice(i, i + 500)),
+          ),
+        )),
+    );
+  }
+  return queueAnalysesForEntries(db, analyzed, "part_change");
+}
+
+/**
  * Org-rule sibling of the tariff-apply queues: an org rule changed, so the
  * analyst's standing instructions moved and its prior judgments on this
  * org's entries need re-deriving — a clean re-run withdraws findings the

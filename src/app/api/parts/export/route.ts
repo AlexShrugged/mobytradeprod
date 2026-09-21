@@ -3,6 +3,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getCurrentOrgId } from "@/lib/org";
 import { toCsv } from "@/lib/parts/import-file";
+import { section232ToCell } from "@/lib/parts/section-232";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,7 @@ export async function GET() {
       "Country of Origin",
       "Unit Cost",
       "Unit of Measure",
+      "Section 232",
       "Status",
     ],
   ];
@@ -58,7 +60,12 @@ export async function GET() {
       // A provisional code is a classifier guess, not catalog truth.
       part.htsCodeProvisional ? null : part.htsCode,
     ];
-    const tail = [part.unitOfMeasure, part.status];
+    const tail = [
+      part.unitOfMeasure,
+      // Yes/No, blank when the importer has not said — re-imports as-is.
+      section232ToCell(part.section232),
+      part.status,
+    ];
     if (partSources.length === 0) {
       rows.push([...base, null, null, null, ...tail]);
     } else {

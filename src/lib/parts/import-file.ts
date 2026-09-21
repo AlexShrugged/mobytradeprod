@@ -3,6 +3,7 @@
 // and no schema imports — XLSX decoding (exceljs) lives in import-xlsx.ts,
 // database writes in import-service.ts. Tests colocated.
 
+import { isSection232Header, parseSection232Cell } from "./section-232";
 import { normalizeSku } from "./sku";
 
 // ------------------------------------------------------------------- CSV
@@ -83,7 +84,8 @@ export type CatalogField =
   | "vendorName"
   | "countryOfOrigin"
   | "unitCost"
-  | "unitOfMeasure";
+  | "unitOfMeasure"
+  | "section232";
 
 // Matched against headers normalized to lowercase alphanumerics, so
 // "HTS Code", "hts_code", and "HTS-Code" all land on htsCode. First match
@@ -161,6 +163,9 @@ const HEADER_SYNONYMS: Record<CatalogField, string[]> = {
     "fobcost",
   ],
   unitOfMeasure: ["unitofmeasure", "uom", "unit"],
+  // No synonym list: the column is whichever header names Section 232
+  // (./section-232), claimed in its own pass below.
+  section232: [],
 };
 
 // Synonyms too generic to trust as PREFIXES — "Part Notes", "Item Weight",
@@ -210,6 +215,16 @@ export function mapHeaders(headers: string[]): HeaderMap {
   const normalized = headers.map(normalizeHeader);
   const map: HeaderMap = {};
   const taken = new Set<number>();
+
+  // Pass 0: the Section 232 column. Importers title it freely ("Steel
+  // Hardware for Section 232", "232 Exempt?"), so it is found by the number
+  // rather than a synonym, and claimed first so no fragment pass below can
+  // take a header that is plainly about 232.
+  const s232 = headers.findIndex((h) => isSection232Header(h));
+  if (s232 >= 0) {
+    map.section232 = s232;
+    taken.add(s232);
+  }
 
   // Pass 1: exact equality (synonym list order = priority).
   for (const field of FIELDS) {
@@ -287,6 +302,9 @@ export type CatalogImportItem = {
   description: string | null;
   htsCode: string | null;
   unitOfMeasure: string | null;
+  /** The importer's Section 232 designation: true applies, false does not,
+   *  null not specified (a blank cell is never a "no"). */
+  section232: boolean | null;
   sources: CatalogImportSource[];
 };
 
@@ -438,6 +456,24 @@ export function extractCatalogItems(table: string[][]): ExtractResult {
       unitOfMeasure = null;
     }
 
+    // Read under the column's own header: "232 Exempt: Yes" means the
+    // opposite of "Section 232: Yes".
+    let section232: boolean | null = null;
+    if (map.section232 !== undefined) {
+      const parsed = parseSection232Cell(
+        table[headerIndex][map.section232],
+        cellAt(row, "section232"),
+      );
+      if (parsed.ok) {
+        section232 = parsed.value;
+      } else {
+        issues.push({
+          row: rowNumber,
+          message: `${parsed.problem}; field skipped`,
+        });
+      }
+    }
+
     const vendorName = cellAt(row, "vendorName");
     if (vendorName === null && (countryOfOrigin !== null || unitCost !== null)) {
       // Cost and origin are (part, vendor) facts — same rule the manual New
@@ -462,12 +498,14 @@ export function extractCatalogItems(table: string[][]): ExtractResult {
       description: null,
       htsCode: null,
       unitOfMeasure: null,
+      section232: null,
       sources: [],
     };
     item.name = cellAt(row, "name") ?? item.name;
     item.description = cellAt(row, "description") ?? item.description;
     item.htsCode = htsCode ?? item.htsCode;
     item.unitOfMeasure = unitOfMeasure ?? item.unitOfMeasure;
+    item.section232 = section232 ?? item.section232;
     if (vendorName !== null) {
       const key = vendorName.toLowerCase();
       const existing = item.sources.find(

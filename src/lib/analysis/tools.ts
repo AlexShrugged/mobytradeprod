@@ -20,6 +20,7 @@ import {
 } from "../duty/calculator";
 import type { ReferenceData } from "../duty/types";
 import type { SuppressionSpec } from "../org-rules";
+import { normalizeSku } from "../parts/sku";
 import { findingsReportSchema, type FindingsReport } from "./findings";
 import { resolveRegulatoryParams } from "../duty/regulatory-params";
 import type { EntryBundle, ToolTraceEntry } from "./types";
@@ -182,16 +183,23 @@ export function buildAnalystTools(
   const getPart = betaZodTool({
     name: "get_part",
     description:
-      "Look up a SKU in the parts catalog: name, description, current + historical HTS classification windows, and per-vendor sourcing facts (COO, cost, validity windows). An unknown SKU is an error — and a signal the line matched no catalog part.",
+      "Look up a SKU in the parts catalog: name, description, current + historical HTS classification windows, the importer's Section 232 designation (section232: applies, does_not_apply, or null when the importer has not said), and per-vendor sourcing facts (COO, cost, validity windows). Covers every SKU in the briefing's catalogSkus: the entry's lines, its tariff sheet rows, and its invoices. An unknown SKU is an error — and a signal the SKU matched no catalog part.",
     inputSchema: z.object({ sku: z.string() }),
     run: (input) => {
-      const part = bundle.partsBySku.get(input.sku);
+      // Documents print SKUs in their own spelling; the catalog key is the
+      // normalized one (parts/sku.ts).
+      const key = normalizeSku(input.sku);
+      const part =
+        bundle.partsBySku.get(input.sku) ??
+        [...bundle.partsBySku.values()].find(
+          (p) => key !== null && normalizeSku(p.sku) === key,
+        );
       if (!part) {
         return respond(
           ctx,
           "get_part",
           input,
-          `ERROR: no part with SKU ${input.sku} on this entry's lines.`,
+          `ERROR: no part with SKU ${input.sku} in this entry's catalog SKUs.`,
         );
       }
       return respond(ctx, "get_part", input, part);
@@ -201,7 +209,7 @@ export function buildAnalystTools(
   const getSiblingEntries = betaZodTool({
     name: "get_sibling_entries",
     description:
-      "Other entries moving on this entry's shipments (same bill of lading / air waybill), with their declared lines and charges. Identical goods on one shipment should carry identical Chapter 99 treatment — use this to check cross-entry consistency. An empty list means no sibling entries are known.",
+      "Other entries moving on this entry's shipments (same bill of lading / air waybill), with their declared lines and charges, plus — where the catalog knows them — each line's SKUs (parts) and the sibling's section232Catalog marks. Identical goods on one shipment should carry identical Chapter 99 treatment — use this to check cross-entry consistency. An empty list means no sibling entries are known.",
     inputSchema: z.object({}),
     run: (input) =>
       respond(ctx, "get_sibling_entries", input, bundle.siblingEntries),

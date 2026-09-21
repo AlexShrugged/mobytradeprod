@@ -24,6 +24,7 @@ import type { EntryDetail, EntryRow } from "../db/queries/entries";
 import type { PartRow } from "../db/queries/parts";
 import { auditAlertType } from "../db/schema";
 import { normalizeHtsPrefix, type SuppressionSpec } from "../org-rules";
+import { section232Mark } from "../parts/section-232";
 import {
   pairSiblingAlerts,
   unitIds,
@@ -189,6 +190,7 @@ const compactPart = (p: PartRow) => ({
   description: p.description,
   status: p.status,
   htsCode: p.htsCode,
+  section232: section232Mark(p.section232),
   sources: p.sources.map((s) => ({
     vendorName: s.vendorName,
     countryOfOrigin: s.countryOfOrigin,
@@ -489,7 +491,7 @@ export function buildAgentTools(
   const searchParts = betaZodTool({
     name: "search_parts",
     description:
-      "Search the parts catalog by SKU, name, or description. Rows carry the committed HTS code and per-vendor sourcing (COO, cost).",
+      "Search the parts catalog by SKU, name, or description. Rows carry the committed HTS code, per-vendor sourcing (COO, cost), and section232: the importer's own Section 232 designation for the SKU (applies, does_not_apply, or null when the importer has not said - never read null as either answer).",
     inputSchema: z.object({
       q: z.string().nullable(),
       limit: z.number().nullable().describe("default 20, max 50"),

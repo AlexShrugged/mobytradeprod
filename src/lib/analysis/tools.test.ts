@@ -90,6 +90,16 @@ describe("buildAnalystTools", () => {
     expect(await run("get_part", { sku: "NOPE" })).toMatch(/^ERROR:/);
   });
 
+  it("get_part finds a SKU under the spelling a document prints", async () => {
+    const bundle = fixtureBundle();
+    const part = bundle.partsBySku.get("EB-MTR-500W")!;
+    bundle.partsBySku.set("EB-MTR-500W", { ...part, section232: "applies" });
+    const { run } = setup(bundle);
+    const out = JSON.parse(await run("get_part", { sku: "eb-mtr-500w" }));
+    expect(out.sku).toBe("EB-MTR-500W");
+    expect(out.section232).toBe("applies");
+  });
+
   it("get_sibling_entries returns the shipment siblings with charges", async () => {
     const { run } = setup(fixtureBundle({ siblingEntries: [fixtureSibling()] }));
     const out = JSON.parse(await run("get_sibling_entries", {}));

@@ -337,6 +337,9 @@ export const analysisRunTrigger = pgEnum("analysis_run_trigger", [
   // An org rule changed (created, edited, toggled, deleted) — the analyst's
   // standing instructions moved, so its prior judgments need re-deriving.
   "org_rule",
+  // A catalog fact the analyst reads changed on a part behind one of the
+  // entry's lines (the importer's Section 232 designation).
+  "part_change",
 ]);
 export const adcvdOrderStatus = pgEnum("adcvd_order_status", [
   "active",
@@ -708,6 +711,13 @@ export const parts = pgTable(
       .notNull()
       .default(false),
     htsReviewStatus: partHtsReviewStatus("hts_review_status"),
+    // The importer's own Section 232 designation for this SKU: true = the
+    // article carries the metal content the 232 measures reach, false = it
+    // does not, null = the importer has not said (a blank catalog cell is
+    // never a "no"). A declared fact like the HTS code — it informs the AI
+    // analyst's reading of a line's 232 treatment and never enters duty
+    // math, which stays scope- and claim-driven.
+    section232: boolean("section_232"),
     // "Pending changes" (approved quote awaiting its PO) and "quote received"
     // are DERIVED from quote_lines, never stored here.
     status: partStatus("status").notNull().default("active"),

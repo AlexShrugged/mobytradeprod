@@ -132,6 +132,18 @@ describe("mapHeaders", () => {
     });
   });
 
+  it("claims the Section 232 column by its number, whatever the title", () => {
+    expect(
+      mapHeaders(["Item number", "Steel Hardware for Section 232"]),
+    ).toEqual({ sku: 0, section232: 1 });
+    expect(mapHeaders(["SKU", "232 Exempt?"])).toEqual({
+      sku: 0,
+      section232: 1,
+    });
+    // Digits inside a longer number are not the column.
+    expect(mapHeaders(["SKU", "Bin 12320"])).toEqual({ sku: 0 });
+  });
+
   it("never claims columns via over-generic prefixes", () => {
     // "Part Notes" / "Unit Weight" / "Mfg Date" must stay unmapped even
     // though "part", "unit", and "mfg" are exact synonyms.
@@ -165,6 +177,7 @@ describe("extractCatalogItems", () => {
         description: "Alloy 700c",
         htsCode: "8714.91.3000",
         unitOfMeasure: "EA",
+        section232: null,
         sources: [
           {
             vendorName: "Shenzhen Co",
@@ -211,6 +224,7 @@ describe("extractCatalogItems", () => {
         description: null,
         htsCode: null,
         unitOfMeasure: "EA",
+        section232: null,
         sources: [
           { vendorName: "Vendor A", countryOfOrigin: null, unitCost: null },
         ],
@@ -219,6 +233,46 @@ describe("extractCatalogItems", () => {
     expect(issues.map((i) => i.row)).toEqual([2, 2, 2, 3]);
     expect(issues[0].message).toContain("chapter 98/99");
     expect(issues[3].message).toContain("no SKU");
+  });
+
+  it("reads the Section 232 column: Yes applies, blank is not specified", () => {
+    const { items, issues, columns } = extractCatalogItems(
+      parseCsv(
+        "Item number,Steel Hardware for Section 232\nA-1,Yes\nA-2,No\nA-3,\nA-4,maybe",
+      ),
+    );
+    expect(columns.section232).toBe("Steel Hardware for Section 232");
+    expect(items.map((i) => [i.sku, i.section232])).toEqual([
+      ["A-1", true],
+      ["A-2", false],
+      ["A-3", null],
+      ["A-4", null],
+    ]);
+    expect(issues).toEqual([
+      {
+        row: 5,
+        message: 'Section 232 value "maybe" is not Yes or No; field skipped',
+      },
+    ]);
+  });
+
+  it("flips the Section 232 column when the header names the exemption", () => {
+    const { items } = extractCatalogItems(
+      parseCsv("SKU,Section 232 Exempt\nA-1,Yes\nA-2,No\nA-3,"),
+    );
+    expect(items.map((i) => [i.sku, i.section232])).toEqual([
+      ["A-1", false],
+      ["A-2", true],
+      ["A-3", null],
+    ]);
+  });
+
+  it("keeps a SKU's Section 232 answer when a later row leaves it blank", () => {
+    const { items } = extractCatalogItems(
+      parseCsv("SKU,Vendor,Section 232\nA-1,Acme,Yes\nA-1,Bolt Co,"),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].section232).toBe(true);
   });
 
   it("drops per-vendor facts when no vendor is named", () => {

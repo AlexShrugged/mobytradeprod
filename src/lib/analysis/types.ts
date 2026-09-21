@@ -8,6 +8,8 @@
 import type { AuditableSnapshot } from "../audit/auditor";
 import type { ReferenceData } from "../duty/types";
 import type { SuppressionSpec } from "../org-rules";
+import type { LinePartSource } from "../parts/line-parts";
+import type { Section232Mark } from "../parts/section-232";
 import type { FindingsReport } from "./findings";
 
 /** An enabled org rule, as the analyst sees it: the standing-instruction
@@ -43,6 +45,9 @@ export type BundlePart = {
    *  a human has not committed. */
   htsCode: string | null;
   htsCodeProvisional: boolean;
+  /** The importer's own Section 232 designation for the SKU; null = the
+   *  importer has not said, which is never an answer either way. */
+  section232: Section232Mark | null;
   sources: {
     vendorName: string;
     countryOfOrigin: string | null;
@@ -55,6 +60,25 @@ export type BundlePart = {
     validFrom: string | null;
     validTo: string | null;
   }[];
+};
+
+/** One catalog SKU behind a 7501 line, as resolved on read
+ *  (parts/line-parts.ts): declared on the line, named by the broker's
+ *  tariff code sheet, or inferred from the commercial invoice. */
+export type BundleLinePart = {
+  sku: string;
+  source: LinePartSource;
+  section232: Section232Mark | null;
+};
+
+/** The importer's Section 232 marks across every catalog SKU in an entry's
+ *  orbit — its lines, tariff sheet rows, and the lines of its invoices —
+ *  so a same-HTS split can be checked even where no SKU maps to a line. */
+export type BundleSection232Catalog = {
+  applies: string[];
+  doesNotApply: string[];
+  /** Catalog SKUs in the orbit the importer has not marked either way. */
+  unmarked: number;
 };
 
 export type BundleAdcvdOrder = {
@@ -101,7 +125,11 @@ export type BundleSiblingEntry = {
       rate: string | null;
       amount: string | null;
     }[];
+    /** The catalog SKUs behind the line, when known. Absent otherwise. */
+    parts?: BundleLinePart[];
   }[];
+  /** Absent when the importer marked none of the sibling's SKUs. */
+  section232Catalog?: BundleSection232Catalog;
 };
 
 export type EntryBundle = {
@@ -113,9 +141,16 @@ export type EntryBundle = {
    *  should get identical Ch99 treatment; without this the analyst only sees
    *  siblings when a packet document happens to home onto both entries. */
   siblingEntries: BundleSiblingEntry[];
-  /** Catalog data for every SKU on the entry's lines (missing SKUs simply
-   *  have no entry — itself a signal the analyst can surface). */
+  /** Catalog data for every SKU in the entry's orbit — declared on a line,
+   *  named by a tariff code sheet, or billed on one of its invoices —
+   *  keyed by the catalog's spelling (missing SKUs simply have no entry —
+   *  itself a signal the analyst can surface). */
   partsBySku: Map<string, BundlePart>;
+  /** Line number → the catalog SKUs behind that 7501 line. Lines nothing
+   *  resolved for have no entry. */
+  lineParts: Map<number, BundleLinePart[]>;
+  /** Null when the importer marked none of the orbit's SKUs. */
+  section232Catalog: BundleSection232Catalog | null;
   /** The full AD/CVD order corpus (global, small) — indicative context for
    *  case-number/rate adjudication, never deterministic duty math. */
   adcvdOrders: BundleAdcvdOrder[];

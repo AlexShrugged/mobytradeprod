@@ -416,6 +416,35 @@ Stop only stops rendering — the turn finishes via `after()` and
   on such a SKU are still judged against the imported code. Per-vendor sourcing facts
   (COO, unit cost) stay undated in-place updates: each vendor row is its own fact and
   the import only touches the row for the vendor the file names.
+- **The importer's Section 232 mark is a declared fact the analyst reads, never duty
+  math.** `parts.section_232` is tri-state: true = Section 232 applies to the SKU,
+  false = it does not, null = the importer has not said — a blank catalog cell is
+  never a "no" (ASC's workbook marks 298 of 25,908 SKUs and leaves the rest empty).
+  The catalog import finds the column by the number 232 in its header, whatever the
+  title ("Steel Hardware for Section 232"; `parts/section-232.ts`, pure), and reads
+  Yes/No under the header's polarity: a header naming the exemption ("232 Exempt",
+  "Excluded from 232") flips it, a cell that says the answer in words ("Exempt",
+  "Subject") beats the header, and an unreadable value is a row issue. Only a stated
+  answer overwrites; the CSV export round-trips it; the Parts classification card
+  edits it one by one (`/api/parts/[partId]/fields`). The mark exists for the broker
+  split real 7501s carry: goods of one HTS, origin and maker filed as one line paying
+  9903.82.02 and one claiming 9903.82.01, because only some SKUs carry the steel
+  hardware. The analyst kept calling that split a keying error from the goods
+  descriptions (most of ASC's error-severity findings, 2026-09-21). The bundle now
+  carries the catalog for the entry's whole orbit — SKUs declared on a line, named
+  by a tariff code sheet, or billed on its invoices, since broker 7501 lines print
+  no SKU (`partsBySku` was empty for every ASC entry before) — plus each line's
+  resolved SKUs with their marks (`parts/line-parts-load.ts`, the DbClient twin of
+  the request-path query) and a `section232Catalog` summary, for siblings too. The
+  prompt doctrine: a split the marks fit is the importer's product mix filed as
+  intended, a mark outranks a reading of a goods description, null is never an
+  answer, and only a mark that contradicts the filing is a finding. The
+  deterministic audit is untouched — it was already claim-aware and clean. A changed
+  mark (import, edit, backfill) queues a `part_change` re-analysis of the analyzed
+  entries carrying the SKU (`queueReanalysesForParts`, the Parts usage predicate);
+  adoption alone still queues nothing. `scripts/backfill-section-232.ts` (dry-run
+  default) reads ONLY that column from a catalog file the org already imported —
+  never a re-import, which would date every differing HTS code as a reclassification.
 
 ## Database
 

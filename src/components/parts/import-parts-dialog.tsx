@@ -26,6 +26,7 @@ type ImportSummary = {
   unchanged: number;
   sourcesCreated: number;
   sourcesUpdated: number;
+  section232Set: number;
   entryLinesLinked: number;
   issues: ImportIssue[];
 };
@@ -131,7 +132,7 @@ export function ImportPartsDialog({ onClose }: { onClose: () => void }) {
                   </p>
                   <p className="text-xs text-muted-foreground">
                     Columns detected by header: SKU, Name, Description, HTS
-                    Code, Vendor, Country of Origin, Unit Cost
+                    Code, Vendor, Country of Origin, Unit Cost, Section 232
                   </p>
                 </>
               )}
@@ -147,6 +148,9 @@ export function ImportPartsDialog({ onClose }: { onClose: () => void }) {
               {summary.unchanged} unchanged
               {summary.entryLinesLinked > 0
                 ? ` · ${summary.entryLinesLinked} entry line${summary.entryLinesLinked === 1 ? "" : "s"} linked`
+                : null}
+              {summary.section232Set > 0
+                ? ` · ${summary.section232Set} marked for Section 232`
                 : null}
               <span className="text-muted-foreground">
                 {" "}

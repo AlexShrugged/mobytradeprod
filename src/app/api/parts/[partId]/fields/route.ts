@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
+import { queueReanalysesForParts } from "@/lib/analysis/service";
 import { db, schema } from "@/lib/db";
 import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
+import { section232ToCell } from "@/lib/parts/section-232";
 
 // Inline edits for the part's OWN simple fields. Cost and country of origin
 // live on the (part, vendor) source rows — those edit through
@@ -10,7 +12,12 @@ import { getCurrentActorName, getCurrentOrgId } from "@/lib/org";
 // accepted here either — they go through PATCH /api/parts/:partId, which
 // routes them via the classification service (review-queue supersede +
 // re-audit).
-const EDITABLE_FIELDS = new Set(["name", "description"]);
+//
+// section232 is the importer's Section 232 designation: true (applies),
+// false (does not), or null (not specified). A change re-queues the AI
+// analysis of the analyzed entries carrying the SKU, since the analyst
+// reads the mark.
+const EDITABLE_FIELDS = new Set(["name", "description", "section232"]);
 
 export async function PATCH(
   request: Request,
@@ -36,6 +43,16 @@ export async function PATCH(
 
   const patch: Partial<typeof schema.parts.$inferInsert> = {};
   for (const [key, raw] of entries) {
+    if (key === "section232") {
+      if (raw !== null && typeof raw !== "boolean") {
+        return NextResponse.json(
+          { error: "section232 must be true, false, or null." },
+          { status: 400 },
+        );
+      }
+      patch.section232 = raw;
+      continue;
+    }
     const value = raw === null ? null : String(raw).trim();
     switch (key) {
       case "name":
@@ -69,6 +86,21 @@ export async function PATCH(
     // One field_changes row per field that actually changed — the actor
     // record behind "changed by <user>" in the events feed.
     for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
+      if (key === "section232") {
+        if (part.section232 === (patch.section232 ?? null)) continue;
+        await tx.insert(schema.fieldChanges).values({
+          orgId,
+          entityType: "part",
+          entityId: partId,
+          field: "section_232",
+          oldValue: section232ToCell(part.section232),
+          newValue: section232ToCell(patch.section232 ?? null),
+          source: "manual_edit",
+          actor,
+        });
+        await queueReanalysesForParts(tx, orgId, [partId]);
+        continue;
+      }
       const oldValue = (part[key as keyof schema.Part] ?? null) as string | null;
       const newValue = (patch[key] ?? null) as string | null;
       if (oldValue === newValue) continue;

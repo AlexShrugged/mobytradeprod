@@ -584,7 +584,7 @@ export async function getEvents(opts?: {
     provenance: docProvenance(docsByEntity, "part", p.id, { kind: "system" }),
   }));
 
-  const COST_FIELDS = new Set(["unit_cost", "unitCost", "country_of_origin", "countryOfOrigin", "name", "description"]);
+  const COST_FIELDS = new Set(["unit_cost", "unitCost", "country_of_origin", "countryOfOrigin", "name", "description", "section_232"]);
   // Cost/COO changes are scoped to a (part, vendor) source row — pull the
   // vendor names so titles can say whose price moved.
   const changeVendorIds = [

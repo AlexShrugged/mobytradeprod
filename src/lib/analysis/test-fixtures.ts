@@ -137,11 +137,14 @@ export function fixtureBundle(over: Partial<EntryBundle> = {}): EntryBundle {
           status: "active",
           htsCode: "8501.31.4000",
           htsCodeProvisional: false,
+          section232: null,
           sources: [],
           classifications: [],
         },
       ],
     ]),
+    lineParts: new Map(),
+    section232Catalog: null,
     adcvdOrders: [
       {
         caseNumber: "A-570-121",
