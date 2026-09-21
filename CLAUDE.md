@@ -334,7 +334,13 @@ Stop only stops rendering — the turn finishes via `after()` and
   heading in `baseDutyReplacedBy`. Brokers file it exactly that way ($0 base
   duty beside the heading at its full rate — ASC 7501s, 2026-09-17), so the audit
   compares the base rate as 0 under an in-lieu measure and the analyst prompt
-  carries the doctrine. Diagnosed 2026-09-17 from a customer report: 9903.05.76
+  carries the doctrine. They also key the same dollars the other way round — the
+  ceiling rate on the base-duty row, the heading declared at $0 (2 of ASC's 17
+  Taiwan lines; 231-7382025-6, 2026-09-21): when base duty plus the heading's own
+  charge closes against the heading's expected amount the line paid exactly the
+  ceiling, and rules 3/4 stay silent on the base row (the dollars are the fact;
+  base duty ON TOP of the heading, or a ceiling-rate base row with no heading
+  declared, still fires). Diagnosed 2026-09-17 from a customer report: 9903.05.76
   stored flat made every Taiwanese line since 2026-07-24 read as 15.6% and
   "underpaying" 5.6% base duty. `scripts/apply-ceiling-headings.ts` (dry-run
   default) derives the shape from the live USITC text for every tracked heading

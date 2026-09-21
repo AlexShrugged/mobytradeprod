@@ -686,6 +686,11 @@ export function computeEntryAlerts(
       // poisons the money math, so skip lines with an HTS discrepancy.
       if (htsDiscrepancyLines.has(line.id)) continue;
 
+      const tolerance = Math.max(
+        config.amountToleranceAbsCents,
+        Math.round(enteredCents * config.amountTolerancePct),
+      );
+
       for (const c of line.charges) {
         const amountCents = toCents(c.amount) ?? 0;
         let expectedRate: number | null = null;
@@ -701,6 +706,35 @@ export function computeEntryAlerts(
         const replacedBy =
           c.chargeType === "base_duty" ? (auditBase?.replacedBy ?? null) : null;
         if (c.chargeType === "base_duty") {
+          // Brokers file a ceiling heading's dollars two ways: $0 base duty
+          // beside the heading at its rate, or the ceiling rate keyed onto
+          // the base-duty row with the heading declared at $0 (ASC
+          // 231-7382025-6 and 231-7384771-3, 2 of 17 Taiwan lines,
+          // 2026-09-21). Both pay exactly max(column-1, ceiling), and the
+          // dollars are the fact: when base duty plus the heading's own
+          // charge closes against the heading's expected amount, where the
+          // dollars were keyed is presentation, never an overpayment. Base
+          // duty paid ON TOP of the heading does not close and still fires.
+          if (replacedBy) {
+            const heading = expected.measures.find(
+              (m) => m.inLieuOfBaseDuty,
+            );
+            const headingCents = line.charges
+              .filter(
+                (h) =>
+                  h.htsCodeDigits !== null &&
+                  h.htsCodeDigits === heading?.ch99Digits,
+              )
+              .reduce((sum, h) => sum + (toCents(h.amount) ?? 0), 0);
+            if (
+              heading?.amountCents != null &&
+              declaredDigits.has(heading.ch99Digits) &&
+              Math.abs(amountCents + headingCents - heading.amountCents) <=
+                tolerance
+            ) {
+              continue;
+            }
+          }
           if (auditBase?.rate != null && auditBase.amountCents !== null) {
             expectedRate = replacedBy ? 0 : auditBase.rate;
             expectedAmountCents = auditBase.amountCents;
@@ -736,10 +770,6 @@ export function computeEntryAlerts(
             : "";
         const declaredRate = c.rate === null ? null : Number(c.rate);
         const diff = Math.abs(amountCents - expectedAmountCents);
-        const tolerance = Math.max(
-          config.amountToleranceAbsCents,
-          Math.round(enteredCents * config.amountTolerancePct),
-        );
         // A 7501 charge prints rate AND amount, and the dollars are the
         // fact: when the amount closes against the official rate and sits
         // nearer to it than to what the declared rate would have charged,

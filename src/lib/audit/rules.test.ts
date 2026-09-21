@@ -1824,6 +1824,60 @@ describe("ceiling headings (in lieu of the column-1 rate)", () => {
     expect(amount.details?.expected_amount).toBe(0);
   });
 
+  it("the ceiling rate keyed onto the base-duty row beside a $0 heading audits clean", () => {
+    // The other way brokers file the same dollars (ASC 231-7382025-6):
+    // base duty at 10%, the heading declared at $0. The line pays exactly
+    // the ceiling either way.
+    const line = taiwanLine([
+      charge("base_duty", "8501.31.4000", 0.1, "1000.00"),
+      charge("additional_duty", "9903.05.76", null, "0.00"),
+      ...fees(),
+    ]);
+    expect(
+      computeEntryAlerts(
+        entry({ entryDate, lines: [line], totalDuty: "1000.00" }),
+        ceilingRef,
+      ),
+    ).toEqual([]);
+  });
+
+  it("the ceiling paid on the base-duty row AND on the heading still fires", () => {
+    const line = taiwanLine([
+      charge("base_duty", "8501.31.4000", 0.1, "1000.00"),
+      charge("additional_duty", "9903.05.76", 0.1, "1000.00"),
+      ...fees(),
+    ]);
+    expect(
+      keys(
+        computeEntryAlerts(
+          entry({ entryDate, lines: [line], totalDuty: "2000.00" }),
+          ceilingRef,
+        ),
+      ).sort(),
+    ).toEqual(["amount_mismatch:line1:base", "rate_mismatch:line1:base"]);
+  });
+
+  it("the ceiling rate on the base-duty row with no heading declared is still a missing measure", () => {
+    // Without the heading on the line nothing says the 10% is the ceiling:
+    // the presentation reading needs the heading declared.
+    const line = taiwanLine([
+      charge("base_duty", "8501.31.4000", 0.1, "1000.00"),
+      ...fees(),
+    ]);
+    expect(
+      keys(
+        computeEntryAlerts(
+          entry({ entryDate, lines: [line], totalDuty: "1000.00" }),
+          ceilingRef,
+        ),
+      ).sort(),
+    ).toEqual([
+      "amount_mismatch:line1:base",
+      "missing_measure:line1:99030576",
+      "rate_mismatch:line1:base",
+    ]);
+  });
+
   it("the heading itself missing is the shortfall", () => {
     const line = taiwanLine([charge("base_duty", null, null, "0.00"), ...fees()]);
     const alerts = computeEntryAlerts(
