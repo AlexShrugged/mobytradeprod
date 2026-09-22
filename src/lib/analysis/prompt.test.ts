@@ -41,7 +41,7 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("section232Catalog");
     expect(prompt).toContain("never read null as either answer");
     // Sibling marks count, and different SKUs are not identical goods.
-    expect(prompt).toContain("identical goods means the same SKUs");
+    expect(prompt).toContain("Marks or not, wherever SKUs are known identical goods means the same SKUs");
     expect(prompt).toContain("this entry's SKUs and its siblings' alike");
   });
 });
