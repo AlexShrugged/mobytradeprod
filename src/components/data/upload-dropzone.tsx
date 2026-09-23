@@ -17,6 +17,7 @@ import {
   type DuplicateUpload,
 } from "@/lib/documents/duplicates";
 import { buildUploadKey } from "@/lib/documents/upload-key";
+import { createChannel, drain } from "@/lib/documents/upload-pipeline";
 import { cn } from "@/lib/utils";
 import type { DocumentListItem } from "@/lib/db/schema";
 
@@ -33,6 +34,20 @@ type UploadResponse = {
 // documents table (via UploadStatusProvider), not in this card. Legacy
 // mode: one multipart POST against the local file store.
 const BLOB_UPLOADS = process.env.NEXT_PUBLIC_STORAGE_DRIVER === "blob";
+
+// Files in flight to the store at once. Past this the extra slots stop
+// buying speed: the uploader's upstream link is the ceiling for large
+// files, the Blob client already sends 6 parts per large file in parallel
+// and buffers up to 96 MB for each one, and upload tokens expire after an
+// hour. Eight overlaps the fixed per-file overhead (token, multipart
+// handshake, register) that dominates batches of small files.
+const UPLOAD_POOL = 8;
+
+// Documents in extraction at once: one slot runs a whole packet (parent,
+// then each child) through Reducto, which answers too many concurrent
+// calls with a 429 that fails the document. The document sweep uses the
+// same figure for the same reason, plus concurrent linker writes.
+const PROCESS_POOL = 3;
 
 function registerUpload(u: {
   storageKey: string;
@@ -121,66 +136,111 @@ export function UploadDropzone({
         setBusy(null);
       };
 
-      // Phase 1: upload + register. The dropzone blocks for this stretch —
-      // dropping more files mid-transfer would contend for the same pool.
+      // Registered rows flow straight into extraction: upload workers push
+      // each document the moment its row exists and processing workers
+      // take them as they come, so extraction runs during the upload
+      // instead of after it. Real extraction is minutes per document and
+      // independent across documents, so a batch takes about the longer
+      // of its upload and its slowest documents, not the sum. Status from
+      // the moment a row exists lives on the real table rows (pending →
+      // processing → processed).
+      const pipeline = createChannel<DocumentListItem>();
+      let uploadsSettled = false;
+      let done = 0;
+      const processing = drain(
+        pipeline,
+        Math.min(PROCESS_POOL, accepted.length),
+        async (doc) => {
+          const ok = await fetch(`/api/documents/${doc.id}/process`, {
+            method: "POST",
+          })
+            .then((res) => res.ok)
+            .catch(() => false);
+          if (!ok) failed += 1;
+          done += 1;
+          // The compact dropzone narrates processing only once the upload
+          // is over; until then its message is the upload's.
+          if (variant !== "full" && uploadsSettled)
+            setBatchBusy(`Processing ${done} of ${registered.length}…`);
+          router.refresh();
+        },
+      );
+      const admit = (doc: DocumentListItem) => {
+        registered.push(doc);
+        pipeline.push(doc);
+      };
+
+      // Upload + register. The dropzone blocks for this stretch — dropping
+      // more files mid-transfer would contend for the same pool.
       setBatchBusy(
         `Uploading ${accepted.length} file${accepted.length > 1 ? "s" : ""}…`,
       );
       setUploadingCount((n) => n + 1);
       try {
         if (BLOB_UPLOADS) {
-          // Upload pool of 3; each file's row is created (and shows in the
-          // table as pending) as soon as its own bytes land. One bad file
-          // marks itself failed without sinking the batch.
+          // Each file's row is created (and shows in the table as pending)
+          // as soon as its own bytes land, and enters extraction right
+          // then. One bad file marks itself failed without sinking the
+          // batch.
           const queue = accepted.map((file, index) => ({ file, index }));
           await Promise.all(
-            Array.from({ length: Math.min(3, queue.length) }, async () => {
-              for (let job = queue.shift(); job; job = queue.shift()) {
-                const { file, index } = job;
-                try {
-                  const result = await upload(buildUploadKey(file.name), file, {
-                    // The store is private — broker docs are never
-                    // world-readable; reads go through the download route.
-                    access: "private",
-                    handleUploadUrl: "/api/documents/upload-token",
-                    multipart: true,
-                    contentType: file.type || "application/octet-stream",
-                    onUploadProgress: ({ percentage }) =>
-                      patch(index, { pct: Math.round(percentage) }),
-                  });
-                  const res = await registerUpload({
-                    storageKey: result.pathname,
-                    fileName: file.name,
-                    mimeType: file.type || "application/octet-stream",
-                  });
-                  const body = (await res
-                    .json()
-                    .catch(() => null)) as UploadResponse | null;
-                  const duplicate = body?.duplicates?.[0];
-                  if (res.status === 409 && duplicate) {
-                    duplicates.push({ ...duplicate, index });
-                    patch(index, {
-                      stage: "duplicate",
-                      pct: 100,
-                      note: describeDuplicate(duplicate.duplicateOf),
+            Array.from(
+              { length: Math.min(UPLOAD_POOL, queue.length) },
+              async () => {
+                for (let job = queue.shift(); job; job = queue.shift()) {
+                  const { file, index } = job;
+                  try {
+                    const result = await upload(
+                      buildUploadKey(file.name),
+                      file,
+                      {
+                        // The store is private — broker docs are never
+                        // world-readable; reads go through the download
+                        // route.
+                        access: "private",
+                        handleUploadUrl: "/api/documents/upload-token",
+                        multipart: true,
+                        contentType: file.type || "application/octet-stream",
+                        onUploadProgress: ({ percentage }) =>
+                          patch(index, { pct: Math.round(percentage) }),
+                      },
+                    );
+                    const res = await registerUpload({
+                      storageKey: result.pathname,
+                      fileName: file.name,
+                      mimeType: file.type || "application/octet-stream",
                     });
-                    continue;
+                    const body = (await res
+                      .json()
+                      .catch(() => null)) as UploadResponse | null;
+                    const duplicate = body?.duplicates?.[0];
+                    if (res.status === 409 && duplicate) {
+                      duplicates.push({ ...duplicate, index });
+                      patch(index, {
+                        stage: "duplicate",
+                        pct: 100,
+                        note: describeDuplicate(duplicate.duplicateOf),
+                      });
+                      continue;
+                    }
+                    const doc = body?.documents?.[0];
+                    if (!res.ok || !doc) {
+                      throw new Error("Registration failed.");
+                    }
+                    admit(doc);
+                    patch(index, {
+                      stage: "queued",
+                      pct: 100,
+                      storageKey: result.pathname,
+                    });
+                    router.refresh();
+                  } catch {
+                    failed += 1;
+                    patch(index, { stage: "failed" });
                   }
-                  const doc = body?.documents?.[0];
-                  if (!res.ok || !doc) throw new Error("Registration failed.");
-                  registered.push(doc);
-                  patch(index, {
-                    stage: "queued",
-                    pct: 100,
-                    storageKey: result.pathname,
-                  });
-                  router.refresh();
-                } catch {
-                  failed += 1;
-                  patch(index, { stage: "failed" });
                 }
-              }
-            }),
+              },
+            ),
           );
         } else {
           const formData = new FormData();
@@ -207,22 +267,28 @@ export function UploadDropzone({
             });
           }
           const documents = body?.documents ?? [];
-          registered.push(...documents);
           // Response order matches file order, minus the duplicates.
           const skipped = new Set(dups.map((d) => d.index));
           const order = accepted
             .map((_, index) => index)
             .filter((index) => !skipped.has(index));
-          documents.forEach((doc, k) =>
+          documents.forEach((doc, k) => {
+            admit(doc);
             patch(order[k], {
               stage: "queued",
               pct: 100,
               storageKey: doc.storageKey,
-            }),
-          );
+            });
+          });
           router.refresh();
         }
       } catch (err) {
+        // Only the legacy path lands here, and it throws before
+        // registering anything (the blob path contains failures per
+        // file). Close the pipeline anyway so the processing workers
+        // return before the batch is torn down.
+        pipeline.close();
+        await processing;
         toast.error(err instanceof Error ? err.message : "Upload failed.");
         onComplete?.(false);
         clearBatchBusy();
@@ -239,37 +305,13 @@ export function UploadDropzone({
       // longer lose anything. The full dropzone hands back "Drop documents
       // here" now — processing status lives on the table rows — while the
       // compact one stays busy so its host dialog reads as working.
+      pipeline.close();
+      uploadsSettled = true;
       if (variant === "full") clearBatchBusy();
-      else setBatchBusy(`Processing 0 of ${registered.length}…`);
+      else setBatchBusy(`Processing ${done} of ${registered.length}…`);
 
-      // Phase 2: process in a small concurrent pool: real extraction is
-      // minutes per document and independent across documents, so the batch
-      // takes roughly as long as its slowest doc. The cap keeps provider
-      // rate limits and concurrent linker writes at bay. Status from here on
-      // lives on the real table rows (pending → processing → processed).
       try {
-        const processQueue = [...registered];
-        let done = 0;
-        await Promise.all(
-          Array.from({ length: Math.min(3, processQueue.length) }, async () => {
-            for (
-              let doc = processQueue.shift();
-              doc;
-              doc = processQueue.shift()
-            ) {
-              const ok = await fetch(`/api/documents/${doc.id}/process`, {
-                method: "POST",
-              })
-                .then((res) => res.ok)
-                .catch(() => false);
-              if (!ok) failed += 1;
-              done += 1;
-              if (variant !== "full")
-                setBatchBusy(`Processing ${done} of ${registered.length}…`);
-              router.refresh();
-            }
-          }),
-        );
+        await processing;
 
         const attempted = accepted.length - duplicates.length;
         const succeeded = attempted - failed;

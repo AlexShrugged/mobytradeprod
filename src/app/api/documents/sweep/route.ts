@@ -20,8 +20,8 @@ export const maxDuration = 800;
 // inside the route's own maxDuration — 15 minutes untouched means dead.
 const STALE_PROCESSING_MS = 15 * 60 * 1000;
 
-// Same pool size as the upload dropzone, for the same reasons: provider
-// rate limits and concurrent linker writes.
+// Same pool size as the dropzone's processing pool, for the same reasons:
+// provider rate limits and concurrent linker writes.
 const CONCURRENCY = 3;
 
 // Stop pulling new docs well before maxDuration so in-flight extractions
