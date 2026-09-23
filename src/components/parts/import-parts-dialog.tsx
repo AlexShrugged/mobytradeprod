@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 type ImportIssue = { row: number | null; message: string };
 
@@ -53,7 +54,7 @@ export function ImportPartsDialog({ onClose }: { onClose: () => void }) {
       try {
         const formData = new FormData();
         formData.append("file", file);
-        const res = await fetch("/api/parts/import", {
+        const res = await apiFetch("/api/parts/import", {
           method: "POST",
           body: formData,
         });

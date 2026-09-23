@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // Two ways into the catalog:
 //  - Manual: a human typing the entry IS the approval → active part.
@@ -49,7 +50,7 @@ export function NewSkuDialog({
   // Known vendors feed the datalists on both tabs.
   React.useEffect(() => {
     let cancelled = false;
-    fetch("/api/vendors")
+    apiFetch("/api/vendors")
       .then(async (res) => {
         if (!res.ok) return;
         const payload = (await res.json()) as { vendors: { name: string }[] };
@@ -73,7 +74,7 @@ export function NewSkuDialog({
   const [qLeadTime, setQLeadTime] = React.useState("");
 
   async function post(url: string, body: unknown): Promise<unknown> {
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

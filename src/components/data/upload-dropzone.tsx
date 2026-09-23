@@ -20,6 +20,7 @@ import { buildUploadKey } from "@/lib/documents/upload-key";
 import { createChannel, drain } from "@/lib/documents/upload-pipeline";
 import { cn } from "@/lib/utils";
 import type { DocumentListItem } from "@/lib/db/schema";
+import { apiFetch, orgPinHeaders } from "@/lib/org-pin-client";
 
 // What both upload routes answer with: the rows they created, plus the
 // files they refused as byte-identical to a document already on file.
@@ -54,7 +55,7 @@ function registerUpload(u: {
   fileName: string;
   mimeType: string;
 }): Promise<Response> {
-  return fetch("/api/documents/register", {
+  return apiFetch("/api/documents/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ uploads: [u] }),
@@ -151,7 +152,7 @@ export function UploadDropzone({
         pipeline,
         Math.min(PROCESS_POOL, accepted.length),
         async (doc) => {
-          const ok = await fetch(`/api/documents/${doc.id}/process`, {
+          const ok = await apiFetch(`/api/documents/${doc.id}/process`, {
             method: "POST",
           })
             .then((res) => res.ok)
@@ -199,6 +200,7 @@ export function UploadDropzone({
                         // route.
                         access: "private",
                         handleUploadUrl: "/api/documents/upload-token",
+                        headers: orgPinHeaders(),
                         multipart: true,
                         contentType: file.type || "application/octet-stream",
                         onUploadProgress: ({ percentage }) =>
@@ -245,7 +247,7 @@ export function UploadDropzone({
         } else {
           const formData = new FormData();
           for (const file of accepted) formData.append("files", file);
-          const res = await fetch("/api/documents/upload", {
+          const res = await apiFetch("/api/documents/upload", {
             method: "POST",
             body: formData,
           });

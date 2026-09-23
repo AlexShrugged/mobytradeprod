@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import type { AlertRow } from "@/lib/db/queries/entries";
 import { pairSiblingAlerts, unitIds } from "@/lib/variance/grouping";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 const severityMeta = {
   error: {
@@ -56,7 +57,7 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
       const ids = unit ? unitIds(unit) : [alert.id];
       const results = await Promise.all(
         ids.map((id) =>
-          fetch(`/api/alerts/${id}`, {
+          apiFetch(`/api/alerts/${id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status }),

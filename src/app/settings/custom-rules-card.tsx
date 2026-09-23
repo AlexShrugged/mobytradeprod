@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { OrgRule } from "@/lib/db/schema";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // Mirrors SuppressionSpec from lib/org-rules.ts (type-only — that module
 // pulls in drizzle and must stay off the client bundle).
@@ -103,7 +104,7 @@ export function CustomRulesCard({ rules }: { rules: OrgRule[] }) {
   ) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/org-rules/${ruleId}`, {
+      const res = await apiFetch(`/api/org-rules/${ruleId}`, {
         method,
         ...(body
           ? {
@@ -336,7 +337,7 @@ function AddRuleDialog({
       : null;
     setBusy(true);
     try {
-      const res = await fetch("/api/org-rules", {
+      const res = await apiFetch("/api/org-rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: trimmed, suppression }),

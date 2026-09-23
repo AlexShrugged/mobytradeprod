@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { OpenMeasureGroup } from "@/lib/db/queries/tariffs";
 import { formatRate } from "@/lib/format";
+import { apiFetch } from "@/lib/org-pin-client";
 
 const AUTHORITY_LABEL: Record<string, string> = {
   section_301: "Section 301",
@@ -102,7 +103,7 @@ export function GroupReviewCard({ group }: { group: OpenMeasureGroup }) {
     setBusy(true);
     const toastId = toast.loading(pending);
     try {
-      const res = await fetch(`/api/tariff-sync/groups/${group.groupId}`, {
+      const res = await apiFetch(`/api/tariff-sync/groups/${group.groupId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

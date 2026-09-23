@@ -8,11 +8,12 @@ import { toast } from "sonner";
 
 import { openAssistant } from "@/components/assistant/widget-bus";
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/org-pin-client";
 
 type AlertStatus = "open" | "resolved" | "dismissed";
 
 async function patchStatus(id: string, status: AlertStatus) {
-  const res = await fetch(`/api/alerts/${id}`, {
+  const res = await apiFetch(`/api/alerts/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),

@@ -22,6 +22,7 @@ import {
 import type { PartRow } from "@/lib/db/queries/parts";
 import { formatDate, formatRate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The part's classification panel, two modes:
 //
@@ -99,7 +100,7 @@ function Section232Row({ part }: { part: PartRow }) {
     if (!next || next.value === current.value) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/parts/${part.id}/fields`, {
+      const res = await apiFetch(`/api/parts/${part.id}/fields`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ section232: next.stored }),
@@ -199,7 +200,7 @@ function AnalyzeButton({ part }: { part: PartRow }) {
   async function analyze() {
     setBusy(true);
     try {
-      const res = await fetch(`/api/parts/${part.id}/classify`, {
+      const res = await apiFetch(`/api/parts/${part.id}/classify`, {
         method: "POST",
       });
       const payload = await res.json().catch(() => null);
@@ -258,7 +259,7 @@ function ReviewingBody({
   ) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/review-items/${part.openReviewItemId}`, {
+      const res = await apiFetch(`/api/review-items/${part.openReviewItemId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

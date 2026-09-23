@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { VendorRow } from "@/lib/db/queries/vendors";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The vendor roster. Vendors are created implicitly — from documents, quote
 // sheets, and the Parts page — so this card only lists and renames. A
@@ -38,7 +39,7 @@ export function VendorsCard({ vendors }: { vendors: VendorRow[] }) {
     }
     setBusy(true);
     try {
-      const res = await fetch(`/api/vendors/${vendor.id}`, {
+      const res = await apiFetch(`/api/vendors/${vendor.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),

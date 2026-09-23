@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // Creates the conversation on first send, stashes the draft for the thread
 // page to auto-send, and navigates there. Keeping creation lazy means the
@@ -21,7 +22,7 @@ export function NewConversationComposer() {
     if (!content || busy) return;
     setBusy(true);
     try {
-      const res = await fetch("/api/agent/conversations", { method: "POST" });
+      const res = await apiFetch("/api/agent/conversations", { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? "Failed to start the conversation.");

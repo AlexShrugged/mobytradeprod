@@ -22,6 +22,7 @@ import { formatCents, formatDate, formatRate } from "@/lib/format";
 import type { CostComponent } from "@/lib/landed-cost/types";
 import type { ComparisonOption, QuoteComparison } from "@/lib/quotes/compare";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The per-SKU sourcing comparison: every option — the current (part, vendor)
 // sources and every quote, whatever its status — priced to a landed cost
@@ -86,7 +87,7 @@ export function CompareCard({
     if (!reconsider) return;
     setDismissing(true);
     try {
-      const res = await fetch(`/api/quote-reconsider/${reconsider.itemId}`, {
+      const res = await apiFetch(`/api/quote-reconsider/${reconsider.itemId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "dismiss" }),

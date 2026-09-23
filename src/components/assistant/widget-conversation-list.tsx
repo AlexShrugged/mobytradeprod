@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The widget's back view: prior conversations, newest first (same query as
 // the /assistant sidebar, via the GET route). Expected to be rarely used -
@@ -22,7 +23,7 @@ export function WidgetConversationList({
 
   React.useEffect(() => {
     let cancelled = false;
-    fetch("/api/agent/conversations")
+    apiFetch("/api/agent/conversations")
       .then(async (res) => {
         if (!res.ok) return;
         const payload = (await res.json().catch(() => null)) as {

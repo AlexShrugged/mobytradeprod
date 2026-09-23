@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
@@ -8,6 +9,7 @@ import { AuthControls } from "@/components/nav/auth-controls";
 import { TopNav } from "@/components/nav/top-nav";
 import { isAgentConfigured } from "@/lib/agent";
 import { clerkEnabled } from "@/lib/auth/config";
+import { ORG_PIN_ATTRIBUTE } from "@/lib/org-pin";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -26,11 +28,15 @@ export const metadata: Metadata = {
     "Track customs entries, duties, and refunds down to the line item, with SKU-level landed cost and correct HTS classification.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The org this render answers for, pinned onto <body> so every browser
+  // call can name it (lib/org-pin.ts): the proxy refuses a call whose pin
+  // disagrees with the session cookie, which another tab may have switched.
+  const pinnedOrgId = clerkEnabled ? ((await auth()).orgId ?? null) : null;
   // The provider (and the Clerk widgets in the nav slot) render only when
   // keys are configured — without this condition Clerk v7's keyless mode
   // would auto-provision a throwaway dev instance.
@@ -50,7 +56,10 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="flex min-h-full flex-col">
+      <body
+        className="flex min-h-full flex-col"
+        {...{ [ORG_PIN_ATTRIBUTE]: pinnedOrgId ?? undefined }}
+      >
         {clerkEnabled ? <ClerkProvider>{body}</ClerkProvider> : body}
       </body>
     </html>

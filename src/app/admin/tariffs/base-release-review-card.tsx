@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { OpenBaseRelease } from "@/lib/db/queries/tariffs";
 import { formatRate } from "@/lib/format";
+import { apiFetch } from "@/lib/org-pin-client";
 
 export function BaseReleaseReviewCard({ release }: { release: OpenBaseRelease }) {
   const router = useRouter();
@@ -32,7 +33,7 @@ export function BaseReleaseReviewCard({ release }: { release: OpenBaseRelease })
     setBusy(true);
     const toastId = toast.loading(pending);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/tariff-sync/base-releases/${release.announcementId}`,
         {
           method: "PATCH",

@@ -31,6 +31,7 @@ import {
   rateLabel,
 } from "@/lib/tariff-sync/revision-diff";
 import type { SailClauseCandidate } from "@/lib/tariff-sync/types";
+import { apiFetch } from "@/lib/org-pin-client";
 
 const CHANGE_LABEL: Record<OpenRevision["changeType"], string> = {
   create_measure: "New measure",
@@ -154,7 +155,7 @@ export function RevisionReviewCard({ revision }: { revision: OpenRevision }) {
     setBusy(true);
     const toastId = toast.loading(pending);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/tariff-sync/revisions/${revision.revisionId}`,
         {
           method: "PATCH",

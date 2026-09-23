@@ -36,6 +36,7 @@ import {
   type PartVendorGroup,
 } from "@/lib/vendors/part-vendor-groups";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The row expansion: the landed-cost comparison across the top whenever
 // the SKU has anything to price (a source or a quote), then vendors and
@@ -93,7 +94,7 @@ function useQuoteDecision(part: PartRow) {
       setBusyQuoteId(quote.id);
       startTransition(async () => {
         try {
-          const res = await fetch(`/api/quote-lines/${quote.id}/decide`, {
+          const res = await apiFetch(`/api/quote-lines/${quote.id}/decide`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             // No decidedBy: the server records the org's default actor.
@@ -162,7 +163,7 @@ function VendorsCard({
   async function removeSource(source: PartSourceRow) {
     setRemovingId(source.id);
     try {
-      const res = await fetch(`/api/parts/${part.id}/sources/${source.id}`, {
+      const res = await apiFetch(`/api/parts/${part.id}/sources/${source.id}`, {
         method: "DELETE",
       });
       const payload = await res.json().catch(() => null);
@@ -394,7 +395,7 @@ function AddVendorFooter({
   React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetch("/api/vendors")
+    apiFetch("/api/vendors")
       .then(async (res) => {
         if (!res.ok) return;
         const payload = (await res.json()) as { vendors: { name: string }[] };
@@ -409,7 +410,7 @@ function AddVendorFooter({
   async function submit() {
     setBusy(true);
     try {
-      const res = await fetch(`/api/parts/${part.id}/sources`, {
+      const res = await apiFetch(`/api/parts/${part.id}/sources`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -651,7 +652,7 @@ function HistoryCard({ part }: { part: PartRow }) {
 
   React.useEffect(() => {
     let cancelled = false;
-    fetch(`/api/parts/${part.id}/events`)
+    apiFetch(`/api/parts/${part.id}/events`)
       .then(async (res) => {
         if (!res.ok) throw new Error();
         const payload = (await res.json()) as { events: BusinessEvent[] };

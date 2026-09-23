@@ -14,6 +14,7 @@ import type {
   AlertDecisionPayload,
   AnalyzeEntryPayload,
 } from "@/lib/agent/types";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // One propose-and-confirm card. Confirm executes through the EXISTING
 // decision routes - PATCH /api/alerts/:id per unit id (the agent's note
@@ -32,7 +33,7 @@ async function recordProposal(
   status: "confirmed" | "dismissed",
   results: { id: string; ok: boolean }[] | null,
 ) {
-  const res = await fetch(`/api/agent/proposals/${proposalId}`, {
+  const res = await apiFetch(`/api/agent/proposals/${proposalId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status, results }),
@@ -73,7 +74,7 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
       if (payload.kind === "alert_decision") {
         const results = await Promise.all(
           payload.unitIds.map(async (id) => {
-            const res = await fetch(`/api/alerts/${id}`, {
+            const res = await apiFetch(`/api/alerts/${id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(
@@ -93,7 +94,7 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
           { richColors: results.every((r) => r.ok) },
         );
       } else if (payload.kind === "save_org_rule") {
-        const res = await fetch("/api/org-rules", {
+        const res = await apiFetch("/api/org-rules", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -129,7 +130,7 @@ export function ProposalCard({ proposal }: { proposal: AgentProposalView }) {
         }
       } else {
         const analyze = payload as AnalyzeEntryPayload;
-        const res = await fetch(`/api/entries/${analyze.entryId}/analyze`, {
+        const res = await apiFetch(`/api/entries/${analyze.entryId}/analyze`, {
           method: "POST",
         });
         const ok = res.ok;

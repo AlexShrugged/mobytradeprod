@@ -6,6 +6,7 @@ import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // "Sync now": POST /api/tariff-sync, then summarize all three parts (Ch99
 // staging, Federal Register, base refresh). The parts fail independently,
@@ -19,7 +20,7 @@ export function SyncButton() {
     setBusy(true);
     const toastId = toast.loading("Syncing tariff data from USITC…");
     try {
-      const res = await fetch("/api/tariff-sync", { method: "POST" });
+      const res = await apiFetch("/api/tariff-sync", { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error ?? "Sync failed.");
 

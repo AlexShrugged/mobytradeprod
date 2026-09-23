@@ -7,6 +7,7 @@ import { AgentChat } from "@/components/assistant/agent-chat";
 import { AssistantRefreshProvider } from "@/components/assistant/refresh-context";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AgentProposalView, DisplayMessage } from "@/lib/agent/types";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The widget's data seam: /assistant feeds AgentChat from RSC props; the
 // panel feeds it from the thread GET route. The refresh override refetches
@@ -46,7 +47,7 @@ export function WidgetThread({
   );
 
   const refetch = React.useCallback(async () => {
-    const res = await fetch(`/api/agent/conversations/${conversationId}`);
+    const res = await apiFetch(`/api/agent/conversations/${conversationId}`);
     if (!res.ok) return;
     const payload = (await res.json().catch(() => null)) as {
       thread?: ThreadData;

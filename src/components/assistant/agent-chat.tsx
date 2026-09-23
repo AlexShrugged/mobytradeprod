@@ -17,6 +17,7 @@ import type {
   AgentProposalView,
   DisplayMessage,
 } from "@/lib/agent/types";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The thread client. Sends a turn as POST + NDJSON stream and renders the
 // events live; the server persists everything as it goes, so when the
@@ -197,7 +198,7 @@ export function AgentChat({
       const controller = new AbortController();
       abortRef.current = controller;
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `/api/agent/conversations/${conversationId}/messages`,
           {
             method: "POST",

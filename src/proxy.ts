@@ -2,6 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { clerkMiddleware } from "@clerk/nextjs/server";
 
 import { clerkEnabled } from "@/lib/auth/config";
+import {
+  ORG_PIN_HEADER,
+  ORG_PIN_MISMATCH_CODE,
+  ORG_PIN_MISMATCH_MESSAGE,
+  ORG_PIN_MISSING_CODE,
+  ORG_PIN_MISSING_MESSAGE,
+  orgPinVerdict,
+} from "@/lib/org-pin";
 
 // Default-protect: every page and API route requires a Clerk session (and
 // an active organization for tenant surfaces) unless listed here. Handlers
@@ -58,6 +66,29 @@ const handler = clerkMiddleware(async (auth, req) => {
       );
     }
     return NextResponse.redirect(new URL("/org-selection", req.url));
+  }
+  // Tenant API calls must also name the org the page rendered under
+  // (lib/org-pin.ts): the session cookie alone can carry another tab's
+  // organization. Global surfaces (tariff review, sweeps, admin) are
+  // stamped with no tenant and stay pin-free.
+  if (isApi && !isOrgExempt(req.nextUrl.pathname)) {
+    const verdict = orgPinVerdict({
+      method: req.method,
+      sessionOrgId: orgId,
+      pinnedOrgId: req.headers.get(ORG_PIN_HEADER),
+    });
+    if (verdict === "missing") {
+      return NextResponse.json(
+        { error: ORG_PIN_MISSING_MESSAGE, code: ORG_PIN_MISSING_CODE },
+        { status: 400 },
+      );
+    }
+    if (verdict === "mismatch") {
+      return NextResponse.json(
+        { error: ORG_PIN_MISMATCH_MESSAGE, code: ORG_PIN_MISMATCH_CODE },
+        { status: 409 },
+      );
+    }
   }
 });
 

@@ -28,6 +28,7 @@ import {
 import type { IntegrationSource } from "@/lib/db/schema";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // Intake-channel cards for the Data page's right column: SFTP and the email
 // inbox (the manual-upload source is the dropzone itself). Config shapes per
@@ -111,7 +112,7 @@ function SourceCard({ source }: { source: IntegrationSource }) {
   const runNow = async () => {
     setRunning(true);
     try {
-      const res = await fetch(`/api/integrations/${source.id}/run`, {
+      const res = await apiFetch(`/api/integrations/${source.id}/run`, {
         method: "POST",
       });
       const body = await res.json();

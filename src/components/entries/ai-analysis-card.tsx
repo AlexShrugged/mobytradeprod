@@ -33,6 +33,7 @@ import type {
 } from "@/lib/db/queries/entries";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 const severityMeta = {
   error: { icon: OctagonAlert, tone: "text-red-600 dark:text-red-400" },
@@ -83,7 +84,7 @@ export function AiAnalysisCard({
   async function analyze() {
     setAnalyzing(true);
     try {
-      const res = await fetch(`/api/entries/${entryId}/analyze`, {
+      const res = await apiFetch(`/api/entries/${entryId}/analyze`, {
         method: "POST",
       });
       const body = await res.json().catch(() => null);
@@ -114,7 +115,7 @@ export function AiAnalysisCard({
   ) {
     setBusyId(finding.id);
     try {
-      const res = await fetch(`/api/findings/${finding.id}`, {
+      const res = await apiFetch(`/api/findings/${finding.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),

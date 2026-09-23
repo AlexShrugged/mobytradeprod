@@ -44,6 +44,7 @@ import type { DocumentListItem, IntegrationKind } from "@/lib/db/schema";
 import { documentSourceLabel } from "@/lib/documents/source-label";
 import { docTypeLabel, formatBytes, formatDateTime } from "@/lib/format";
 import { packetRoleLabel, pageRangeLabel } from "@/lib/processing/packet";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // Mirrors DocumentWithSource from queries/documents.ts (type-only — the
 // query module itself is server-only).
@@ -112,7 +113,7 @@ export function DocumentsTable({
     setProcessingId(doc.id);
     router.refresh();
     try {
-      const res = await fetch(`/api/documents/${doc.id}/process`, {
+      const res = await apiFetch(`/api/documents/${doc.id}/process`, {
         method: "POST",
       });
       const body = await res.json();

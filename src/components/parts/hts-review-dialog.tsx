@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import type { ReauditSummary } from "@/lib/audit/auditor";
 import type { HtsReviewQueueItem } from "@/lib/db/queries/parts";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 export function reauditToast(reaudit: ReauditSummary | null | undefined): string {
   if (!reaudit || reaudit.entries === 0) return "";
@@ -114,7 +115,7 @@ function ReviewDialogBody({
   async function act(body: Record<string, unknown>, successPrefix: string) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/review-items/${queueItem.item.id}`, {
+      const res = await apiFetch(`/api/review-items/${queueItem.item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

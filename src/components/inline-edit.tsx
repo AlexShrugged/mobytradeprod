@@ -12,6 +12,7 @@ import { Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/org-pin-client";
 
 export function EditableCell({
   endpoint,
@@ -57,7 +58,7 @@ export function EditableCell({
     if (cancelled.current || draft === value) return;
     setSaving(true);
     try {
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [field]: draft.trim() === "" ? null : draft.trim() }),

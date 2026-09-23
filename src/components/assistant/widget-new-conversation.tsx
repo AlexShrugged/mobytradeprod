@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // The widget's fresh composer: sibling of new-conversation-composer.tsx
 // minus the navigation - the panel switches to its thread view instead.
@@ -31,7 +32,7 @@ export function WidgetNewConversation({
     if (!content || busy) return;
     setBusy(true);
     try {
-      const res = await fetch("/api/agent/conversations", {
+      const res = await apiFetch("/api/agent/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ context: { path: pathname } }),

@@ -18,7 +18,21 @@ two cron GETs; the tenant seam in `src/lib/org.ts` resolves the session's active
 org (JIT-provisioned on first sight via `src/lib/org-provisioning.ts`, keyed by
 `orgs.clerk_org_id`); the super-admin seam in `src/lib/admin/` admits Clerk user ids
 listed in `SUPER_ADMIN_USER_IDS` plus every member of the `SUPER_ADMIN_ORG_ID` Clerk
-organization (org id, never slug). With Clerk keys unset (local dev only — the app
+organization (org id, never slug). The session cookie is NOT the whole tenant
+story: Clerk keeps one `__session` cookie per browser and lets whichever tab
+was focused last write its own active org into it, so a request from a tab
+that rendered tenant A can carry tenant B's claim (2026-09-23: a teammate's
+MotoRad onboarding batch filed 22 of 71 entry summaries under ASC). Every
+browser call therefore also names the org the page rendered under — the root
+layout pins `auth().orgId` onto `<body data-moby-org>`, client components call
+`/api` only through `apiFetch` (`lib/org-pin-client.ts`, header `x-moby-org`;
+the Blob client upload passes `orgPinHeaders()`), and the proxy refuses a
+tenant API call whose pin is missing on a mutation (400) or disagrees with
+the session (409 `org_mismatch`, which the wrapper turns into a reload
+toast). Global surfaces (tariff review, sweeps, admin) stay pin-free. A
+script or curl call to a tenant mutation now needs the header too. Only
+users who belong to several orgs can hit the flip; customers in one org
+cannot be moved into another tenant by it. With Clerk keys unset (local dev only — the app
 refuses to boot on Vercel without them, see `src/lib/auth/config.ts`), everything runs
 auth-open against the single seeded org exactly as before. Documents parse via Reducto
 when `REDUCTO_API_KEY` is set, otherwise a deterministic stub processor (refused on

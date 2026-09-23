@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { apiFetch } from "@/lib/org-pin-client";
 
 // Organization identity: name + importer of record, PATCHed to /api/org.
 // The inbox address is provisioned with the email intake channel — shown
@@ -42,7 +43,7 @@ export function OrgCard({
     }
     setBusy(true);
     try {
-      const res = await fetch("/api/org", {
+      const res = await apiFetch("/api/org", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
