@@ -8,6 +8,7 @@ import { skuKeySql } from "@/lib/parts/sku-sql";
 import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
 import { findOrCreateVendor } from "@/lib/vendors/service";
+import { canonicalHts } from "./hts-code";
 import { normalizeBol, splitReferenceNumbers } from "./normalize";
 import type {
   EntryLineItemExtraction,
@@ -17,8 +18,12 @@ import type {
 
 // ISO codes compare exact-match downstream (measure gating, COO audit rule).
 // The mappers normalize too — this is the write-side guarantee.
-const toCoo = (v: string | null | undefined): string | null =>
-  v?.trim().toUpperCase() || null;
+const toCoo = (v: string | null | undefined): string | null => {
+  const s = v?.trim().toUpperCase() || null;
+  // Two letters or nothing: a dual origin ("CN/HK") would overflow the
+  // column and fail the whole document — unknown origin is never a finding.
+  return s && /^[A-Z]{2}$/.test(s) ? s : null;
+};
 
 const DUTY_CHARGE_TYPES = new Set([
   "base_duty",
@@ -366,7 +371,11 @@ export async function linkExtraction(
                 sku: li.sku,
                 description: li.description,
                 htsCode: li.hts_code,
-                htsCodeDigits: normalizeHts(li.hts_code),
+                // A 7501 line prints exactly one 10-digit code; digits past
+                // that are glue from a neighbouring column, never a code.
+                htsCodeDigits:
+                  canonicalHts(li.hts_code).digits ??
+                  normalizeHts(li.hts_code).slice(0, 10),
                 spi: li.spi ?? null,
                 countryOfOrigin: toCoo(li.country_of_origin),
                 supplierName: li.supplier_name,
@@ -387,7 +396,9 @@ export async function linkExtraction(
                   lineItemId: lineRow.id,
                   chargeType: c.charge_type,
                   htsCode: c.hts_code,
-                  htsCodeDigits: c.hts_code ? normalizeHts(c.hts_code) : null,
+                  htsCodeDigits: c.hts_code
+                    ? normalizeHts(c.hts_code).slice(0, 10)
+                    : null,
                   rate: c.rate?.toFixed(6) ?? null,
                   amount: c.amount.toFixed(2),
                 })),
@@ -896,7 +907,9 @@ export async function linkExtraction(
               description: li.description,
               countryOfOrigin: toCoo(li.country_of_origin),
               htsCode: li.hts_code,
-              htsCodeDigits: li.hts_code ? normalizeHts(li.hts_code) : null,
+              // Digits only for a single printed code; a list or noise
+              // compares as unknown rather than overflowing the column.
+              htsCodeDigits: canonicalHts(li.hts_code).digits,
               quantity: li.quantity?.toFixed(4) ?? null,
               quantityUnit: li.quantity_unit ?? null,
               unitPrice: li.unit_price?.toFixed(4) ?? null,

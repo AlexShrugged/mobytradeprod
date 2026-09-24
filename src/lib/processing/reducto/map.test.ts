@@ -399,7 +399,7 @@ describe("commercial_invoice mapping", () => {
           description: "48V 14Ah Lithium Battery Pack",
           country_of_origin: "CN",
           // The 6-digit HS code as printed — kept verbatim.
-          hts_code: "850760",
+          hts_code: "8507.60", // the fixture prints the bare heading; canonical form
           quantity: 100,
           // As printed — normalized on read, never at extraction.
           quantity_unit: "pcs.",
@@ -633,5 +633,73 @@ describe("commercial_invoice adjustments", () => {
     expect(result.fields.line_items.map((l) => l.total_price)).toEqual([
       286.2, 2374.27,
     ]);
+  });
+});
+
+describe("printed HTS and origin normalization", () => {
+  // MotoRad's Mexican supplier prints "8708.91.99 00" and a dual origin
+  // "CN/HK" appeared on a 7501 line: 28 documents failed on column width
+  // (2026-09-24) before the mapper canonicalized codes and dropped origins
+  // that are not a two-letter ISO code.
+  it("canonicalizes invoice line codes and nulls a non-ISO origin", () => {
+    const result = mapExtractToResult("commercial_invoice", {
+      invoice_number: cite("EXP12042025-MLM"),
+      line_items: [
+        {
+          line_number: cite(1),
+          sku: cite("MR-1"),
+          hts_code: cite("8708.91.99 00"),
+          country_of_origin: cite("CN/HK"),
+          quantity: cite(10),
+          unit_price: cite(2.5),
+          total_price: cite(25),
+        },
+        {
+          line_number: cite(2),
+          sku: cite("MR-2"),
+          hts_code: cite("3923.50.01.00"),
+          country_of_origin: cite("mx"),
+          quantity: cite(1),
+          unit_price: cite(5),
+          total_price: cite(5),
+        },
+        {
+          line_number: cite(3),
+          sku: cite("MR-3"),
+          hts_code: cite("8481.80; 8708.91; 8708.99"),
+          country_of_origin: cite("Mexico"),
+          quantity: cite(1),
+          unit_price: cite(5),
+          total_price: cite(5),
+        },
+      ],
+    });
+    if (result.docType !== "commercial_invoice")
+      throw new Error("wrong docType");
+    const lines = result.fields.line_items;
+    expect(lines.map((l) => l.hts_code)).toEqual([
+      "8708.91.9900",
+      "3923.50.0100",
+      "8481.80; 8708.91; 8708.99",
+    ]);
+    expect(lines.map((l) => l.country_of_origin)).toEqual([null, "MX", null]);
+  });
+
+  it("canonicalizes a 7501 line code and nulls a dual origin", () => {
+    const result = mapExtractToResult("port_entry", {
+      entry_number: cite("879-4080794-1"),
+      line_items: [
+        {
+          line_number: cite(2),
+          hts_code: cite("4016.93.10 10"),
+          country_of_origin: cite("CN/HK"),
+          entered_value: cite(228),
+          charges: [],
+        },
+      ],
+    });
+    if (result.docType !== "port_entry") throw new Error("wrong docType");
+    expect(result.fields.line_items[0].hts_code).toBe("4016.93.1010");
+    expect(result.fields.line_items[0].country_of_origin).toBeNull();
   });
 });

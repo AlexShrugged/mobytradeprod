@@ -16,6 +16,7 @@ import type {
   TariffCodeSheetExtraction,
   TariffCodeSheetRowExtraction,
 } from "../types";
+import { canonicalHts } from "../hts-code";
 import { ProcessingError } from "../types";
 import type { ExtractableDocType } from "./schemas";
 
@@ -169,9 +170,19 @@ function toInt(v: unknown): number | null {
 }
 
 /** ISO country codes compare exact-match downstream (measure gating,
- *  COO-vs-catalog audit) — normalize case here so "cn" never slips through. */
+ *  COO-vs-catalog audit) — normalize case here so "cn" never slips through.
+ *  Only a two-letter code is a fact the column can hold: a printed dual
+ *  origin ("CN/HK", MotoRad 879-4080794-1) or a country name is unknown
+ *  origin (never a discrepancy), not a reason to fail the document. */
 function toCountry(v: unknown): string | null {
-  return toStr(v)?.toUpperCase() ?? null;
+  const s = toStr(v)?.toUpperCase() ?? null;
+  return s && /^[A-Z]{2}$/.test(s) ? s : null;
+}
+
+/** An HTS/HS code as printed → its canonical form (see hts-code.ts); a
+ *  value that is not a single code stays as printed, capped to the column. */
+function toHts(v: unknown): string | null {
+  return canonicalHts(toStr(v)).code;
 }
 
 /** SPI codes are 1-2 letters plus an optional marker ("KR", "A+"); anything
@@ -310,7 +321,7 @@ function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
       line_number: toInt(line.line_number) ?? index + 1,
       sku: toStr(line.sku),
       description: toStr(line.description),
-      hts_code: toStr(line.hts_code) as string,
+      hts_code: toHts(line.hts_code) as string,
       spi: toSpi(line.spi),
       country_of_origin: toCountry(line.country_of_origin),
       supplier_name: toStr(line.supplier_name),
@@ -489,7 +500,7 @@ function mapCommercialInvoice(
           sku: toStr(line.sku),
           description: toStr(line.description),
           country_of_origin: toCountry(line.country_of_origin),
-          hts_code: toStr(line.hts_code),
+          hts_code: toHts(line.hts_code),
           quantity: toNum(line.quantity),
           quantity_unit: toUnit(line.quantity_unit),
           unit_price: toNum(line.unit_price),
@@ -567,7 +578,7 @@ function mapQuoteSheet(data: Record<string, unknown>): QuoteSheetExtraction {
         unit_cost: toNum(line.unit_cost),
         currency: toStr(line.currency),
         country_of_origin: toCountry(line.country_of_origin),
-        hts_code: toStr(line.hts_code),
+        hts_code: toHts(line.hts_code),
         moq: toNum(line.moq),
         lead_time_days: toInt(line.lead_time_days),
         unit_of_measure: toStr(line.unit_of_measure),

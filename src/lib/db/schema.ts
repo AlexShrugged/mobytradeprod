@@ -869,7 +869,8 @@ export const quoteLines = pgTable(
     // Supplier's claims — display and estimate inputs only, NEVER audit/money
     // drivers. A supplier-suggested HTS routes through classification.
     countryOfOrigin: varchar("country_of_origin", { length: 2 }),
-    htsCode: varchar("hts_code", { length: 12 }),
+    // Canonical when a single code, else as printed (processing/hts-code.ts).
+    htsCode: varchar("hts_code", { length: 32 }),
     moq: numeric("moq", { precision: 15, scale: 4 }),
     leadTimeDays: integer("lead_time_days"),
     unitOfMeasure: varchar("unit_of_measure", { length: 16 }),
@@ -1265,7 +1266,10 @@ export const entryLineItems = pgTable(
     }),
     sku: varchar("sku", { length: 64 }),
     description: text("description"),
-    htsCode: varchar("hts_code", { length: 12 }).notNull(), // as declared
+    // As declared, in canonical dotted form when the print is a single code
+    // (processing/hts-code.ts); a value that is not stays as printed, capped
+    // to this width — a column overflow must never fail the whole 7501.
+    htsCode: varchar("hts_code", { length: 32 }).notNull(),
     htsCodeDigits: varchar("hts_code_digits", { length: 10 }).notNull(),
     // Special Program Indicator prefixed to the HTS number on the 7501
     // ("KR", "A", "AU"): the broker's claimed FTA/GSP preference. A declared
@@ -1415,10 +1419,13 @@ export const invoiceLineItems = pgTable(
     description: text("description"),
     // Declared per-line origin when the invoice logs one.
     countryOfOrigin: varchar("country_of_origin", { length: 2 }),
-    // HTS/HS code as printed on the invoice line — often a 6/8-digit HS
-    // code, not a full 10-digit HTS, and many CIs omit it entirely. Digits
-    // precomputed for prefix comparison against entry_line_items.
-    htsCode: varchar("hts_code", { length: 12 }),
+    // HTS/HS code on the invoice line — often a 6/8-digit HS code, not a
+    // full 10-digit HTS, and many CIs omit it entirely. Canonical dotted
+    // form when the print is a single code (processing/hts-code.ts:
+    // "8708.91.99 00" → "8708.91.9900"); a list or noise stays as printed,
+    // capped to this width, with null digits. Digits precomputed for prefix
+    // comparison against entry_line_items; null = not comparable.
+    htsCode: varchar("hts_code", { length: 32 }),
     htsCodeDigits: varchar("hts_code_digits", { length: 10 }),
     quantity: numeric("quantity", { precision: 15, scale: 4 }),
     // Unit the invoice bills the quantity in, as printed ("PCS", "SETS",
