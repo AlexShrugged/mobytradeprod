@@ -16,6 +16,11 @@ import { enabledRules, loadOrgRules, type SuppressionSpec } from "../org-rules";
 import { loadResolvedLineParts } from "../parts/line-parts-load";
 import { section232Mark } from "../parts/section-232";
 import { normalizeSku } from "../parts/sku";
+import {
+  collapseTwinUploads,
+  type TwinDocument,
+  type TwinParent,
+} from "./document-twins";
 import type {
   BundleAdcvdOrder,
   BundleDocument,
@@ -63,6 +68,10 @@ export async function loadEntryBundle(
       packetRole: schema.documents.packetRole,
       pageRange: schema.documents.pageRange,
       extractedData: schema.documents.extractedData,
+      parentDocumentId: schema.documents.parentDocumentId,
+      contentHash: schema.documents.contentHash,
+      processedAt: schema.documents.processedAt,
+      uploadedAt: schema.documents.uploadedAt,
       entityType: schema.documentLinks.entityType,
       entityId: schema.documentLinks.entityId,
     })
@@ -102,8 +111,9 @@ export async function loadEntryBundle(
     )
     .orderBy(desc(schema.documents.uploadedAt));
 
-  const documents: BundleDocument[] = [];
+  const loaded: BundleDocument[] = [];
   const byId = new Map<string, BundleDocument>();
+  const twinRows: TwinDocument[] = [];
   for (const row of documentRows) {
     const link = { entityType: row.entityType, entityId: row.entityId };
     const existing = byId.get(row.id);
@@ -120,9 +130,57 @@ export async function loadEntryBundle(
       pageRange: row.pageRange,
       linkedVia: [link],
       extractedData: row.extractedData,
+      sameBytesAs: [],
     };
     byId.set(row.id, doc);
-    documents.push(doc);
+    loaded.push(doc);
+    twinRows.push({
+      id: row.id,
+      fileName: row.fileName,
+      status: row.status,
+      parentDocumentId: row.parentDocumentId,
+      contentHash: row.contentHash,
+      processedAt: row.processedAt,
+      uploadedAt: row.uploadedAt,
+    });
+  }
+
+  // One extraction per file: byte-identical uploads collapse to the copy the
+  // entry graph was last written from (document-twins.ts). Packet children
+  // collapse by their parent's hash, and parents create no links of their
+  // own, so they are fetched here for it.
+  const parentIds = [
+    ...new Set(
+      twinRows
+        .map((r) => r.parentDocumentId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
+  const parentRows = parentIds.length
+    ? await db
+        .select({
+          id: schema.documents.id,
+          fileName: schema.documents.fileName,
+          status: schema.documents.status,
+          contentHash: schema.documents.contentHash,
+          processedAt: schema.documents.processedAt,
+          uploadedAt: schema.documents.uploadedAt,
+        })
+        .from(schema.documents)
+        .where(
+          and(
+            eq(schema.documents.orgId, orgId),
+            inArray(schema.documents.id, parentIds),
+          ),
+        )
+    : [];
+  const parents = new Map<string, TwinParent>(
+    parentRows.map((p) => [p.id, p]),
+  );
+  const collapse = collapseTwinUploads(twinRows, parents);
+  const documents = loaded.filter((d) => collapse.keptIds.has(d.id));
+  for (const doc of documents) {
+    doc.sameBytesAs = collapse.sameBytesAs.get(doc.id) ?? [];
   }
 
   // Other entries on this entry's shipments, with declared lines + charges.
@@ -415,6 +473,7 @@ export async function loadEntryBundle(
     orgId,
     snapshot,
     documents,
+    collapsedUploads: collapse.collapsed,
     siblingEntries,
     partsBySku,
     lineParts,

@@ -34,6 +34,10 @@ export type BundleDocument = {
   linkedVia: { entityType: string; entityId: string }[];
   /** Typed extraction fields. rawExtraction is never loaded (multi-MB). */
   extractedData: unknown;
+  /** The other uploads of this file's exact bytes, whose extractions the
+   *  bundle dropped (document-twins.ts): the re-uploaded twin of a
+   *  standalone document, the re-uploaded packet for a packet child. */
+  sameBytesAs: { id: string; fileName: string }[];
 };
 
 export type BundlePart = {
@@ -136,6 +140,10 @@ export type EntryBundle = {
   orgId: string;
   snapshot: AuditableSnapshot;
   documents: BundleDocument[];
+  /** Documents dropped from the bundle as byte-identical re-uploads of a
+   *  file it kept, each naming the kept copy's document ids — so a stale
+   *  id reads as "read that one instead", never as a missing document. */
+  collapsedUploads: { id: string; fileName: string; keptIds: string[] }[];
   /** Other entries on this entry's shipments, with their declared lines and
    *  charges — the cross-entry consistency corpus. Goods moving together
    *  should get identical Ch99 treatment; without this the analyst only sees

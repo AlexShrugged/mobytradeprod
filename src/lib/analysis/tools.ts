@@ -65,6 +65,17 @@ export function buildAnalystTools(
     run: (input) => {
       const doc = bundle.documents.find((d) => d.id === input.documentId);
       if (!doc) {
+        const twin = bundle.collapsedUploads.find(
+          (c) => c.id === input.documentId,
+        );
+        if (twin) {
+          return respond(
+            ctx,
+            "read_document",
+            input,
+            `ERROR: document ${twin.id} (${twin.fileName}) is a byte-identical re-upload of a file already in the bundle, so its extraction is not shown. Read ${twin.keptIds.join(", ")} instead.`,
+          );
+        }
         return respond(
           ctx,
           "read_document",

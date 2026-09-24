@@ -124,8 +124,10 @@ export function fixtureBundle(over: Partial<EntryBundle> = {}): EntryBundle {
         pageRange: null,
         linkedVia: [{ entityType: "entry", entityId: "e1" }],
         extractedData: { entry_number: "231-0000001-1", entry_type: "03" },
+        sameBytesAs: [],
       },
     ],
+    collapsedUploads: [],
     siblingEntries: [],
     partsBySku: new Map([
       [

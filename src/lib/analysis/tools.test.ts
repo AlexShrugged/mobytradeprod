@@ -54,6 +54,20 @@ describe("buildAnalystTools", () => {
     expect(out).toContain("d1");
   });
 
+  it("read_document points a collapsed re-upload at the copy it kept", async () => {
+    const { run } = setup(
+      fixtureBundle({
+        collapsedUploads: [
+          { id: "d0", fileName: "7501 (1).pdf", keptIds: ["d1"] },
+        ],
+      }),
+    );
+    const out = await run("read_document", { documentId: "d0" });
+    expect(out).toMatch(/^ERROR:/);
+    expect(out).toContain("re-upload");
+    expect(out).toContain("Read d1 instead");
+  });
+
   it("get_expected_charges computes the deterministic expectation", async () => {
     const { run } = setup();
     const out = JSON.parse(await run("get_expected_charges", { lineNumber: 1 }));

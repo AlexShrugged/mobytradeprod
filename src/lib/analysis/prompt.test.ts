@@ -10,6 +10,17 @@ describe("buildInitialUserMessage", () => {
     for (const line of briefing.lines) expect(line).not.toHaveProperty("parts");
   });
 
+  it("names a file's other uploads only when there are any", () => {
+    const plain = JSON.parse(buildInitialUserMessage(fixtureBundle(), ref));
+    expect(plain.documents[0]).not.toHaveProperty("alsoUploadedAs");
+    const bundle = fixtureBundle();
+    bundle.documents[0].sameBytesAs = [{ id: "d0", fileName: "7501 (1).pdf" }];
+    const twin = JSON.parse(buildInitialUserMessage(bundle, ref));
+    expect(twin.documents[0].alsoUploadedAs).toEqual([
+      { id: "d0", fileName: "7501 (1).pdf" },
+    ]);
+  });
+
   it("carries each line's SKUs and the importer's Section 232 marks", () => {
     const bundle = fixtureBundle();
     const lineNumber = bundle.snapshot.auditable.lines[0].lineNumber;
