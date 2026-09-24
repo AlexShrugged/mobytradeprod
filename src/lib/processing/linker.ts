@@ -9,7 +9,7 @@ import { applyQuotesForPo, ingestQuoteSheet } from "@/lib/quotes/service";
 import { normalizeEntryNumber } from "@/lib/refunds";
 import { findOrCreateVendor } from "@/lib/vendors/service";
 import { canonicalHts } from "./hts-code";
-import { normalizeBol, splitReferenceNumbers } from "./normalize";
+import { normalizeBol, splitPoReferences } from "./normalize";
 import type {
   EntryLineItemExtraction,
   ExtractionCitations,
@@ -381,7 +381,7 @@ export async function linkExtraction(
             created: shipment.created,
           });
         }
-        for (const poNumber of f.referenced_pos.flatMap(splitReferenceNumbers)) {
+        for (const poNumber of f.referenced_pos.flatMap(splitPoReferences)) {
           const po = await findOrCreatePoByNumber(poNumber);
           await tx
             .insert(schema.entryPurchaseOrders)
@@ -778,7 +778,7 @@ export async function linkExtraction(
           links.push({ entityType: "shipment", entityId: shipmentId, created: true });
         }
 
-        for (const poNumber of f.referenced_pos.flatMap(splitReferenceNumbers)) {
+        for (const poNumber of f.referenced_pos.flatMap(splitPoReferences)) {
           const po = await findOrCreatePoByNumber(poNumber);
           await tx
             .insert(schema.shipmentPurchaseOrders)
@@ -933,7 +933,7 @@ export async function linkExtraction(
         // or the comma string becomes a literal PO row. The invoice row
         // keeps the first as its primary PO; every one gets linked.
         const poIds: string[] = [];
-        for (const poNumber of splitReferenceNumbers(f.po_number)) {
+        for (const poNumber of splitPoReferences(f.po_number)) {
           const po = await findOrCreatePoByNumber(poNumber);
           poIds.push(po.id);
           links.push({

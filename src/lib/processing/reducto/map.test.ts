@@ -795,3 +795,43 @@ describe("mapExtractWithCitations", () => {
     expect(citations!.header.entry_number?.boxes[0].page).toBe(7);
   });
 });
+
+describe("printed line numbers", () => {
+  // The extractor put a part number in the line-number column once (ASC
+  // 231-7383607-0, "4385010100", 2026-09-24) and the integer column
+  // rejected the whole invoice: a print outside 1..9999 is the row's
+  // position, never a value to persist.
+  it("falls back to the row position for an implausible line number", () => {
+    const result = mapExtractToResult("commercial_invoice", {
+      invoice_number: cite("ASC-1"),
+      line_items: [
+        {
+          line_number: cite(4385010100),
+          sku: cite("4385010100"),
+          quantity: cite(50),
+          unit_price: cite(1.3059),
+          total_price: cite(65.3),
+        },
+        {
+          line_number: cite(2),
+          sku: cite("4385010101"),
+          quantity: cite(1),
+          unit_price: cite(1),
+          total_price: cite(1),
+        },
+        {
+          line_number: cite(0),
+          sku: cite("4385010102"),
+          quantity: cite(1),
+          unit_price: cite(1),
+          total_price: cite(1),
+        },
+      ],
+    });
+    if (result.docType !== "commercial_invoice")
+      throw new Error("wrong docType");
+    expect(result.fields.line_items.map((l) => l.line_number)).toEqual([
+      1, 2, 3,
+    ]);
+  });
+});

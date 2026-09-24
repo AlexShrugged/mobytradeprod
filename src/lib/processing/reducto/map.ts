@@ -19,6 +19,7 @@ import type {
   TariffCodeSheetRowExtraction,
 } from "../types";
 import { canonicalHts } from "../hts-code";
+import { PO_NUMBER_MAX } from "../normalize";
 import { ProcessingError } from "../types";
 import {
   pageResolver,
@@ -175,6 +176,15 @@ function toNum(v: unknown): number | null {
 function toInt(v: unknown): number | null {
   const n = toNum(v);
   return n === null ? null : Math.trunc(n);
+}
+
+/** A printed line number, else the row's position. Outside 1..9999 the
+ *  print is not a line number — the extractor put a part number
+ *  ("4385010100") in the column once (ASC 231-7383607-0, 2026-09-24) and
+ *  the integer column rejected the whole invoice. */
+function toLineNumber(v: unknown, position: number): number {
+  const n = toInt(v);
+  return n !== null && n >= 1 && n <= 9999 ? n : position;
 }
 
 /** ISO country codes compare exact-match downstream (measure gating,
@@ -347,7 +357,7 @@ function mapLineItemsWithSources(raw: unknown): {
     const charges = asRecordArray(line.charges);
     rows.push({
       line: {
-        line_number: toInt(line.line_number) ?? position + 1,
+        line_number: toLineNumber(line.line_number, position + 1),
         sku: toStr(line.sku),
         description: toStr(line.description),
         hts_code: toHts(line.hts_code) as string,
@@ -573,7 +583,10 @@ function mapPurchaseOrder(
   data: Record<string, unknown>,
 ): PurchaseOrderExtraction {
   return {
-    po_number: required(toStr(data.po_number), "purchase order number"),
+    po_number: required(
+      toStr(data.po_number)?.slice(0, PO_NUMBER_MAX) ?? null,
+      "purchase order number",
+    ),
     supplier_name: toStr(data.supplier_name),
     order_date: toDate(data.order_date),
     currency: toStr(data.currency) ?? "USD",
@@ -583,7 +596,7 @@ function mapPurchaseOrder(
     line_items: renumberOnCollision(
       asRecordArray(data.line_items)
         .map((line, i) => ({
-          line_number: toInt(line.line_number) ?? i + 1,
+          line_number: toLineNumber(line.line_number, i + 1),
           sku: toStr(line.sku),
           description: toStr(line.description),
           country_of_origin: toCountry(line.country_of_origin),
@@ -634,7 +647,7 @@ function mapCommercialInvoiceWithSources(data: Record<string, unknown>): {
     .map((line, i) => ({
       source: i,
       line: {
-        line_number: toInt(line.line_number) ?? i + 1,
+        line_number: toLineNumber(line.line_number, i + 1),
         sku: toStr(line.sku),
         description: toStr(line.description),
         country_of_origin: toCountry(line.country_of_origin),
@@ -751,7 +764,7 @@ function mapQuoteSheet(data: Record<string, unknown>): QuoteSheetExtraction {
   const lineItems = renumberOnCollision(
     asRecordArray(data.line_items)
       .map((line, i) => ({
-        line_number: toInt(line.line_number) ?? i + 1,
+        line_number: toLineNumber(line.line_number, i + 1),
         sku: toStr(line.sku),
         description: toStr(line.description),
         unit_cost: toNum(line.unit_cost),
