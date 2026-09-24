@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { HtsCode } from "@/components/hts-code";
+import { FiledSource } from "@/components/variance/filed-source";
 import { LinkedTableRow } from "@/components/variance/linked-table-row";
 import {
   Table,
@@ -12,6 +13,11 @@ import {
 } from "@/components/ui/table";
 import { DUTY_CHARGE_TYPES } from "@/lib/db/queries/variance";
 import type { VarianceDetail } from "@/lib/db/queries/variance";
+import {
+  findCitation,
+  type FactCitationMap,
+  type FactCitationRef,
+} from "@/lib/documents/citations";
 import { formatCents, formatHts, formatMoney, formatRate } from "@/lib/format";
 import { pairSiblingAlerts, unitIds, unitStatus } from "@/lib/variance/grouping";
 import { cn } from "@/lib/utils";
@@ -96,6 +102,10 @@ type DiffRow = {
   /** Click-through to the variance that owns this row (absent on context
    *  rows and the current issue's own rows). */
   href?: string;
+  /** Where the Filed value was read on the broker's document — the eye
+   *  beside the figure. Absent on sums, expectations, and facts the
+   *  document does not print. */
+  citation?: FactCitationRef;
 };
 
 export function LineLedger({
@@ -106,6 +116,7 @@ export function LineLedger({
   documents,
   siblings,
   fromEntry,
+  citations = {},
 }: {
   /** The issue being viewed — its rows highlight amber and don't link. */
   currentId: string;
@@ -117,6 +128,9 @@ export function LineLedger({
   documents: VarianceDetail["documents"];
   siblings: VarianceDetail["siblings"];
   fromEntry: boolean;
+  /** Where the line's filed facts were read (db/queries/citations.ts);
+   *  empty when nothing is cited. */
+  citations?: FactCitationMap;
 }) {
   const units = pairSiblingAlerts(siblings);
   const str = (k: string) =>
@@ -128,6 +142,29 @@ export function LineLedger({
   const amber = (node: React.ReactNode) => (
     <span className="text-amber-700 dark:text-amber-400">{node}</span>
   );
+
+  // Where a Filed value was read: the line's own field, or one of its
+  // declared charges — found by the charge an alert names ("base", or the
+  // Chapter 99 digits ending its alert key) or by a Chapter 99 code. The
+  // field list is a fallback chain: a $0 exclusion claim prints no amount,
+  // so it opens on the code it declares.
+  const lineCite = (...fields: string[]) =>
+    findCitation(citations, "entry_line_item", line?.id, ...fields);
+  const chargeCite = (
+    chargeId: string | null | undefined,
+    ...fields: string[]
+  ) => findCitation(citations, "entry_line_charge", chargeId, ...fields);
+  const digitsOf = (code: string | null | undefined) =>
+    (code ?? "").replace(/\D/g, "");
+  const chargeByDigits = (code: string | null | undefined) => {
+    const digits = digitsOf(code);
+    return digits
+      ? line?.charges.find((ch) => digitsOf(ch.htsCode) === digits)
+      : undefined;
+  };
+  const baseCharge = line?.charges.find((ch) => ch.chargeType === "base_duty");
+  const chargeByRef = (ref: string) =>
+    ref === "base" ? baseCharge : chargeByDigits(ref);
 
   // ------------------------------------------------- the field-level diff
   //
@@ -338,6 +375,7 @@ export function LineLedger({
             {sourceCite(c)}
           </div>
         ),
+        citation: chargeCite(baseCharge?.id, "rate", "amount"),
         filed:
           decRate === null ? (
             muted("none declared")
@@ -411,6 +449,7 @@ export function LineLedger({
       rows.push({
         key: `hts:${c.id}`,
         field: "HTS",
+        citation: lineCite("hts_code"),
         expected: (
           <div className="flex items-start justify-between gap-3">
             <HtsCode code={invoiceHts} />
@@ -432,6 +471,7 @@ export function LineLedger({
       rows.push({
         key: `hts:${c.id}`,
         field: "HTS",
+        citation: lineCite("hts_code"),
         expected: (
           <div className="flex items-start justify-between gap-3">
             <HtsCode code={catalogHts} />
@@ -456,6 +496,7 @@ export function LineLedger({
       rows.push({
         key: `hts:${c.id}`,
         field: "HTS",
+        citation: lineCite("hts_code"),
         expected: (
           <div className="flex items-start justify-between gap-3">
             <HtsCode code={currentHts} />
@@ -487,6 +528,7 @@ export function LineLedger({
     rows.push({
       key: "ctx-hts",
       field: "HTS",
+      citation: lineCite("hts_code"),
       expected: muted("—"),
       filed: <HtsCode code={declaredHts} />,
     });
@@ -528,6 +570,7 @@ export function LineLedger({
       if (digits && issueChargeDigits.has(digits)) continue;
       rows.push({
         key: `measure-declared:${ch.id}`,
+        citation: chargeCite(ch.id, "amount", "rate", "hts_code"),
         field: shortMeasureName(
           ch.measureName ??
             (ch.htsCode ? formatHts(ch.htsCode) : "Additional duty"),
@@ -561,6 +604,11 @@ export function LineLedger({
             <span className="tabular-nums">{formatRate(expectedRate)}</span>
             {sourceCite(c)}
           </div>
+        ),
+        citation: chargeCite(
+          chargeByRef(c.alertKey.slice(c.alertKey.lastIndexOf(":") + 1))?.id,
+          "rate",
+          "amount",
         ),
         filed: amber(
           <span className="tabular-nums">{formatRate(actualRate)}</span>,
@@ -621,6 +669,11 @@ export function LineLedger({
             </span>
             {sourceCite(c)}
           </div>
+        ),
+        citation: chargeCite(
+          chargeByDigits(c.dStr("actual_hts"))?.id,
+          "amount",
+          "hts_code",
         ),
         filed: amber(filedAmountNode),
         corrected: corrected(c.tag, muted("not expected"), filedAmountNode),
@@ -753,6 +806,7 @@ export function LineLedger({
           {sourceCite(c)}
         </div>
       ),
+      citation: lineCite("country_of_origin"),
       filed: amber(declaredCoo),
       corrected: corrected(
         c.tag,
@@ -766,6 +820,7 @@ export function LineLedger({
   if (cooUnits.length === 0 && line?.countryOfOrigin) {
     rows.push({
       key: "ctx-origin",
+      citation: lineCite("country_of_origin"),
       field: "Origin",
       expected: muted("—"),
       filed: <span className="tabular-nums">{line.countryOfOrigin}</span>,
@@ -785,6 +840,7 @@ export function LineLedger({
     ) {
       rows.push({
         key: `value:${c.id}`,
+        citation: lineCite("entered_value"),
         field: "Value",
         expected: (
           <div className="flex items-start justify-between gap-3">
@@ -816,6 +872,7 @@ export function LineLedger({
     if (c.type === "quantity_discrepancy") {
       rows.push({
         key: `quantity:${c.id}`,
+        citation: lineCite("quantity"),
         field: "Quantity",
         expected: (
           <div className="flex items-start justify-between gap-3">
@@ -911,6 +968,7 @@ export function LineLedger({
     rows.push(
       {
         key: "ctx-entered-value",
+        citation: lineCite("entered_value"),
         field: "Entered value",
         expected: muted("—"),
         filed: (
@@ -922,6 +980,7 @@ export function LineLedger({
         ? [
             {
               key: "ctx-quantity",
+              citation: lineCite("quantity"),
               field: "Quantity",
               expected: muted("—"),
               filed: (
@@ -934,6 +993,7 @@ export function LineLedger({
         : []),
       {
         key: "ctx-supplier",
+        citation: lineCite("supplier_name"),
         field: "Supplier",
         expected: muted("—"),
         filed: <span>{line.supplierName ?? "—"}</span>,
@@ -1002,15 +1062,22 @@ export function LineLedger({
                   </TableCell>
                   {/* The strike must be set on descendants too — inline-flex
                       wrappers are atomic boxes that cell-level
-                      text-decoration cannot reach. */}
-                  <TableCell
-                    className={cn(
-                      "border-l font-medium",
-                      row.issue?.status === "resolved" &&
-                        "line-through [&_*]:line-through",
-                    )}
-                  >
-                    {row.filed}
+                      text-decoration cannot reach. It wraps the value only:
+                      the eye beside it is a link to the page, never struck. */}
+                  <TableCell className="border-l font-medium">
+                    <div className="flex items-start justify-between gap-3">
+                      <span
+                        className={cn(
+                          row.issue?.status === "resolved" &&
+                            "line-through [&_*]:line-through",
+                        )}
+                      >
+                        {row.filed}
+                      </span>
+                      {row.citation ? (
+                        <FiledSource citation={row.citation} />
+                      ) : null}
+                    </div>
                   </TableCell>
                   <TableCell
                     className={cn(

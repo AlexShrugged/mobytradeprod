@@ -330,6 +330,30 @@ Stop only stops rendering — the turn finishes via `after()` and
   (dry-run default). Null program =
   lineage unknown: never deduped — sync-created measures stay null until a human
   assigns the program.
+- **Provenance is part of the declared fact.** Reducto cites every
+  extracted scalar (the printed text, a box normalized to the page, the
+  page), and the mapper carries those citations beside the values it maps,
+  keyed by the OUTPUT shape (`mapExtractWithCitations` over
+  `reducto/citations.ts`): a folded Chapter 99 row's charges still point at
+  the cells they were read from, a synthesized $0 claim at the code the row
+  printed, and a packet child cites the parent PDF's page (Reducto's
+  `original_page`, else the child's page range). A citation only ever backs
+  the value that persisted: the processor prunes every field a post-pass
+  blanked or replaced (a null value is never cited; Block 43 fees lose the
+  extractor's leaf). The linker — the entry graph's single writer — persists
+  them as `fact_citations` (entity + field → document, page in that
+  document's OWN file, boxes, printed; migration 0032), wholesale per
+  document on reprocess, entry header fields upserting. Readers never
+  recompute provenance: `queries/citations.ts` keys it for the variance
+  ledger, whose Filed cells carry an eye (`variance/filed-source.tsx`)
+  opening `/api/citations/[id]/page` — that one page sliced out of the
+  stored PDF with the boxes drawn on it (`documents/highlight-pdf.ts`,
+  pdf-lib, rotation-aware), served inline to the browser's own viewer,
+  nothing stored. Sums and expectations carry no eye, and neither does a
+  fact the document does not print. `scripts/backfill-citations.ts`
+  (dry-run default, `--apply`) re-maps the stored cited payloads and plans
+  citations only onto rows whose stored values still equal the re-mapped
+  ones (`documents/citation-backfill.ts`) — zero Reducto credits.
 - **Ceiling headings charge in lieu of the column-1 rate, gated on it.** Two
   Chapter 99 rate idioms exist and the sync reads them (`tariff-sync/rate-parse.ts`,
   `differ.ts`): "The duty provided in the applicable subheading + 10%" is an

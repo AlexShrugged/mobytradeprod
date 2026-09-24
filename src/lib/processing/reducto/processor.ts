@@ -12,6 +12,7 @@ import { parseResultText, scrubEntryLineSkus } from "../line-sku";
 import { mapSplitToManifest } from "../packet";
 import type {
   DocumentProcessor,
+  ExtractionCitations,
   ExtractionResult,
   ProcessInput,
   ProcessOutput,
@@ -24,11 +25,9 @@ import {
   reconcilePortEntry,
   reconcileRetryAddendum,
 } from "../reconcile";
+import { pruneCitations } from "./citations";
 import { getReductoClient } from "./client";
-import {
-  classifyFromResponse,
-  mapExtractToResult,
-} from "./map";
+import { classifyFromResponse, mapExtractWithCitations } from "./map";
 import {
   CLASSIFICATION_SCHEMA,
   classificationPrompt,
@@ -133,6 +132,8 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
       }
 
       let extraction: ExtractionResult;
+      // Where each mapped fact was read — null until a typed extract runs.
+      let citations: ExtractionCitations | null = null;
       if (docType === "entry_packet") {
         // A child can't be a packet — the split role said otherwise, and
         // re-splitting would recurse.
@@ -193,7 +194,10 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
             usage: extracted.usage,
             response: extracted.result,
           };
-          const mapped = mapExtractToResult(docType, extracted.result);
+          const mapped = mapExtractWithCitations(docType, extracted.result, {
+            pageRange: isPacketChild ? input.pageRange : null,
+          });
+          citations = mapped.citations;
           // A 7501 line's sku is the extractor's weakest field (no part
           // number is printed on a broker ABI 7501): drop the values that
           // are provably a shipment/PO reference or Chapter 99 article
@@ -201,11 +205,13 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
           // header fees from Block 43 as printed — the extractor picks the
           // line-level ad valorem working over the collected figure about
           // one time in six.
-          if (mapped.docType !== "port_entry") return mapped;
+          if (mapped.extraction.docType !== "port_entry") {
+            return mapped.extraction;
+          }
           const scrubbed: ExtractionResult = {
             docType: "port_entry",
             fields: applyFeeSummary(
-              scrubEntryLineSkus(mapped.fields, parseText),
+              scrubEntryLineSkus(mapped.extraction.fields, parseText),
               parseText,
             ),
           };
@@ -249,9 +255,20 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
         }
       }
 
+      // A citation backs only the value that persisted: every pass above
+      // that blanked or replaced a field (SKU scrub, Block 43 fees, the
+      // mirrored-quantity drop) leaves that field uncited.
+      if (
+        citations &&
+        (extraction.docType === "port_entry" ||
+          extraction.docType === "commercial_invoice")
+      ) {
+        citations = pruneCitations(extraction.fields, citations);
+      }
+
       const raw = envelope();
       if (!raw) throw new ProcessingError("Parse produced no payload.");
-      return { extraction, raw };
+      return { extraction, raw, citations };
     } catch (err) {
       throw translateError(err, envelope(), parsePart?.jobId ?? null);
     }

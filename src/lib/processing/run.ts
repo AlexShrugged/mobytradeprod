@@ -65,7 +65,7 @@ export async function processDocumentRow(
 
   try {
     const processor = await getProcessor(db);
-    const { extraction, raw } = await processor.process({
+    const { extraction, raw, citations } = await processor.process({
       storageKey: doc.storageKey,
       fileName: doc.fileName,
       mimeType: doc.mimeType,
@@ -127,6 +127,7 @@ export async function processDocumentRow(
 
     await linkExtraction(doc.orgId, doc.id, extraction, {
       parentDocumentId: doc.parentDocumentId,
+      citations: citations ?? null,
     });
 
     // Only the two primary documents change what the analyst reasons

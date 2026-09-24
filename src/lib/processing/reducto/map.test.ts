@@ -22,6 +22,7 @@ import {
 import {
   classifyFromResponse,
   mapExtractToResult,
+  mapExtractWithCitations,
   mergeResultChunks,
   repairCitedRates,
   unwrapCitations,
@@ -701,5 +702,96 @@ describe("printed HTS and origin normalization", () => {
     if (result.docType !== "port_entry") throw new Error("wrong docType");
     expect(result.fields.line_items[0].hts_code).toBe("4016.93.1010");
     expect(result.fields.line_items[0].country_of_origin).toBeNull();
+  });
+});
+
+describe("mapExtractWithCitations", () => {
+  const box = { page: 1, left: 0.1, top: 0.2, width: 0.3, height: 0.02 };
+
+  it("keys a 7501's citations by the output line and charge, dropping what the mapper dropped", () => {
+    const { extraction, citations } = mapExtractWithCitations(
+      "port_entry",
+      PORT_ENTRY_RESPONSE,
+    );
+    expect(extraction.docType).toBe("port_entry");
+    expect(citations).not.toBeNull();
+    // The freight line (no HTS) was dropped — two lines, two citation sets.
+    expect(citations!.lines).toHaveLength(2);
+    expect(citations!.header.entry_number).toEqual({
+      boxes: [box],
+      printed: "231-4501287-4",
+    });
+    // Inferred (uncited) values carry nothing.
+    expect(citations!.header.hmf_amount).toBeUndefined();
+    const first = citations!.lines[0];
+    expect(first.fields.entered_value?.printed).toBe("$10,500.00");
+    expect(first.fields.country_of_origin?.printed).toBe("cn");
+    expect(first.charges).toHaveLength(4);
+    // The rate's citation is the printed percent the repair pass reads.
+    expect(first.charges[0].rate?.printed).toBe("2.8%");
+    // A charge printing no code has no code citation.
+    expect(first.charges[0].hts_code).toBeUndefined();
+    expect(first.charges[1].hts_code?.printed).toBe("9903.88.01");
+    // The second line printed no line number: nothing cites it.
+    expect(citations!.lines[1].fields.line_number).toBeUndefined();
+    expect(citations!.lines[1].fields.hts_code?.printed).toBe("8714.91.3000");
+  });
+
+  it("follows folded Chapter 99 rows back to the cells they were read from", () => {
+    const { extraction, citations } = mapExtractWithCitations(
+      "port_entry",
+      PORT_ENTRY_RESPONSE_CH99_SPLIT,
+    );
+    if (extraction.docType !== "port_entry") throw new Error("wrong type");
+    const line = extraction.fields.line_items[0];
+    expect(line.charges.map((c) => c.hts_code)).toEqual([
+      null,
+      "9903.05.31",
+      "9903.88.67",
+    ]);
+    const cited = citations!.lines[0];
+    expect(cited.fields.hts_code?.printed).toBe("8711.60.0050");
+    // The folded charge: its own rate cell, the row's code for the code it
+    // inherited.
+    expect(cited.charges[1].rate?.printed).toBe("7.5%");
+    expect(cited.charges[1].amount?.printed).toBe("468.75");
+    expect(cited.charges[1].hts_code?.printed).toBe("9903.05.31");
+    // The synthesized $0 claim: only the code the row printed.
+    expect(cited.charges[2]).toEqual({
+      hts_code: { boxes: [box], printed: "9903.88.67" },
+    });
+    expect(citations!.lines[1].fields.sku?.printed).toBe("EB-CHG-STD");
+  });
+
+  it("keeps an invoice's citations aligned through the line filter", () => {
+    const { extraction, citations } = mapExtractWithCitations(
+      "commercial_invoice",
+      COMMERCIAL_INVOICE_RESPONSE,
+    );
+    if (extraction.docType !== "commercial_invoice") throw new Error("wrong type");
+    expect(extraction.fields.line_items).toHaveLength(2);
+    expect(citations!.lines).toHaveLength(2);
+    expect(citations!.header.invoice_number?.printed).toBe("SVD-8841");
+    expect(citations!.header.subtotal).toBeUndefined();
+    expect(citations!.lines[0].fields.total_price?.printed).toBe("$31,200.00");
+    // The surviving second line is the fixture's third row.
+    expect(citations!.lines[1].fields.sku?.printed).toBe("EB-MTR-500W");
+    expect(citations!.lines[1].fields.hts_code).toBeUndefined();
+    expect(citations!.lines[1].charges).toEqual([]);
+  });
+
+  it("cites nothing for document classes persisted by business key", () => {
+    expect(
+      mapExtractWithCitations("shipment", SHIPMENT_RESPONSE).citations,
+    ).toBeNull();
+  });
+
+  it("maps a packet child's pages onto the parent file", () => {
+    const { citations } = mapExtractWithCitations(
+      "port_entry",
+      PORT_ENTRY_RESPONSE,
+      { pageRange: [7, 8] },
+    );
+    expect(citations!.header.entry_number?.boxes[0].page).toBe(7);
   });
 });

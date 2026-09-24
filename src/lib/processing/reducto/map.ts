@@ -5,7 +5,9 @@ import type {
   CommercialInvoiceExtraction,
   EntryChargeExtraction,
   EntryLineItemExtraction,
+  ExtractionCitations,
   ExtractionResult,
+  FieldCitations,
   PackingListExtraction,
   PortEntryExtraction,
   PurchaseOrderExtraction,
@@ -18,6 +20,12 @@ import type {
 } from "../types";
 import { canonicalHts } from "../hts-code";
 import { ProcessingError } from "../types";
+import {
+  pageResolver,
+  pruneCitations,
+  recordCitations,
+  type PageResolver,
+} from "./citations";
 import type { ExtractableDocType } from "./schemas";
 
 // Pure mapping from Reducto extract responses to ExtractionResult. This is
@@ -312,27 +320,58 @@ function renumberOnCollision<T extends { line_number: number }>(
   return lines;
 }
 
-function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
+// Where each output row came from in the cited response, so the mapper's
+// merges never lose a fact's provenance: a line's source row, and for each
+// of its charges the row and charge it was read from. A charge synthesized
+// from a supplemental row with no charges of its own (the $0 claim under
+// the row's Ch99 code) has no charge index — the code is its evidence.
+type ChargeSource = {
+  line: number;
+  charge: number | null;
+  /** The charge printed no code and inherited the supplemental row's. */
+  htsFromRow: boolean;
+};
+type LineSource = { line: number; charges: ChargeSource[] };
+
+function mapLineItemsWithSources(raw: unknown): {
+  lines: EntryLineItemExtraction[];
+  sources: LineSource[];
+} {
   // Lines with no HTS code cannot be declared lines; drop rather than fail
-  // the whole document.
-  const rows = asRecordArray(raw)
-    .filter((line) => toStr(line.hts_code) !== null)
-    .map((line, index) => ({
-      line_number: toInt(line.line_number) ?? index + 1,
-      sku: toStr(line.sku),
-      description: toStr(line.description),
-      hts_code: toHts(line.hts_code) as string,
-      spi: toSpi(line.spi),
-      country_of_origin: toCountry(line.country_of_origin),
-      supplier_name: toStr(line.supplier_name),
-      quantity: toNum(line.quantity),
-      quantity_unit: toUnit(line.quantity_unit),
-      unit_value: toNum(line.unit_value),
-      entered_value: toNum(line.entered_value) ?? 0,
-      charges: asRecordArray(line.charges).map(mapCharge),
-      adcvd_case_number: toStr(line.adcvd_case_number),
-      manufacturer_id: toStr(line.manufacturer_id),
-    }));
+  // the whole document. The position fallback for line_number counts the
+  // surviving rows, as before.
+  const rows: { line: EntryLineItemExtraction; source: LineSource }[] = [];
+  asRecordArray(raw).forEach((line, sourceIndex) => {
+    if (toStr(line.hts_code) === null) return;
+    const position = rows.length;
+    const charges = asRecordArray(line.charges);
+    rows.push({
+      line: {
+        line_number: toInt(line.line_number) ?? position + 1,
+        sku: toStr(line.sku),
+        description: toStr(line.description),
+        hts_code: toHts(line.hts_code) as string,
+        spi: toSpi(line.spi),
+        country_of_origin: toCountry(line.country_of_origin),
+        supplier_name: toStr(line.supplier_name),
+        quantity: toNum(line.quantity),
+        quantity_unit: toUnit(line.quantity_unit),
+        unit_value: toNum(line.unit_value),
+        entered_value: toNum(line.entered_value) ?? 0,
+        charges: charges.map(mapCharge),
+        adcvd_case_number: toStr(line.adcvd_case_number),
+        manufacturer_id: toStr(line.manufacturer_id),
+      },
+      source: {
+        line: sourceIndex,
+        charges: charges.map((_, charge) => ({
+          line: sourceIndex,
+          charge,
+          htsFromRow: false,
+        })),
+      },
+    });
+  });
 
   // A 7501 prints a line's Chapter 99 supplemental codes (Section 301/232,
   // IEEPA, exclusions) as extra rows under the same line number, and
@@ -345,40 +384,130 @@ function mapLineItems(raw: unknown): EntryLineItemExtraction[] {
   // claim; the auditor flags it if duty was expected). The supplemental
   // row's entered_value is the duty basis — the base line's value printed
   // again — never additive.
-  const byNumber = new Map<number, EntryLineItemExtraction[]>();
+  const byNumber = new Map<number, typeof rows>();
   for (const row of rows) {
-    const group = byNumber.get(row.line_number);
+    const group = byNumber.get(row.line.line_number);
     if (group) group.push(row);
-    else byNumber.set(row.line_number, [row]);
+    else byNumber.set(row.line.line_number, [row]);
   }
-  return [...byNumber.values()].map((group) => {
-    const base = group.find((row) => !isCh99(row.hts_code)) ?? group[0];
+  const merged = [...byNumber.values()].map((group) => {
+    const base =
+      group.find((row) => !isCh99(row.line.hts_code)) ?? group[0];
     if (group.length === 1) return base;
-    return {
-      ...base,
-      charges: group.flatMap((row) => {
-        if (row === base) return row.charges;
-        if (row.charges.length === 0) {
-          return [
-            {
-              charge_type: "additional_duty" as const,
-              hts_code: row.hts_code,
-              rate: null,
-              amount: 0,
-            },
-          ];
-        }
-        return row.charges.map((charge) => ({
+    const charges: EntryChargeExtraction[] = [];
+    const chargeSources: ChargeSource[] = [];
+    for (const row of group) {
+      if (row === base) {
+        charges.push(...row.line.charges);
+        chargeSources.push(...row.source.charges);
+        continue;
+      }
+      if (row.line.charges.length === 0) {
+        charges.push({
+          charge_type: "additional_duty" as const,
+          hts_code: row.line.hts_code,
+          rate: null,
+          amount: 0,
+        });
+        chargeSources.push({
+          line: row.source.line,
+          charge: null,
+          htsFromRow: true,
+        });
+        continue;
+      }
+      row.line.charges.forEach((charge, j) => {
+        charges.push({
           ...charge,
-          hts_code: charge.hts_code ?? row.hts_code,
-        }));
-      }),
+          hts_code: charge.hts_code ?? row.line.hts_code,
+        });
+        chargeSources.push({
+          ...row.source.charges[j],
+          htsFromRow: charge.hts_code === null,
+        });
+      });
+    }
+    return {
+      line: { ...base.line, charges },
+      source: { line: base.source.line, charges: chargeSources },
     };
   });
+  return {
+    lines: merged.map((row) => row.line),
+    sources: merged.map((row) => row.source),
+  };
 }
 
-function mapPortEntry(data: Record<string, unknown>): PortEntryExtraction {
+const PORT_ENTRY_HEADER_FIELDS = [
+  "entry_number",
+  "entry_date",
+  "port_of_entry",
+  "entry_type",
+  "importer_of_record",
+  "total_entered_value",
+  "total_duty",
+  "mpf_amount",
+  "hmf_amount",
+  "bond_type",
+  "surety_number",
+] as const;
+const ENTRY_LINE_FIELDS = [
+  "line_number",
+  "sku",
+  "description",
+  "hts_code",
+  "spi",
+  "country_of_origin",
+  "supplier_name",
+  "quantity",
+  "quantity_unit",
+  "unit_value",
+  "entered_value",
+  "adcvd_case_number",
+  "manufacturer_id",
+] as const;
+const ENTRY_CHARGE_FIELDS = ["charge_type", "hts_code", "rate", "amount"] as const;
+
+/** Provenance for a mapped 7501, keyed by the OUTPUT shape (line position,
+ *  charge position) — read off the cited tree by the sources the merge
+ *  recorded, so a folded supplemental row's charges still point at the
+ *  cells they were read from. */
+function portEntryCitations(
+  cited: Record<string, unknown>,
+  sources: LineSource[],
+  pageOf: PageResolver,
+): ExtractionCitations {
+  const citedLines = asRecordArray(cited.line_items);
   return {
+    header: recordCitations(cited, PORT_ENTRY_HEADER_FIELDS, pageOf),
+    lines: sources.map((source) => ({
+      fields: recordCitations(citedLines[source.line], ENTRY_LINE_FIELDS, pageOf),
+      charges: source.charges.map((chargeSource) => {
+        const row = citedLines[chargeSource.line];
+        const rowCode = recordCitations(row, ["hts_code"], pageOf).hts_code;
+        if (chargeSource.charge === null) {
+          // The $0 claim is not printed; the supplemental row's code is
+          // what the filing shows.
+          return rowCode ? { hts_code: rowCode } : {};
+        }
+        const charge: FieldCitations = recordCitations(
+          asRecordArray(row?.charges)[chargeSource.charge],
+          ENTRY_CHARGE_FIELDS,
+          pageOf,
+        );
+        if (chargeSource.htsFromRow && rowCode) charge.hts_code = rowCode;
+        return charge;
+      }),
+    })),
+  };
+}
+
+function mapPortEntryWithSources(data: Record<string, unknown>): {
+  fields: PortEntryExtraction;
+  sources: LineSource[];
+} {
+  const { lines, sources } = mapLineItemsWithSources(data.line_items);
+  const fields: PortEntryExtraction = {
     entry_number: required(toStr(data.entry_number), "CBP entry number"),
     entry_date: toDate(data.entry_date),
     port_of_entry: toStr(data.port_of_entry),
@@ -391,12 +520,13 @@ function mapPortEntry(data: Record<string, unknown>): PortEntryExtraction {
     total_duty: toNum(data.total_duty),
     mpf_amount: toNum(data.mpf_amount),
     hmf_amount: toNum(data.hmf_amount),
-    line_items: mapLineItems(data.line_items),
+    line_items: lines,
     adcvd_case_numbers: toStrArray(data.adcvd_case_numbers),
     bond_type: toStr(data.bond_type),
     surety_number: toStr(data.surety_number),
     related_party: toBool(data.related_party),
   };
+  return { fields, sources };
 }
 
 function mapCargoRelease(
@@ -467,10 +597,64 @@ function mapPurchaseOrder(
   };
 }
 
-function mapCommercialInvoice(
-  data: Record<string, unknown>,
-): CommercialInvoiceExtraction {
-  return {
+const INVOICE_HEADER_FIELDS = [
+  "invoice_number",
+  "po_number",
+  "supplier_name",
+  "invoice_date",
+  "currency",
+  "amount",
+  "subtotal",
+  "incoterms",
+  "payment_terms",
+] as const;
+const INVOICE_LINE_FIELDS = [
+  "line_number",
+  "sku",
+  "description",
+  "country_of_origin",
+  "hts_code",
+  "quantity",
+  "quantity_unit",
+  "unit_price",
+  "total_price",
+  "adcvd_case_number",
+  "manufacturer_name",
+] as const;
+
+function mapCommercialInvoiceWithSources(data: Record<string, unknown>): {
+  fields: CommercialInvoiceExtraction;
+  /** Source index (into the cited line_items) of each output line. */
+  sources: number[];
+} {
+  // Map before filtering so the position fallback for line_number
+  // reflects the document, not the surviving subset. Renumbering keeps
+  // order, so the sources stay aligned with the lines.
+  const mapped = asRecordArray(data.line_items)
+    .map((line, i) => ({
+      source: i,
+      line: {
+        line_number: toInt(line.line_number) ?? i + 1,
+        sku: toStr(line.sku),
+        description: toStr(line.description),
+        country_of_origin: toCountry(line.country_of_origin),
+        hts_code: toHts(line.hts_code),
+        quantity: toNum(line.quantity),
+        quantity_unit: toUnit(line.quantity_unit),
+        unit_price: toNum(line.unit_price),
+        total_price: toNum(line.total_price),
+        adcvd_case_number: toStr(line.adcvd_case_number),
+        manufacturer_name: toStr(line.manufacturer_name),
+      },
+    }))
+    .filter(
+      (
+        row,
+      ): row is typeof row & {
+        line: (typeof row)["line"] & { total_price: number };
+      } => row.line.total_price !== null,
+    );
+  const fields: CommercialInvoiceExtraction = {
     invoice_number: required(toStr(data.invoice_number), "invoice number"),
     po_number: toStr(data.po_number),
     supplier_name: toStr(data.supplier_name),
@@ -491,28 +675,23 @@ function mapCommercialInvoice(
     incoterms: toStr(data.incoterms),
     payment_terms: toStr(data.payment_terms),
     related_party: toBool(data.related_party),
-    // Map before filtering so the position fallback for line_number
-    // reflects the document, not the surviving subset.
-    line_items: renumberOnCollision(
-      asRecordArray(data.line_items)
-        .map((line, i) => ({
-          line_number: toInt(line.line_number) ?? i + 1,
-          sku: toStr(line.sku),
-          description: toStr(line.description),
-          country_of_origin: toCountry(line.country_of_origin),
-          hts_code: toHts(line.hts_code),
-          quantity: toNum(line.quantity),
-          quantity_unit: toUnit(line.quantity_unit),
-          unit_price: toNum(line.unit_price),
-          total_price: toNum(line.total_price),
-          adcvd_case_number: toStr(line.adcvd_case_number),
-          manufacturer_name: toStr(line.manufacturer_name),
-        }))
-        .filter(
-          (line): line is typeof line & { total_price: number } =>
-            line.total_price !== null,
-        ),
-    ),
+    line_items: renumberOnCollision(mapped.map((row) => row.line)),
+  };
+  return { fields, sources: mapped.map((row) => row.source) };
+}
+
+function invoiceCitations(
+  cited: Record<string, unknown>,
+  sources: number[],
+  pageOf: PageResolver,
+): ExtractionCitations {
+  const citedLines = asRecordArray(cited.line_items);
+  return {
+    header: recordCitations(cited, INVOICE_HEADER_FIELDS, pageOf),
+    lines: sources.map((source) => ({
+      fields: recordCitations(citedLines[source], INVOICE_LINE_FIELDS, pageOf),
+      charges: [],
+    })),
   };
 }
 
@@ -638,30 +817,53 @@ export function mapExtractToResult(
   docType: ExtractableDocType,
   result: unknown,
 ): ExtractionResult {
+  return mapExtractWithCitations(docType, result).extraction;
+}
+
+/** The mapped facts AND where each was read. Citations are keyed by the
+ *  output shape and null for document classes whose facts are not
+ *  persisted row by row. pageRange is the packet child's page scope, the
+ *  fallback for a payload naming no original_page. */
+export function mapExtractWithCitations(
+  docType: ExtractableDocType,
+  result: unknown,
+  opts: { pageRange?: number[] | null } = {},
+): { extraction: ExtractionResult; citations: ExtractionCitations | null } {
   const merged = mergeResultChunks(result);
-  const data = asRecord(
-    unwrapCitations(
-      docType === "port_entry" ? repairCitedRates(merged) : merged,
-    ),
-  );
+  const cited = docType === "port_entry" ? repairCitedRates(merged) : merged;
+  const data = asRecord(unwrapCitations(cited));
+  const pageOf = pageResolver(opts.pageRange);
   switch (docType) {
-    case "port_entry":
-      return { docType, fields: mapPortEntry(data) };
+    case "port_entry": {
+      const { fields, sources } = mapPortEntryWithSources(data);
+      return {
+        extraction: { docType, fields },
+        citations: pruneCitations(
+          fields,
+          portEntryCitations(cited, sources, pageOf),
+        ),
+      };
+    }
+    case "commercial_invoice": {
+      const { fields, sources } = mapCommercialInvoiceWithSources(data);
+      return {
+        extraction: { docType, fields },
+        citations: pruneCitations(fields, invoiceCitations(cited, sources, pageOf)),
+      };
+    }
     case "cargo_release":
-      return { docType, fields: mapCargoRelease(data) };
+      return { extraction: { docType, fields: mapCargoRelease(data) }, citations: null };
     case "shipment":
-      return { docType, fields: mapShipment(data) };
+      return { extraction: { docType, fields: mapShipment(data) }, citations: null };
     case "purchase_order":
-      return { docType, fields: mapPurchaseOrder(data) };
-    case "commercial_invoice":
-      return { docType, fields: mapCommercialInvoice(data) };
+      return { extraction: { docType, fields: mapPurchaseOrder(data) }, citations: null };
     case "packing_list":
-      return { docType, fields: mapPackingList(data) };
+      return { extraction: { docType, fields: mapPackingList(data) }, citations: null };
     case "tariff_code_sheet":
-      return { docType, fields: mapTariffCodeSheet(data) };
+      return { extraction: { docType, fields: mapTariffCodeSheet(data) }, citations: null };
     case "quote_sheet":
-      return { docType, fields: mapQuoteSheet(data) };
+      return { extraction: { docType, fields: mapQuoteSheet(data) }, citations: null };
     case "refund_report":
-      return { docType, fields: mapRefundReport(data) };
+      return { extraction: { docType, fields: mapRefundReport(data) }, citations: null };
   }
 }

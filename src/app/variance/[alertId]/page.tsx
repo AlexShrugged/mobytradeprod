@@ -6,6 +6,7 @@ import { DocumentRail } from "@/components/document-rail";
 import { StatusBadge } from "@/components/status-badge";
 import { AlertActions } from "@/components/variance/alert-actions";
 import { LineLedger } from "@/components/variance/line-ledger";
+import { getLineCitations } from "@/lib/db/queries/citations";
 import { VarianceNavCard } from "@/components/variance/variance-nav-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,13 @@ export default async function VarianceDetailPage({
     const ai = await getAiVarianceDetail(alertId);
     if (!ai) notFound();
     if (ai.finding.lineItemId === null) redirect(`/entries/${ai.entry.id}`);
-    return <AiVarianceDetailView detail={ai} fromEntry={fromEntry} />;
+    return (
+      <AiVarianceDetailView
+        detail={ai}
+        fromEntry={fromEntry}
+        citations={ai.line ? await getLineCitations(ai.line.id) : {}}
+      />
+    );
   }
   // Entry-scoped variances (no line) reconcile on the entry page itself.
   if (detail.alert.lineItemId === null) redirect(`/entries/${detail.entry.id}`);
@@ -74,6 +81,8 @@ export default async function VarianceDetailPage({
     invoices,
     siblings,
   } = detail;
+  // Where the line's filed facts were read — the eye beside each figure.
+  const citations = line ? await getLineCitations(line.id) : {};
   // Decisions operate on UNITS: a rate mismatch and its duty-amount twin
   // decide together (pairSiblingAlerts) — advance, undo, and the completion
   // summary all count units, and a unit's primary page is where links land.
@@ -166,6 +175,7 @@ export default async function VarianceDetailPage({
             documents={documents}
             siblings={siblings}
             fromEntry={fromEntry}
+            citations={citations}
           />
           <div className="mt-4">
             <AlertActions

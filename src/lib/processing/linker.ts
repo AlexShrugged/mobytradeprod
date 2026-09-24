@@ -12,7 +12,9 @@ import { canonicalHts } from "./hts-code";
 import { normalizeBol, splitReferenceNumbers } from "./normalize";
 import type {
   EntryLineItemExtraction,
+  ExtractionCitations,
   ExtractionResult,
+  FieldCitations,
   TariffCodeSheetRowExtraction,
 } from "./types";
 
@@ -67,6 +69,31 @@ function entryHeaderTotals(
 }
 
 type LinkedEntity = (typeof schema.linkedEntityType.enumValues)[number];
+type CitedEntity = (typeof schema.factCitationEntityType.enumValues)[number];
+type CitationRow = typeof schema.factCitations.$inferInsert;
+
+// One fact_citations row per cited field of one persisted row.
+function citationRows(
+  orgId: string,
+  documentId: string,
+  entityType: CitedEntity,
+  entityId: string,
+  citations: FieldCitations | undefined,
+): CitationRow[] {
+  if (!citations) return [];
+  return Object.entries(citations)
+    .filter(([, c]) => c.boxes.length > 0)
+    .map(([field, c]) => ({
+      orgId,
+      documentId,
+      entityType,
+      entityId,
+      field,
+      page: c.boxes[0].page,
+      boxes: c.boxes,
+      printed: c.printed,
+    }));
+}
 
 // Turns an extraction into domain records: create the record a document
 // represents if it's new, attach referenced records by their business
@@ -85,10 +112,43 @@ export async function linkExtraction(
   orgId: string,
   documentId: string,
   extraction: ExtractionResult,
-  ctx: { parentDocumentId?: string | null } = {},
+  ctx: {
+    parentDocumentId?: string | null;
+    /** Where each mapped fact was read, keyed by the extraction's shape;
+     *  null when the provider cites nothing. */
+    citations?: ExtractionCitations | null;
+  } = {},
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const links: { entityType: LinkedEntity; entityId: string; created: boolean }[] = [];
+    // Provenance rides with the rows it backs: a reprocess replaces this
+    // document's citations wholesale (the rows they pointed at are
+    // replaced below), and an entry header field re-cited by a newer
+    // 7501 upserts. Written at the end of the case that persisted the rows.
+    await tx
+      .delete(schema.factCitations)
+      .where(eq(schema.factCitations.documentId, documentId));
+    const citationRowsOut: CitationRow[] = [];
+    const persistCitations = async () => {
+      if (citationRowsOut.length === 0) return;
+      await tx
+        .insert(schema.factCitations)
+        .values(citationRowsOut)
+        .onConflictDoUpdate({
+          target: [
+            schema.factCitations.entityType,
+            schema.factCitations.entityId,
+            schema.factCitations.field,
+          ],
+          set: {
+            documentId,
+            page: sql`excluded.page`,
+            boxes: sql`excluded.boxes`,
+            printed: sql`excluded.printed`,
+            createdAt: new Date(),
+          },
+        });
+    };
 
     // BOLs match on normalized form — the same AWB prints "180-61914941" on
     // a 7501 and "18061914941" on the waybill, and an exact-string match
@@ -299,6 +359,15 @@ export async function linkExtraction(
           entryId = created.id;
           links.push({ entityType: "entry", entityId: entryId, created: true });
         }
+        citationRowsOut.push(
+          ...citationRows(
+            orgId,
+            documentId,
+            "entry",
+            entryId,
+            ctx.citations?.header,
+          ),
+        );
 
         for (const bol of f.referenced_bols) {
           const shipment = await findOrCreateShipmentByBol(bol);
@@ -360,7 +429,8 @@ export async function linkExtraction(
             .delete(schema.entryLineItems)
             .where(eq(schema.entryLineItems.entryId, entryId));
 
-          for (const li of f.line_items) {
+          for (const [i, li] of f.line_items.entries()) {
+            const lineCitations = ctx.citations?.lines[i];
             const [lineRow] = await tx
               .insert(schema.entryLineItems)
               .values({
@@ -388,21 +458,47 @@ export async function linkExtraction(
                 enteredValue: li.entered_value.toFixed(2),
               })
               .returning({ id: schema.entryLineItems.id });
+            citationRowsOut.push(
+              ...citationRows(
+                orgId,
+                documentId,
+                "entry_line_item",
+                lineRow.id,
+                lineCitations?.fields,
+              ),
+            );
 
             if (li.charges.length > 0) {
-              await tx.insert(schema.entryLineCharges).values(
-                li.charges.map((c) => ({
-                  orgId,
-                  lineItemId: lineRow.id,
-                  chargeType: c.charge_type,
-                  htsCode: c.hts_code,
-                  htsCodeDigits: c.hts_code
+              // One multi-row insert returns its rows in VALUES order, so
+              // the j-th returned id is the j-th charge's — the position
+              // the citations are keyed by.
+              const chargeRows = await tx
+                .insert(schema.entryLineCharges)
+                .values(
+                  li.charges.map((c) => ({
+                    orgId,
+                    lineItemId: lineRow.id,
+                    chargeType: c.charge_type,
+                    htsCode: c.hts_code,
+                    htsCodeDigits: c.hts_code
                     ? normalizeHts(c.hts_code).slice(0, 10)
                     : null,
-                  rate: c.rate?.toFixed(6) ?? null,
-                  amount: c.amount.toFixed(2),
-                })),
-              );
+                    rate: c.rate?.toFixed(6) ?? null,
+                    amount: c.amount.toFixed(2),
+                  })),
+                )
+                .returning({ id: schema.entryLineCharges.id });
+              chargeRows.forEach((chargeRow, j) => {
+                citationRowsOut.push(
+                  ...citationRows(
+                    orgId,
+                    documentId,
+                    "entry_line_charge",
+                    chargeRow.id,
+                    lineCitations?.charges[j],
+                  ),
+                );
+              });
             }
           }
 
@@ -485,6 +581,7 @@ export async function linkExtraction(
             .onConflictDoNothing();
         }
 
+        await persistCitations();
         await auditEntry(tx, orgId, entryId);
         break;
       }
@@ -888,6 +985,15 @@ export async function linkExtraction(
           invoiceId = created.id;
           links.push({ entityType: "invoice", entityId: invoiceId, created: true });
         }
+        citationRowsOut.push(
+          ...citationRows(
+            orgId,
+            documentId,
+            "invoice",
+            invoiceId,
+            ctx.citations?.header,
+          ),
+        );
 
         await tx
           .delete(schema.invoiceLineItems)
@@ -897,25 +1003,48 @@ export async function linkExtraction(
             f.line_items.map((li) => li.sku),
           );
 
-          await tx.insert(schema.invoiceLineItems).values(
-            f.line_items.map((li) => ({
-              orgId,
-              invoiceId,
-              lineNumber: li.line_number,
-              partId: resolveSku(partIndex, li.sku)?.id ?? null,
-              sku: li.sku,
-              description: li.description,
-              countryOfOrigin: toCoo(li.country_of_origin),
-              htsCode: li.hts_code,
-              // Digits only for a single printed code; a list or noise
-              // compares as unknown rather than overflowing the column.
-              htsCodeDigits: canonicalHts(li.hts_code).digits,
-              quantity: li.quantity?.toFixed(4) ?? null,
-              quantityUnit: li.quantity_unit ?? null,
-              unitPrice: li.unit_price?.toFixed(4) ?? null,
-              totalPrice: li.total_price.toFixed(2),
-            })),
-          );
+          const lineRows = await tx
+            .insert(schema.invoiceLineItems)
+            .values(
+              f.line_items.map((li) => ({
+                orgId,
+                invoiceId,
+                lineNumber: li.line_number,
+                partId: resolveSku(partIndex, li.sku)?.id ?? null,
+                sku: li.sku,
+                description: li.description,
+                countryOfOrigin: toCoo(li.country_of_origin),
+                htsCode: li.hts_code,
+                // Digits only for a single printed code; a list or noise
+                // compares as unknown rather than overflowing the column.
+                htsCodeDigits: canonicalHts(li.hts_code).digits,
+                quantity: li.quantity?.toFixed(4) ?? null,
+                quantityUnit: li.quantity_unit ?? null,
+                unitPrice: li.unit_price?.toFixed(4) ?? null,
+                totalPrice: li.total_price.toFixed(2),
+              })),
+            )
+            .returning({
+              id: schema.invoiceLineItems.id,
+              lineNumber: schema.invoiceLineItems.lineNumber,
+            });
+          // Line numbers are unique within an invoice (the mapper
+          // renumbers on collision), so each row finds its citations by
+          // number rather than by trusting the returned order.
+          const rowByNumber = new Map(lineRows.map((r) => [r.lineNumber, r.id]));
+          f.line_items.forEach((li, i) => {
+            const rowId = rowByNumber.get(li.line_number);
+            if (!rowId) return;
+            citationRowsOut.push(
+              ...citationRows(
+                orgId,
+                documentId,
+                "invoice_line_item",
+                rowId,
+                ctx.citations?.lines[i]?.fields,
+              ),
+            );
+          });
         }
 
         // Invoice-level adjustment rows (rebates, discounts, freight) —
@@ -960,6 +1089,7 @@ export async function linkExtraction(
           });
           for (const el of entryLinks) touched.add(el.entryId);
         }
+        await persistCitations();
         for (const touchedEntryId of touched) {
           await linkEntryInvoice(touchedEntryId, invoiceId);
           links.push({

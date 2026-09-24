@@ -330,10 +330,57 @@ export type RawExtraction = {
   retrievedAt: string;
 };
 
+// ---------------------------------------------------------------- provenance
+//
+// Where on the page a declared fact was read. Reducto cites every extracted
+// scalar with the block it came from: the printed text and a box in
+// normalized page coordinates ([0, 1] of the page's width and height, origin
+// top-left). The mapper carries those citations beside the values it maps,
+// keyed by the OUTPUT shape (line position, charge position) because only
+// the mapper knows how response rows became entry lines; the linker
+// persists them as fact_citations next to the rows. Provenance is part of
+// the declared fact, never derived — the raw payload stays the archive.
+
+/** One cited box on a page of the stored file. `page` is 1-indexed in the
+ *  document's OWN file: a packet child's citations name the parent PDF's
+ *  page (Reducto's original_page), never the child's range-relative one. */
+export type SourceBox = {
+  page: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+export type FieldCitation = {
+  boxes: SourceBox[];
+  /** The block text the extractor read the value from, as printed. */
+  printed: string | null;
+};
+
+/** field name (the extraction's own key) → where it was read. Only fields
+ *  the extractor cited are present; an inferred value has no entry. */
+export type FieldCitations = Record<string, FieldCitation>;
+
+export type LineCitations = {
+  fields: FieldCitations;
+  /** Positional twin of the line's charges[]. */
+  charges: FieldCitations[];
+};
+
+export type ExtractionCitations = {
+  header: FieldCitations;
+  /** Positional twin of fields.line_items (port_entry, commercial_invoice). */
+  lines: LineCitations[];
+};
+
 export type ProcessOutput = {
   extraction: ExtractionResult;
   /** null when the stub processor ran. */
   raw: RawExtraction | null;
+  /** Where each mapped fact was read on the page; null when the provider
+   *  cites nothing (stub, packet manifests, "other" documents). */
+  citations?: ExtractionCitations | null;
 };
 
 // message is user-facing (it lands in documents.error_message). When a parse

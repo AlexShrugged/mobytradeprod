@@ -119,6 +119,16 @@ export const linkedEntityType = pgEnum("linked_entity_type", [
   "quote_sheet",
   "part",
 ]);
+
+// The rows a document's citations can back — the entry graph rows the
+// linker writes from a 7501 or a commercial invoice.
+export const factCitationEntityType = pgEnum("fact_citation_entity_type", [
+  "entry",
+  "entry_line_item",
+  "entry_line_charge",
+  "invoice",
+  "invoice_line_item",
+]);
 export const chargeType = pgEnum("charge_type", [
   "base_duty",
   "additional_duty",
@@ -656,6 +666,53 @@ export const documentLinks = pgTable(
   (t) => [
     primaryKey({ columns: [t.documentId, t.entityType, t.entityId] }),
     index("dl_entity_idx").on(t.entityType, t.entityId),
+  ],
+);
+
+// Where a declared fact was read on the page: one row per (row, field)
+// the extractor cited, carrying the document, the page of THAT document's
+// stored file (a packet child cites its parent PDF's page), Reducto's
+// normalized boxes ([0, 1] of page width/height, origin top-left) and the
+// block text as printed. Provenance is part of the declared fact, not
+// derived from it — the raw payload stays the archive, this is the index
+// every "show me where" surface reads. Written only by processing/linker.ts
+// beside the rows it backs (wholesale per document on reprocess; an entry
+// header field re-cited by a newer 7501 upserts), cascades with the
+// document. entity_id has no FK — the entities live in different tables —
+// so a reprocess that replaces line rows also replaces these rows.
+export const factCitations = pgTable(
+  "fact_citations",
+  {
+    id: id(),
+    orgId: orgId(),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    entityType: factCitationEntityType("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    /** The extraction's own field name ("entered_value", "rate"). */
+    field: varchar("field", { length: 64 }).notNull(),
+    /** 1-indexed page in the stored file of the first box — the page a
+     *  viewer opens; every box carries its own. */
+    page: integer("page").notNull(),
+    boxes: jsonb("boxes")
+      .$type<
+        { page: number; left: number; top: number; width: number; height: number }[]
+      >()
+      .notNull(),
+    printed: text("printed"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("fact_citations_entity_field_uq").on(
+      t.entityType,
+      t.entityId,
+      t.field,
+    ),
+    index("fact_citations_document_idx").on(t.documentId),
+    index("fact_citations_org_idx").on(t.orgId),
   ],
 );
 
@@ -2434,6 +2491,7 @@ export type Document = typeof documents.$inferSelect;
 // what travels to the client. raw_extraction stays server-side.
 export type DocumentListItem = Omit<Document, "rawExtraction">;
 export type DocumentLink = typeof documentLinks.$inferSelect;
+export type FactCitation = typeof factCitations.$inferSelect;
 export type Part = typeof parts.$inferSelect;
 export type Vendor = typeof vendors.$inferSelect;
 export type PartSource = typeof partSources.$inferSelect;

@@ -17,6 +17,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { AiVarianceDetail } from "@/lib/db/queries/variance";
+import type { FactCitationMap } from "@/lib/documents/citations";
 import { formatDate } from "@/lib/format";
 import {
   nextOpenSiblingId,
@@ -34,9 +35,12 @@ import {
 export function AiVarianceDetailView({
   detail,
   fromEntry,
+  citations = {},
 }: {
   detail: AiVarianceDetail;
   fromEntry: boolean;
+  /** Where the line's filed facts were read; the ledger's eye icons. */
+  citations?: FactCitationMap;
 }) {
   const {
     finding,
@@ -136,6 +140,7 @@ export function AiVarianceDetailView({
             documents={documents}
             siblings={siblings}
             fromEntry={fromEntry}
+            citations={citations}
           />
 
           <Card>
