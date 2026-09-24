@@ -3,6 +3,7 @@
 // integer cents throughout; rates are decimal fractions.
 
 import type { HtsRateTypeValue } from "../db/schema";
+import { lapsedProgram } from "./preference-programs";
 import { resolveSpiEligibility } from "./special-rates";
 import type {
   ExpectedLineCharges,
@@ -141,7 +142,13 @@ export function resolveColumnOneRate(
   // the claim's status permits it to say.
   const spi = line.spi?.trim() || null;
   let claim: ExpectedLineCharges["baseDutyClaim"] = null;
-  if (spi) {
+  if (spi && lapsedProgram(spi, line.entryDate)) {
+    // The program was not in force on the entry date (GSP since 2021):
+    // the schedule's column still lists it, but the claim prices nothing
+    // and the general rate stands — a broker keeping the SPI and paying
+    // full duty is filing exactly as CBP's lapse guidance says to.
+    claim = { spi, status: "lapsed", rateText: null };
+  } else if (spi) {
     const eligibility = resolveSpiEligibility(schedule.col1Special, spi);
     claim = {
       spi,

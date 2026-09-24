@@ -299,6 +299,35 @@ describe("rule 1b: SPI preference claims", () => {
     ]);
     expect(alerts[0].message).toContain("under SPI KR");
   });
+
+  // GSP (SPI A) has been lapsed since 2021-01-01: the column still lists
+  // "A*", but the claim prices nothing. CBP's lapse guidance has filers
+  // keep the SPI and pay the general rate, so that filing audits clean —
+  // and a $0 base row beside the claim is not turned into duty owed.
+  it("a lapsed-program claim paid at the general rate is the correct filing", () => {
+    const line = korusLine({
+      spi: "A",
+      charges: [
+        charge("base_duty", "8501.31.4000", 0.04, "400.00"),
+        charge("additional_duty", "9903.01.25", 0.1, "1000.00"),
+        charge("mpf", "499", 0.003464, "34.64"),
+        charge("hmf", "501", 0.00125, "12.50"),
+      ],
+    });
+    const alerts = computeEntryAlerts(
+      entry({ lines: [line], totalDuty: "1400.00" }),
+      refWithSpecial,
+    );
+    expect(keys(alerts)).toEqual([]);
+  });
+
+  it("a lapsed-program claim with no base duty stays silent", () => {
+    const alerts = computeEntryAlerts(
+      entry({ lines: [korusLine({ spi: "A" })], totalDuty: "1000.00" }),
+      refWithSpecial,
+    );
+    expect(keys(alerts)).toEqual([]);
+  });
 });
 
 describe("rule 2: unexpected measure", () => {

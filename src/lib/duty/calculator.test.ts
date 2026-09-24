@@ -862,3 +862,45 @@ describe("ceiling headings (in lieu of the column-1 rate, gated on it)", () => {
     expect(r.baseDuty?.amountCents).toBe(0);
   });
 });
+
+describe("SPI claims under a lapsed program", () => {
+  // The CN motor row (4% general) with a special-rates cell that still
+  // lists GSP ("A*"), as the schedule does for every GSP-eligible code.
+  const digits = "8501314000";
+  const motor = ref.htsByDigits.get(digits)!;
+  const withSpecial = (col1Special: string | null): ReferenceData => ({
+    htsByDigits: new Map(ref.htsByDigits).set(digits, {
+      ...motor,
+      col1Special,
+    }),
+    measures: [],
+    stackingRules: [],
+  });
+  const GSP = "Free (A*, AU, BH, CL, CO, IL, JO, KR, MA, OM, S, SG)";
+
+  it("GSP claimed after 2020-12-31 prices nothing — the general rate stands, marked lapsed", () => {
+    const result = computeExpectedCharges(
+      { ...line("8501.31.4000", "TH"), spi: "A", entryDate: "2025-05-08" },
+      withSpecial(GSP),
+    );
+    expect(result.baseDuty).toEqual({
+      rate: 0.04,
+      amountCents: 400_000,
+      rateType: "ad_valorem",
+    });
+    expect(result.baseDutyClaim).toEqual({
+      spi: "A",
+      status: "lapsed",
+      rateText: null,
+    });
+  });
+
+  it("the same claim while GSP was in force is eligible at Free", () => {
+    const result = computeExpectedCharges(
+      { ...line("8501.31.4000", "TH"), spi: "A", entryDate: "2020-06-15" },
+      withSpecial(GSP),
+    );
+    expect(result.baseDuty?.rate).toBe(0);
+    expect(result.baseDutyClaim?.status).toBe("eligible");
+  });
+});

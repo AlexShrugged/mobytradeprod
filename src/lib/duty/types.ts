@@ -203,9 +203,13 @@ export type ExpectedLineCharges = {
   // "unverifiable" = no special text to check — claims-bias says the audit
   // stays silent rather than turning a claim into duty owed. Null = no SPI
   // declared (or the code is absent from reference entirely).
+  // "lapsed" = the claimed program was not in force on the entry date
+  // (duty/preference-programs.ts — GSP since 2021-01-01): the claim prices
+  // nothing, the general rate stands, and a base duty paid at the general
+  // rate is the correct lapse filing, never an overpayment.
   baseDutyClaim: {
     spi: string;
-    status: "eligible" | "ineligible" | "unverifiable";
+    status: "eligible" | "ineligible" | "unverifiable" | "lapsed";
     rateText: string | null;
   } | null;
   sailBasis: SailBasis;

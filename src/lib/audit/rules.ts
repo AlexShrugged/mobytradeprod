@@ -567,9 +567,13 @@ export function computeEntryAlerts(
       // already priced the special rate into expected.baseDuty (a Free
       // rate never reaches this alert), an unverifiable claim silences
       // the rule (a claim is never turned into duty owed without
-      // affirmative grounds — the analyst contests substance), and only
-      // an SPI the special column affirmatively does not list leaves the
-      // general-rate expectation standing, with the rejected claim named.
+      // affirmative grounds — the analyst contests substance), a lapsed
+      // one too (the program was not in force — GSP since 2021 — and ACE
+      // collects the general rate on such a line regardless, so a $0
+      // base row beside SPI A is an extraction gap, not a filing), and
+      // only an SPI the special column affirmatively does not list leaves
+      // the general-rate expectation standing, with the rejected claim
+      // named.
       const hasBaseCharge = line.charges.some(
         (c) => c.chargeType === "base_duty",
       );
@@ -577,6 +581,7 @@ export function computeEntryAlerts(
       if (
         !hasBaseCharge &&
         claim?.status !== "unverifiable" &&
+        claim?.status !== "lapsed" &&
         auditBase !== null &&
         auditBase.rate !== null &&
         auditBase.rate > 0 &&
