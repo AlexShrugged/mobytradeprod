@@ -265,6 +265,29 @@ function asRecordArray(v: unknown): Record<string, unknown>[] {
     .map((item) => item as Record<string, unknown>);
 }
 
+/** One document, one invoice. When the packet split left two invoices in
+ *  one child, the extractor names them both ("HD2612906; HD2612908") and
+ *  merges their totals — a row that is neither invoice. Fail closed with
+ *  the numbers named rather than persist a merged invoice (ASC
+ *  231-7381244-4, 2026-09-24). */
+function singleInvoiceNumber(value: string): string {
+  const parts = [
+    ...new Set(
+      value
+        .split(/[;,]/)
+        .map((s) => s.trim())
+        .filter((s) => s !== ""),
+    ),
+  ];
+  if (parts.length > 1) {
+    throw new ProcessingError(
+      `This document holds ${parts.length} invoices (${parts.join(", ")}). ` +
+        "Reprocess the packet so each invoice is its own document.",
+    );
+  }
+  return value;
+}
+
 function required(value: string | null, label: string): string {
   if (value === null) {
     throw new ProcessingError(
@@ -668,7 +691,9 @@ function mapCommercialInvoiceWithSources(data: Record<string, unknown>): {
       } => row.line.total_price !== null,
     );
   const fields: CommercialInvoiceExtraction = {
-    invoice_number: required(toStr(data.invoice_number), "invoice number"),
+    invoice_number: singleInvoiceNumber(
+      required(toStr(data.invoice_number), "invoice number"),
+    ),
     po_number: toStr(data.po_number),
     supplier_name: toStr(data.supplier_name),
     invoice_date: toDate(data.invoice_date),

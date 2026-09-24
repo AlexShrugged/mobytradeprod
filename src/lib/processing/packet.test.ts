@@ -198,3 +198,25 @@ describe("childFileName / pageRangeLabel", () => {
     expect(pageRangeLabel([])).toBeNull();
   });
 });
+
+describe("mapSplitToManifest with several invoices", () => {
+  // The Commercial Invoice category is partitioned by invoice number, so a
+  // packet with two back-to-back invoices yields two sections; the
+  // manifest must keep them as two parts, never merge same-role neighbours.
+  it("keeps consecutive commercial invoice sections as separate parts", () => {
+    const manifest = mapSplitToManifest([
+      { name: "Entry Summary 7501", pages: [1, 2], conf: "high" },
+      { name: "Commercial Invoice", pages: [3, 4], conf: "high" },
+      { name: "Commercial Invoice", pages: [5, 6], conf: "high" },
+      { name: "Packing List", pages: [7], conf: "high" },
+    ]);
+    expect(
+      manifest.parts.map((p) => [p.part_index, p.role, p.pages]),
+    ).toEqual([
+      [1, "entry_summary_7501", [1, 2]],
+      [2, "commercial_invoice", [3, 4]],
+      [3, "commercial_invoice", [5, 6]],
+      [4, "packing_list", [7]],
+    ]);
+  });
+});

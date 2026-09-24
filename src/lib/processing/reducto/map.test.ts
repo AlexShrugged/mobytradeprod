@@ -835,3 +835,26 @@ describe("printed line numbers", () => {
     ]);
   });
 });
+
+describe("one invoice per document", () => {
+  // A packet child that still bundles two invoices extracts as a merged
+  // row ("HD2612906; HD2612908", both totals summed) — neither invoice.
+  it("fails closed, naming the invoices, when the number is a list", () => {
+    expect(() =>
+      mapExtractToResult("commercial_invoice", {
+        invoice_number: cite("HD2612906; HD2612908"),
+        line_items: [],
+      }),
+    ).toThrow(/2 invoices \(HD2612906, HD2612908\)/);
+  });
+
+  it("accepts a single invoice number with punctuation inside it", () => {
+    const result = mapExtractToResult("commercial_invoice", {
+      invoice_number: cite("ABZ2643-1"),
+      line_items: [],
+    });
+    if (result.docType !== "commercial_invoice")
+      throw new Error("wrong docType");
+    expect(result.fields.invoice_number).toBe("ABZ2643-1");
+  });
+});

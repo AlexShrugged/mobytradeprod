@@ -874,7 +874,16 @@ export const SPLIT_CATEGORIES: SplitCategory[] = [
     name: "Commercial Invoice",
     description:
       "A supplier's commercial invoice billing for shipped goods: invoice " +
-      "number, seller/buyer, goods lines with quantities and prices.",
+      "number, seller/buyer, goods lines with quantities and prices. ONE " +
+      "section per invoice: a packet often bundles several invoices from " +
+      "the same supplier back to back, each with its own invoice number " +
+      "and its own total — every distinct invoice number is its own " +
+      "section, never merged with the next.",
+    // Reducto partitions the category by this key, so two consecutive
+    // invoices become two sections instead of one four-page "invoice"
+    // whose extraction merges both totals (ASC HD2611971 + HD2611972,
+    // HD2612906 + HD2612908; 2026-09-24).
+    partition_key: "invoice number",
   },
   {
     name: "Assist Sheet",
@@ -925,4 +934,6 @@ export const SPLIT_CATEGORIES: SplitCategory[] = [
 export const SPLIT_RULES =
   "This is a customs broker entry packet. Each CBP 7501 continuation sheet " +
   "belongs to the Entry Summary 7501 section. Keep each distinct document's " +
-  "pages together in one section.";
+  "pages together in one section. Two commercial invoices are two distinct " +
+  "documents even when they follow each other from the same supplier: a " +
+  "new invoice number starts a new Commercial Invoice section.";
