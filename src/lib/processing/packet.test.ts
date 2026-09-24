@@ -220,3 +220,57 @@ describe("mapSplitToManifest with several invoices", () => {
     ]);
   });
 });
+
+describe("mapSplitToManifest partitions", () => {
+  // Reducto answers a partition_key with ONE section whose partitions name
+  // each invoice and its pages (7077830471: HD2611971 pp. 6–7, HD2611972
+  // pp. 8–9). Two or more partitions covering the section exactly are that
+  // many documents.
+  it("expands a partitioned invoice section into one part per invoice", () => {
+    const manifest = mapSplitToManifest([
+      { name: "Entry Summary 7501", pages: [2, 3, 4], conf: "high" },
+      {
+        name: "Commercial Invoice",
+        pages: [6, 7, 8, 9],
+        conf: "high",
+        partitions: [
+          { name: "HD2611971", pages: [6, 7], conf: "high" },
+          { name: "HD2611972", pages: [8, 9], conf: "low" },
+        ],
+      },
+    ]);
+    expect(
+      manifest.parts.map((p) => [p.role, p.pages, p.title, p.confidence]),
+    ).toEqual([
+      ["entry_summary_7501", [2, 3, 4], "Entry Summary 7501", "high"],
+      ["commercial_invoice", [6, 7], "Commercial Invoice HD2611971", "high"],
+      ["commercial_invoice", [8, 9], "Commercial Invoice HD2611972", "low"],
+    ]);
+  });
+
+  it("keeps the section whole for a lone partition or an incomplete cover", () => {
+    const lone = mapSplitToManifest([
+      {
+        name: "Commercial Invoice",
+        pages: [6, 7],
+        conf: "high",
+        partitions: [{ name: "ABZ2643-1", pages: [6, 7], conf: "high" }],
+      },
+    ]);
+    expect(lone.parts.map((p) => p.pages)).toEqual([[6, 7]]);
+    expect(lone.parts[0].title).toBe("Commercial Invoice");
+
+    const gap = mapSplitToManifest([
+      {
+        name: "Commercial Invoice",
+        pages: [6, 7, 8, 9],
+        conf: "high",
+        partitions: [
+          { name: "A", pages: [6], conf: "high" },
+          { name: "B", pages: [8, 9], conf: "high" },
+        ],
+      },
+    ]);
+    expect(gap.parts.map((p) => p.pages)).toEqual([[6, 7, 8, 9]]);
+  });
+});

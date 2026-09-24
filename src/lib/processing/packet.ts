@@ -163,29 +163,70 @@ export type RawSplitPart = {
   name: string | null | undefined;
   pages: (number | { page_number?: number | null } | null | undefined)[];
   conf?: string | null;
+  // A category split by a partition key (the Commercial Invoice category
+  // partitions by invoice number) comes back as ONE section whose
+  // partitions name each document inside it with its own pages.
+  partitions?: RawSplitPartition[] | null;
+  // Set by expandPartitions: the section name plus the partition's own
+  // name ("Commercial Invoice HD2611971"), never provided by Reducto.
+  title?: string | null;
 };
+
+export type RawSplitPartition = {
+  name: string | null | undefined;
+  pages: RawSplitPart["pages"];
+  conf?: string | null;
+};
+
+const usablePages = (pages: RawSplitPart["pages"]): number[] =>
+  [
+    ...new Set(
+      pages
+        .map((p) => (typeof p === "number" ? p : (p?.page_number ?? null)))
+        .filter((p): p is number => typeof p === "number" && p >= 1),
+    ),
+  ].sort((a, b) => a - b);
+
+// A section with two or more partitions that together cover exactly its
+// pages is that many documents (two back-to-back supplier invoices — ASC
+// HD2611971 + HD2611972 on pages 6–9, 2026-09-24); each becomes its own
+// part so the single-invoice extractor never merges them. A lone
+// partition, or partitions that leave pages unaccounted for, keep the
+// section whole: a page must never fall out of the packet.
+function expandPartitions(part: RawSplitPart): RawSplitPart[] {
+  const partitions = (part.partitions ?? [])
+    .map((p) => ({ ...p, usable: usablePages(p.pages) }))
+    .filter((p) => p.usable.length > 0);
+  if (partitions.length < 2) return [part];
+  const covered = new Set(partitions.flatMap((p) => p.usable));
+  const section = usablePages(part.pages);
+  const complete =
+    covered.size === section.length && section.every((p) => covered.has(p));
+  if (!complete) return [part];
+  return partitions.map((p) => ({
+    name: part.name,
+    pages: p.usable,
+    conf: p.conf ?? part.conf,
+    title: p.name?.trim()
+      ? `${part.name?.trim() ?? ""} ${p.name.trim()}`.trim()
+      : undefined,
+  }));
+}
 
 // Map a provider split response into the packet manifest. Parts with no
 // usable pages are dropped; zero usable parts is a processing failure (a
 // packet whose split found nothing cannot produce children).
 export function mapSplitToManifest(parts: RawSplitPart[]): EntryPacketExtraction {
   const usable = parts
+    .flatMap(expandPartitions)
     .map((part) => {
-      const pages = [
-        ...new Set(
-          part.pages
-            .map((p) =>
-              typeof p === "number" ? p : (p?.page_number ?? null),
-            )
-            .filter((p): p is number => typeof p === "number" && p >= 1),
-        ),
-      ].sort((a, b) => a - b);
+      const pages = usablePages(part.pages);
       if (pages.length === 0) return null;
       const role = normalizeRole(part.name);
       return {
         role,
         doc_type: roleToDocType(role),
-        title: part.name?.trim() || null,
+        title: part.title ?? (part.name?.trim() || null),
         pages,
         confidence:
           part.conf === "high" || part.conf === "low" ? part.conf : null,
