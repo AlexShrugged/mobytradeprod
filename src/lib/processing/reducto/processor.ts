@@ -9,6 +9,7 @@ import {
 import { getFileStore } from "@/lib/storage";
 import { applyFeeSummary } from "../fee-summary";
 import { parseResultText, scrubEntryLineSkus } from "../line-sku";
+import { fillEntryLineSpis } from "../line-spi";
 import { mapSplitToManifest } from "../packet";
 import type {
   DocumentProcessor,
@@ -208,10 +209,15 @@ export class ReductoDocumentProcessor implements DocumentProcessor {
           if (mapped.extraction.docType !== "port_entry") {
             return mapped.extraction;
           }
+          // ...and fill the column-27 program indicator the extractor
+          // drops about a third of the time, from where the page prints it.
           const scrubbed: ExtractionResult = {
             docType: "port_entry",
             fields: applyFeeSummary(
-              scrubEntryLineSkus(mapped.extraction.fields, parseText),
+              fillEntryLineSpis(
+                scrubEntryLineSkus(mapped.extraction.fields, parseText),
+                parseText,
+              ),
               parseText,
             ),
           };
