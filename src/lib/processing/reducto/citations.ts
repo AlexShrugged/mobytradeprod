@@ -29,20 +29,27 @@ export type PageResolver = (bbox: {
   original_page?: number | null;
 }) => number;
 
-/** Reducto numbers a page-scoped parse from 1 and names the source page in
- *  original_page. A packet child's citation must land on the parent PDF's
- *  page (the child shares the parent's bytes), so original_page wins; a
- *  payload without it maps the range-relative page through the child's own
- *  page_range; a standalone document's page is already the file's. */
+/** Reducto numbers a page-scoped parse from 1 in `page`. A packet child's
+ *  citation must land on the parent PDF's page (the child shares the
+ *  parent's bytes), and the provider has named that page two ways: payloads
+ *  since 2026-09-11 put the source page in original_page, while earlier
+ *  ones repeated the range-relative page there (every ASC/MotoRad child
+ *  through 2026-09-09: original_page 1 on a page-5 invoice). An original
+ *  that merely equals the relative page therefore says nothing and maps
+ *  through the child's own page_range; one that differs is the source page.
+ *  A standalone document's page is already the file's. */
 export function pageResolver(
   pageRange: number[] | null | undefined,
 ): PageResolver {
   return (bbox) => {
-    if (isFiniteNumber(bbox.original_page)) return bbox.original_page;
+    const original = isFiniteNumber(bbox.original_page)
+      ? bbox.original_page
+      : null;
     if (pageRange && pageRange.length > 0) {
-      return pageRange[bbox.page - 1] ?? bbox.page;
+      if (original !== null && original !== bbox.page) return original;
+      return pageRange[bbox.page - 1] ?? original ?? bbox.page;
     }
-    return bbox.page;
+    return original ?? bbox.page;
   };
 }
 

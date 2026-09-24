@@ -31,6 +31,18 @@ describe("pageResolver", () => {
     expect(pageResolver([4, 5, 6])({ page: 9 })).toBe(9);
   });
 
+  it("reads an original_page equal to the relative page as relative (payloads before 2026-09-11)", () => {
+    expect(pageResolver([5])({ page: 1, original_page: 1 })).toBe(5);
+    expect(pageResolver([2, 3])({ page: 2, original_page: 2 })).toBe(3);
+    expect(
+      pageResolver([5, 6, 7, 8, 11, 12])({ page: 5, original_page: 5 }),
+    ).toBe(11);
+    // A range starting at 1 reads the same either way.
+    expect(pageResolver([1, 2])({ page: 2, original_page: 2 })).toBe(2);
+    // Past the range: the original is the only page we have.
+    expect(pageResolver([5])({ page: 3, original_page: 3 })).toBe(3);
+  });
+
   it("keeps a standalone document's page as is", () => {
     expect(pageResolver(null)({ page: 3 })).toBe(3);
     expect(pageResolver([])({ page: 3 })).toBe(3);
