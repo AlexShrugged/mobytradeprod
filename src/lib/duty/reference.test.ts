@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildReferenceData,
+  resolveSpecialText,
   type HtsCodeRow,
   type StackingRuleRow,
   type TradeMeasureRow,
@@ -219,5 +220,105 @@ describe("buildReferenceData", () => {
     expect(ref.htsByDigits.get("99030125")?.rate).toBe(0.2);
     // Both windows still exist as measures — the map is display-only.
     expect(ref.measures.map((m) => m.rate).sort()).toEqual([0.1, 0.2]);
+  });
+});
+
+describe("resolveSpecialText — statistical suffixes inherit the special-rates text", () => {
+  it("answers an SPI claim on a 10-digit suffix with its rate ancestor's text, window-aware", () => {
+    // The subheading prints the rates once; the suffix's own cells are blank
+    // (null in rows synced before the ETL inherited the text). Two parent
+    // windows: the suffix's window picks the parent window covering it.
+    const parentOld = htsRow({
+      code: "8301.20.00",
+      codeDigits: "83012000",
+      col1Special: "Free (A*,AU,BH,S)",
+      validFrom: "2025-01-01",
+      validTo: "2026-08-02",
+    });
+    const parentNew = htsRow({
+      code: "8301.20.00",
+      codeDigits: "83012000",
+      col1Special: "Free (A*,AU,BH,S,SG)",
+      validFrom: "2026-08-03",
+      validTo: null,
+    });
+    const suffixOld = htsRow({
+      code: "8301.20.00.60",
+      codeDigits: "8301200060",
+      col1Special: null,
+      rateInheritedFrom: "83012000",
+      validFrom: "2025-01-01",
+      validTo: "2026-08-02",
+    });
+    const suffixNew = htsRow({
+      code: "8301.20.00.60",
+      codeDigits: "8301200060",
+      col1Special: null,
+      rateInheritedFrom: "83012000",
+      validFrom: "2026-08-03",
+      validTo: null,
+    });
+    const ref = buildReferenceData(
+      [parentOld, parentNew, suffixOld, suffixNew],
+      [],
+      [],
+      [],
+    );
+    expect(ref.htsByDigits.get("8301200060")?.col1Special).toBe(
+      "Free (A*,AU,BH,S,SG)",
+    );
+    // Newest window first; each carries its own parent window's text.
+    expect(
+      (ref.baseWindowsByDigits?.get("8301200060") ?? []).map((w) => w.col1Special),
+    ).toEqual(["Free (A*,AU,BH,S,SG)", "Free (A*,AU,BH,S)"]);
+    // The parent's own text is untouched.
+    expect(ref.htsByDigits.get("83012000")?.col1Special).toBe(
+      "Free (A*,AU,BH,S,SG)",
+    );
+  });
+
+  it("chains through an inheriting ancestor and stays null when no ancestor prints special rates", () => {
+    const heading = htsRow({
+      code: "0101.29.00",
+      codeDigits: "01012900",
+      col1Special: "Free (A+,AU,BH)",
+    });
+    const mid = htsRow({
+      code: "0101.29.00.10",
+      codeDigits: "0101290010",
+      col1Special: null,
+      rateInheritedFrom: "01012900",
+    });
+    const leaf = htsRow({
+      code: "0101.29.00.10.5",
+      codeDigits: "010129001050",
+      col1Special: null,
+      rateInheritedFrom: "0101290010",
+    });
+    const bare = htsRow({
+      code: "0101.21.00",
+      codeDigits: "01012100",
+      col1Special: null,
+    });
+    const bareSuffix = htsRow({
+      code: "0101.21.00.10",
+      codeDigits: "0101210010",
+      col1Special: null,
+      rateInheritedFrom: "01012100",
+    });
+    const orphan = htsRow({
+      code: "0101.30.00.00",
+      codeDigits: "0101300000",
+      col1Special: null,
+      rateInheritedFrom: "01013000", // not loaded
+    });
+    const rows = [heading, mid, leaf, bare, bareSuffix, orphan];
+    const byDigits = new Map<string, typeof rows>();
+    for (const r of rows) byDigits.set(r.codeDigits, [...(byDigits.get(r.codeDigits) ?? []), r]);
+    expect(resolveSpecialText(leaf, byDigits)).toBe("Free (A+,AU,BH)");
+    expect(resolveSpecialText(mid, byDigits)).toBe("Free (A+,AU,BH)");
+    expect(resolveSpecialText(heading, byDigits)).toBe("Free (A+,AU,BH)");
+    expect(resolveSpecialText(bareSuffix, byDigits)).toBeNull();
+    expect(resolveSpecialText(orphan, byDigits)).toBeNull();
   });
 });

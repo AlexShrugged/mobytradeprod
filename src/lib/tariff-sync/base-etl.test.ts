@@ -76,6 +76,14 @@ describe("prepareBaseRows hierarchy recovery", () => {
     expect(slaughter.rateType).toBe("ad_valorem");
     expect(slaughter.rateInheritedFrom).toBe("01012900");
     expect(slaughter.col1General).toBe("4.5%");
+
+    // The rate columns travel together: the suffix answers an SPI claim
+    // with its subheading's special-rates text (null where the subheading
+    // prints none) and carries the column-2 rate.
+    expect(slaughter.col1Special).toBe("Free (A+,AU,BH)");
+    expect(slaughter.col2Rate).toBe("20%");
+    expect(male.col1Special).toBeNull();
+    expect(male.col2Rate).toBe("Free");
   });
 
   it("rows with their own rate cells never record inheritance", () => {

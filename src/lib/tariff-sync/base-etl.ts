@@ -3,10 +3,11 @@
 //   - link each coded row to its nearest CODED ancestor (parent_digits);
 //     codeless decision-branch rows ("Other:") stay on the stack for context
 //     but are NEVER emitted as db rows, and never become parents;
-//   - inherit a rate from the nearest rate-bearing ancestor when a row's
-//     own rate cells are blank (standard HTSUS structure: the rate is
-//     stated once on the subheading; 10-digit statistical suffixes are
-//     blank), recording rate_inherited_from;
+//   - inherit a rate — and the special-rates and column-2 text printed
+//     beside it — from the nearest rate-bearing ancestor when a row's own
+//     rate cells are blank (standard HTSUS structure: the rates are stated
+//     once on the subheading; 10-digit statistical suffixes are blank),
+//     recording rate_inherited_from;
 //   - keep chapters 1–97 only (98/99 belong to the measure pipeline);
 // and diff the prepared rows against the current base windows. No IO — the
 // write path is base-apply.ts.
@@ -28,6 +29,11 @@ type StackNode = {
   parsed: ParsedBaseRate | null;
   /** The raw general text backing `parsed`, for inherited col1_general. */
   rawGeneral: string | null;
+  /** The special-rates and column-2 text printed beside `parsed`: the
+   *  schedule states all three rate columns once, on the rate-bearing
+   *  row, so a blank statistical suffix inherits them together. */
+  rawSpecial: string | null;
+  rawOther: string | null;
 };
 
 /** Indent-stack walk producing one PreparedBaseRow per coded, in-scope row.
@@ -48,12 +54,16 @@ export function prepareBaseRows(rows: BaseScheduleRow[]): PreparedBaseRow[] {
     const digits = code.replace(/\D/g, "");
     const ownGeneral = row.general.trim();
     const ownParsed = ownGeneral !== "" ? parseBaseRate(ownGeneral) : null;
+    const ownSpecial = row.special.trim() || null;
+    const ownOther = row.other.trim() || null;
 
     const node: StackNode = {
       indent,
       codeDigits: code === "" ? null : digits,
       parsed: ownParsed,
       rawGeneral: ownParsed ? ownGeneral : null,
+      rawSpecial: ownParsed ? ownSpecial : null,
+      rawOther: ownParsed ? ownOther : null,
     };
 
     // Nearest coded ancestor and nearest rate-bearing ancestor (which may
@@ -95,8 +105,12 @@ export function prepareBaseRows(rows: BaseScheduleRow[]): PreparedBaseRow[] {
         : inherited
           ? rateAncestor!.rawGeneral
           : null,
-      col1Special: row.special.trim() || null,
-      col2Rate: row.other.trim() || null,
+      // The special-rates and column-2 text travel with the rate: a
+      // 10-digit suffix under "Free (…,S,…)" answers an SPI claim with its
+      // subheading's text. Rows synced before 2026-09-24 carry null here;
+      // the loader inherits on read for those (duty/reference.ts).
+      col1Special: ownSpecial ?? (inherited ? rateAncestor!.rawSpecial : null),
+      col2Rate: ownOther ?? (inherited ? rateAncestor!.rawOther : null),
       unitOfQuantity: row.unitOfQuantity.trim() || null,
       rateInheritedFrom: inherited ? rateAncestor!.codeDigits : null,
     });

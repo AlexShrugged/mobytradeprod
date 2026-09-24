@@ -34,6 +34,44 @@ export type TradeMeasureRow = typeof schema.tradeMeasures.$inferSelect;
 export type TradeMeasureHtsRow = typeof schema.tradeMeasureHts.$inferSelect;
 export type StackingRuleRow = typeof schema.stackingRules.$inferSelect;
 
+/** The column-1 special-rates text a base row answers an SPI claim with:
+ *  its own, else its rate ancestor's (`rate_inherited_from`), chained and
+ *  window-aware — the same inheritance the ETL applies to the rate. The
+ *  schedule states the rates once, on the subheading, and 10-digit
+ *  statistical suffixes print blank cells; rows synced before the ETL
+ *  carried the special text along (2026-09-24) hold null even under a
+ *  "Free (…,S,…)" subheading, and a claim read against them resolved
+ *  "unverifiable": rule 1b stayed silent by doctrine, but rule 3 compared
+ *  the declared 0% against the general rate — 37 false "Rate mismatch"
+ *  alerts on MotoRad's USMCA-claimed lines (locks at 5.7%). The ancestor
+ *  window is the one covering the row's own valid_from, else the current
+ *  one. Exported for tests. */
+export function resolveSpecialText(
+  row: HtsCodeRow,
+  baseByDigits: Map<string, HtsCodeRow[]>,
+): string | null {
+  let cur = row;
+  for (let hop = 0; hop < 6; hop++) {
+    if (cur.col1Special) return cur.col1Special;
+    if (!cur.rateInheritedFrom) return null;
+    const ancestors = baseByDigits.get(cur.rateInheritedFrom);
+    if (!ancestors || ancestors.length === 0) return null;
+    const asOf = cur.validFrom;
+    const next =
+      (asOf !== null
+        ? ancestors.find(
+            (a) =>
+              (a.validFrom === null || a.validFrom <= asOf) &&
+              (a.validTo === null || asOf <= a.validTo),
+          )
+        : undefined) ??
+      ancestors.find((a) => a.validTo === null) ??
+      ancestors[0];
+    cur = next;
+  }
+  return null;
+}
+
 /** Pure assembly of the ReferenceData bag from raw table rows. The scoped
  *  and full loaders differ only in which hts_codes rows they feed in; the
  *  derived maps are byte-identical for any digits present in both. */
@@ -45,6 +83,16 @@ export function buildReferenceData(
 ): ReferenceData {
   const measureById = new Map(measureRows.map((m) => [m.id, m]));
 
+  // Base rows by digits, every window — the ancestry an inheriting
+  // statistical suffix resolves its special-rates text through.
+  const baseByDigits = new Map<string, HtsCodeRow[]>();
+  for (const h of htsRows) {
+    if (h.tradeMeasureId !== null) continue;
+    const list = baseByDigits.get(h.codeDigits) ?? [];
+    list.push(h);
+    baseByDigits.set(h.codeDigits, list);
+  }
+
   const toRef = (h: HtsCodeRow): HtsRef => ({
     code: h.code,
     codeDigits: h.codeDigits,
@@ -52,7 +100,7 @@ export function buildReferenceData(
     chapter: h.chapter,
     rateType: h.rateType,
     rate: h.rate === null ? null : Number(h.rate),
-    col1Special: h.col1Special,
+    col1Special: resolveSpecialText(h, baseByDigits),
     unitOfQuantity: h.unitOfQuantity,
     exemption: h.exemption,
     tradeMeasureId: h.tradeMeasureId,
@@ -249,8 +297,41 @@ export async function loadReferenceDataScoped(
       ...chunkReads,
     ] as const);
 
+  // Rate ancestors the scoped rows inherit from (`rate_inherited_from`,
+  // usually the 8-digit subheading under a 10-digit statistical suffix):
+  // their special-rates text is what an SPI claim on the suffix resolves
+  // against (resolveSpecialText). Chained, since an ancestor may inherit
+  // in turn; each round is one bounded IN read.
+  const baseRows = baseChunks.flat();
+  const seen = new Set(baseRows.map((h) => h.codeDigits));
+  let frontier = baseRows;
+  for (let round = 0; round < 4 && frontier.length > 0; round++) {
+    const wanted = [
+      ...new Set(
+        frontier
+          .map((h) => h.rateInheritedFrom)
+          .filter((d): d is string => d !== null && !seen.has(d)),
+      ),
+    ];
+    if (wanted.length === 0) break;
+    for (const d of wanted) seen.add(d); // absent digits stay absent
+    const reads: Promise<HtsCodeRow[]>[] = [];
+    for (let i = 0; i < wanted.length; i += DIGIT_CHUNK) {
+      reads.push(
+        db.query.htsCodes.findMany({
+          where: and(
+            isNull(schema.htsCodes.tradeMeasureId),
+            inArray(schema.htsCodes.codeDigits, wanted.slice(i, i + DIGIT_CHUNK)),
+          ),
+        }),
+      );
+    }
+    frontier = (await Promise.all(reads)).flat();
+    baseRows.push(...frontier);
+  }
+
   return buildReferenceData(
-    [...ch99Rows, ...baseChunks.flat()],
+    [...ch99Rows, ...baseRows],
     measureRows,
     prefixRows,
     stackingRows,
