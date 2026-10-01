@@ -55,4 +55,12 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("Marks or not, wherever SKUs are known identical goods means the same SKUs");
     expect(prompt).toContain("this entry's SKUs and its siblings' alike");
   });
+
+  it("never lets a catalog source carry an origin or party finding", () => {
+    const prompt = buildSystemPrompt([]);
+    expect(prompt).toContain("never the list of every origin or every seller the SKU can have");
+    expect(prompt).toContain("never carry the finding alone");
+    // The checklist no longer names the catalog as a side of the COO story.
+    expect(prompt).not.toContain("catalog sourcing windows");
+  });
 });

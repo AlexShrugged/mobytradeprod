@@ -489,6 +489,24 @@ Stop only stops rendering — the turn finishes via `after()` and
   adoption alone still queues nothing. `scripts/backfill-section-232.ts` (dry-run
   default) reads ONLY that column from a catalog file the org already imported —
   never a re-import, which would date every differing HTS code as a reclassification.
+- **A catalog source is a known source, never the SKU's only origin.** A
+  `part_sources` row is purchasing master data: ASC's COO comes from the M3 column
+  "CTR COUNTRY OF ORIGIN APGRL PPS100" beside "Most Recent Agreement", the origin on
+  the latest purchase agreement as of the export. One current row per (part, vendor),
+  so neither the workbook nor the table can say one vendor ships a SKU from two
+  countries (1,775 of ASC's 25,908 SKUs carry several origins across vendors, none
+  within one). The analyst prompt therefore never lets a catalog source be a side of
+  an origin or party comparison: a declared origin no source carries, a sole source in
+  another country, a seller or manufacturer of record who is not a catalog vendor are
+  not findings, in any category and whichever way the duty would move. An origin
+  finding needs the shipment's own documents in conflict (7501 against invoice,
+  packing list, certificate, a manufacturer ID's country prefix, routing); the catalog
+  may corroborate one side, never carry the finding. Diagnosed 2026-10-01 from ASC
+  231-7393968-4: catalog VN from a January agreement, 7501 and invoice CN from the
+  same vendor, a $3,603 Section 301 "refund" floated at warning; 48 open ASC findings
+  were of the class (origin vs catalog, seller not the catalog vendor), spread over
+  four finding categories. Deterministic rule 10 still reads the catalog's origins as
+  the expectation; it has never fired for ASC because broker 7501 lines link no part.
 
 ## Database
 

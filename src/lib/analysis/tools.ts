@@ -194,7 +194,7 @@ export function buildAnalystTools(
   const getPart = betaZodTool({
     name: "get_part",
     description:
-      "Look up a SKU in the parts catalog: name, description, current + historical HTS classification windows, the importer's Section 232 designation (section232: applies, does_not_apply, or null when the importer has not said), and per-vendor sourcing facts (COO, cost, validity windows). Covers every SKU in the briefing's catalogSkus: the entry's lines, its tariff sheet rows, and its invoices. An unknown SKU is an error — and a signal the SKU matched no catalog part.",
+      "Look up a SKU in the parts catalog: name, description, current + historical HTS classification windows, the importer's Section 232 designation (section232: applies, does_not_apply, or null when the importer has not said), and per-vendor sourcing facts (COO, cost, validity windows — the sources the catalog has recorded, not every origin or seller the SKU can have). Covers every SKU in the briefing's catalogSkus: the entry's lines, its tariff sheet rows, and its invoices. An unknown SKU is an error — and a signal the SKU matched no catalog part.",
     inputSchema: z.object({ sku: z.string() }),
     run: (input) => {
       // Documents print SKUs in their own spelling; the catalog key is the
