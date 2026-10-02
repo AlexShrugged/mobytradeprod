@@ -18,6 +18,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import type { OpenAlertCounts } from "@/components/entries/audit-badge";
 import { getResolvedLinePartsForEntries } from "./line-parts";
@@ -46,6 +47,12 @@ import {
   type EntryPhase,
 } from "@/lib/variance/window";
 import { homeForDocument, MISC_HOME } from "@/lib/entries/document-homing";
+import {
+  DEFAULT_ENTRY_SORT,
+  ENTRY_AUDIT_STATES,
+  type EntryAuditState,
+  type EntrySort,
+} from "@/lib/entries/list-params";
 import { deriveEntryStatus } from "@/lib/entries/status";
 import { deriveShipmentStatus } from "@/lib/shipments/status";
 import {
@@ -303,6 +310,108 @@ function entriesPhaseWhere(
   return or(...conds);
 }
 
+// Open NOVEL AI findings count as variances too — corroborations would
+// double-count the rule row they ride on. The fields must present a
+// comparison (an expected value, or two-plus filed values in
+// disagreement) — SQL mirror of hasActionableDiff (variance/field-issue);
+// anything less is an observation, not a variance.
+const openVarianceFinding = (): SQL =>
+  and(
+    eq(schema.analysisFindings.status, "open"),
+    sql`${schema.analysisFindings.relatedAlertKeys} = '[]'::jsonb`,
+    sql`CASE WHEN jsonb_typeof(${schema.analysisFindings.fields}) = 'array'
+         THEN EXISTS (
+           SELECT 1 FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
+           WHERE btrim(coalesce(fe->>'expected', '')) <> ''
+         ) OR (
+           SELECT count(*) FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
+           WHERE btrim(coalesce(fe->>'filed', '')) <> ''
+         ) >= 2
+         ELSE false END`,
+  )!;
+
+/** SQL mirror of the Audit column (AuditBadge over the row's openAlerts):
+ *  an entry has issues when the badge shows a count — it has line items
+ *  and at least one open rule alert or open variance-grade AI finding.
+ *  Clear is every other entry (the green check, or nothing to audit yet),
+ *  so the two options partition the list. Undefined = no filter; every box
+ *  unchecked matches nothing. */
+function entriesAuditWhere(audit: Set<EntryAuditState>): SQL | undefined {
+  if (audit.size >= ENTRY_AUDIT_STATES.length) return undefined;
+  if (audit.size === 0) return sql`false`;
+  const issues = and(
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(schema.entryLineItems)
+        .where(eq(schema.entryLineItems.entryId, schema.entries.id)),
+    ),
+    or(
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(schema.auditAlerts)
+          .where(
+            and(
+              eq(schema.auditAlerts.entryId, schema.entries.id),
+              eq(schema.auditAlerts.status, "open"),
+            ),
+          ),
+      ),
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(schema.analysisFindings)
+          .where(
+            and(
+              eq(schema.analysisFindings.entryId, schema.entries.id),
+              openVarianceFinding(),
+            ),
+          ),
+      ),
+    ),
+  )!;
+  return audit.has("issues") ? issues : not(issues);
+}
+
+/** Newest first under either sort. An entry's upload date is when its 7501
+ *  arrived, derived on read, never stored: the upload of the entry summary
+ *  linked to it (the latest when a corrected summary followed), a packet
+ *  part counting as its packet's upload (parts are re-created on reprocess,
+ *  so their own timestamp is the split time), and the entry's creation
+ *  when no summary is on file. An invoice or supporting document arriving
+ *  later never moves the entry. */
+function entriesOrderBy(sort: EntrySort): SQL[] {
+  if (sort === "entry") return [desc(schema.entries.entryDate)];
+  const packet = alias(schema.documents, "packet");
+  // A query-builder subquery, not a sql`` fragment: the relational query
+  // re-aliases every column inside an orderBy fragment to the root table.
+  const lastUpload = db
+    .select({
+      at: sql`max(coalesce(${packet.uploadedAt}, ${schema.documents.uploadedAt}))`,
+    })
+    .from(schema.documentLinks)
+    .innerJoin(
+      schema.documents,
+      eq(schema.documents.id, schema.documentLinks.documentId),
+    )
+    .leftJoin(packet, eq(packet.id, schema.documents.parentDocumentId))
+    .where(
+      and(
+        eq(schema.documentLinks.entityType, "entry"),
+        eq(schema.documentLinks.entityId, schema.entries.id),
+        eq(schema.documents.docType, "port_entry"),
+      ),
+    );
+  // Ties (seeded rows, entries with no summary on file) fall back to the
+  // entry date, then the id keeps paging stable.
+  return [
+    sql`coalesce(${lastUpload}, ${schema.entries.createdAt}) desc`,
+    desc(schema.entries.entryDate),
+    desc(schema.entries.id),
+  ];
+}
+
 export type EntriesPageResult = {
   rows: EntryRow[];
   /** Entries in the org, unfiltered — drives the getting-started empty
@@ -312,9 +421,13 @@ export type EntriesPageResult = {
   filteredCount: number;
   /** Effective page after clamping to the last page. */
   page: number;
-  /** Rows each phase option would show under the current search (the
-   *  phase filter itself excluded) — the dropdown option counts. */
+  /** Rows each phase option would show under the current search and Audit
+   *  filter (the phase filter itself excluded) — the dropdown option
+   *  counts. */
   phaseCounts: Record<EntryPhase, number>;
+  /** Same for the Audit options: under the search and the phase filter,
+   *  the Audit filter itself excluded. */
+  auditCounts: Record<EntryAuditState, number>;
 };
 
 export async function getEntries(opts: {
@@ -322,6 +435,8 @@ export async function getEntries(opts: {
   per: number;
   q?: string | null;
   phases?: Set<EntryPhase>;
+  audit?: Set<EntryAuditState>;
+  sort?: EntrySort;
 }): Promise<EntriesPageResult> {
   const orgId = await getCurrentOrgId();
   const today = todayIso();
@@ -329,25 +444,45 @@ export async function getEntries(opts: {
   const searchWhere = entriesSearchWhere(opts.q);
   const phases = opts.phases ?? new Set<EntryPhase>(ENTRY_PHASES);
   const phaseWhere = entriesPhaseWhere(phases, today);
+  const audit = opts.audit ?? new Set<EntryAuditState>(ENTRY_AUDIT_STATES);
+  const auditWhere = entriesAuditWhere(audit);
   const searchedWhere = and(eq(schema.entries.orgId, orgId), searchWhere);
-  const where = and(searchedWhere, phaseWhere);
+  const where = and(searchedWhere, phaseWhere, auditWhere);
 
-  const [totalCount, filteredRaw, ...phaseCountRows] = await Promise.all([
-    db.$count(schema.entries, eq(schema.entries.orgId, orgId)),
-    searchWhere || phaseWhere
-      ? db.$count(schema.entries, where)
-      : Promise.resolve(-1), // filled from totalCount below
-    ...ENTRY_PHASES.map((p) =>
-      db.$count(
-        schema.entries,
-        and(searchedWhere, entriesPhaseWhere(new Set([p]), today)),
+  const [totalCount, filteredRaw, phaseCountRows, auditCountRows] =
+    await Promise.all([
+      db.$count(schema.entries, eq(schema.entries.orgId, orgId)),
+      searchWhere || phaseWhere || auditWhere
+        ? db.$count(schema.entries, where)
+        : Promise.resolve(-1), // filled from totalCount below
+      Promise.all(
+        ENTRY_PHASES.map((p) =>
+          db.$count(
+            schema.entries,
+            and(
+              searchedWhere,
+              auditWhere,
+              entriesPhaseWhere(new Set([p]), today),
+            ),
+          ),
+        ),
       ),
-    ),
-  ]);
+      Promise.all(
+        ENTRY_AUDIT_STATES.map((a) =>
+          db.$count(
+            schema.entries,
+            and(searchedWhere, phaseWhere, entriesAuditWhere(new Set([a]))),
+          ),
+        ),
+      ),
+    ]);
   const filteredCount = filteredRaw === -1 ? totalCount : filteredRaw;
   const phaseCounts = Object.fromEntries(
     ENTRY_PHASES.map((p, i) => [p, phaseCountRows[i]]),
   ) as Record<EntryPhase, number>;
+  const auditCounts = Object.fromEntries(
+    ENTRY_AUDIT_STATES.map((a, i) => [a, auditCountRows[i]]),
+  ) as Record<EntryAuditState, number>;
 
   const page = Math.min(
     Math.max(1, opts.page),
@@ -356,7 +491,7 @@ export async function getEntries(opts: {
 
   const rows = await db.query.entries.findMany({
     where,
-    orderBy: desc(schema.entries.entryDate),
+    orderBy: entriesOrderBy(opts.sort ?? DEFAULT_ENTRY_SORT),
     limit: opts.per,
     offset: (page - 1) * opts.per,
     with: {
@@ -373,7 +508,14 @@ export async function getEntries(opts: {
     },
   });
   if (rows.length === 0)
-    return { rows: [], totalCount, filteredCount, page, phaseCounts };
+    return {
+      rows: [],
+      totalCount,
+      filteredCount,
+      page,
+      phaseCounts,
+      auditCounts,
+    };
   // Per-entry aggregates scoped to this page's entries only.
   const entryIds = rows.map((e) => e.id);
 
@@ -404,12 +546,6 @@ export async function getEntries(opts: {
           ),
         )
         .groupBy(schema.auditAlerts.entryId, schema.auditAlerts.severity),
-      // Open NOVEL AI findings count as variances too — corroborations
-      // would double-count the rule row they ride on. The fields must
-      // present a comparison (an expected value, or two-plus filed values
-      // in disagreement) — SQL mirror of hasActionableDiff
-      // (variance/field-issue); anything less is an observation, not a
-      // variance.
       db
         .select({
           entryId: schema.analysisFindings.entryId,
@@ -420,18 +556,8 @@ export async function getEntries(opts: {
         .where(
           and(
             eq(schema.analysisFindings.orgId, orgId),
-            eq(schema.analysisFindings.status, "open"),
             inArray(schema.analysisFindings.entryId, entryIds),
-            sql`${schema.analysisFindings.relatedAlertKeys} = '[]'::jsonb`,
-            sql`CASE WHEN jsonb_typeof(${schema.analysisFindings.fields}) = 'array'
-                 THEN EXISTS (
-                   SELECT 1 FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
-                   WHERE btrim(coalesce(fe->>'expected', '')) <> ''
-                 ) OR (
-                   SELECT count(*) FROM jsonb_array_elements(${schema.analysisFindings.fields}) AS fe
-                   WHERE btrim(coalesce(fe->>'filed', '')) <> ''
-                 ) >= 2
-                 ELSE false END`,
+            openVarianceFinding(),
           ),
         )
         .groupBy(
@@ -539,7 +665,14 @@ export async function getEntries(opts: {
     })),
   }));
 
-  return { rows: entryRows, totalCount, filteredCount, page, phaseCounts };
+  return {
+    rows: entryRows,
+    totalCount,
+    filteredCount,
+    page,
+    phaseCounts,
+    auditCounts,
+  };
 }
 
 // ----------------------------------------------------------- future entries
