@@ -22,6 +22,14 @@ describe("resolveRegulatoryParams", () => {
     expect(p?.mpf.maxCents).toBe(65150);
   });
 
+  it("resolves an FY2027 date to the FY2027 figures", () => {
+    expect(resolveRegulatoryParams("2026-09-30")?.fiscalYear).toBe(2026);
+    const p = resolveRegulatoryParams("2026-10-01");
+    expect(p?.fiscalYear).toBe(2027);
+    expect(p?.mpf.minCents).toBe(3458);
+    expect(p?.mpf.maxCents).toBe(67086);
+  });
+
   it("carries a Federal Register citation", () => {
     expect(resolveRegulatoryParams("2026-01-01")?.source).toContain("FR");
   });

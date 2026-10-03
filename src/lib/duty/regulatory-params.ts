@@ -49,10 +49,18 @@ export const REGULATORY_PARAMS: RegulatoryParams[] = [
   {
     fiscalYear: 2026,
     effectiveFrom: "2025-10-01",
-    effectiveTo: null,
+    effectiveTo: "2026-09-30",
     mpf: { rate: MPF_RATE, minCents: 3358, maxCents: 65150 },
     hmf: { rate: HMF_RATE },
     source: "90 FR 34665 (CBP Dec. 25-10, July 23, 2025)",
+  },
+  {
+    fiscalYear: 2027,
+    effectiveFrom: "2026-10-01",
+    effectiveTo: null,
+    mpf: { rate: MPF_RATE, minCents: 3458, maxCents: 67086 },
+    hmf: { rate: HMF_RATE },
+    source: "91 FR 48398 (CBP Dec. 26-14, July 31, 2026)",
   },
 ];
 

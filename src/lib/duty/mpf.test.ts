@@ -35,6 +35,8 @@ describe("computeExpectedMpf", () => {
   it("uses the fiscal year in force on the entry date", () => {
     expect(computeExpectedMpf("2025-09-30", [line(100_00)])?.expectedCents).toBe(3271);
     expect(computeExpectedMpf("2025-10-01", [line(100_00)])?.expectedCents).toBe(3358);
+    expect(computeExpectedMpf("2026-09-30", [line(100_00)])?.expectedCents).toBe(3358);
+    expect(computeExpectedMpf("2026-10-01", [line(100_00)])?.expectedCents).toBe(3458);
   });
 
   it("returns null before the earliest known fiscal year", () => {
