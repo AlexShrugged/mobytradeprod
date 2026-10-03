@@ -14,8 +14,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -24,7 +23,6 @@ import {
   DEFAULT_ENTRY_SORT,
   ENTRY_AUDIT_STATES,
   SORT_OPTIONS,
-  parseEntrySort,
   type EntryAuditState,
   type EntrySort,
 } from "@/lib/entries/list-params";
@@ -229,21 +227,16 @@ export function EntriesView({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="ml-auto">
-              Sorting: {SORT_OPTIONS.find((o) => o.sort === sort)!.label}
+              Sort by: {SORT_OPTIONS.find((o) => o.sort === sort)!.label}
               <ChevronDown className="text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuRadioGroup
-              value={sort}
-              onValueChange={(v) => setSort(parseEntrySort(v))}
-            >
-              {SORT_OPTIONS.map((o) => (
-                <DropdownMenuRadioItem key={o.sort} value={o.sort}>
-                  {o.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
+            {SORT_OPTIONS.map((o) => (
+              <DropdownMenuItem key={o.sort} onSelect={() => setSort(o.sort)}>
+                {o.label}
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
