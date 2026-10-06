@@ -65,16 +65,16 @@ function DutiesFeesCell({ row }: { row: EntriesTableRow }) {
       </div>
     );
   }
-  const duty = cents(row.totalDuty);
-  const base = cents(row.totalBaseDuty);
   return (
     <div className="text-right">
       <DutiesPopover
         total={cents(row.dutiesAndFeesTotal)}
-        base={base}
-        additional={duty !== null && base !== null ? duty - base : null}
+        base={cents(row.totalBaseDuty)}
+        additional={cents(row.additionalDuties)}
+        adcvd={cents(row.adcvdDeposits)}
         mpf={cents(row.mpfAmount)}
         hmf={cents(row.hmfAmount)}
+        otherFees={cents(row.otherFees)}
       />
     </div>
   );

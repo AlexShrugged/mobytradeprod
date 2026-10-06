@@ -10,16 +10,21 @@ import {
 import { cn } from "@/lib/utils";
 
 // Consolidated duties & fees money: the total as a click-open breakdown of
-// base duty / additional duties / MPF / HMF. Red for declared money, muted
-// ~ for estimates (future entries), with the sail grounding and the
-// savings-clause deadline when duty math rested on them. Shared by the
-// entries table cell and the entry detail stat tile. All money in cents.
+// base duty / additional duties / AD/CVD deposits / MPF / HMF / other fees
+// — the 7501's block 40 total in the order the form collects it. Red for
+// declared money, muted ~ for estimates (future entries, which estimate
+// only duty and MPF/HMF, so the deposit and other-fee rows stay off), with
+// the sail grounding and the savings-clause deadline when duty math rested
+// on them. Shared by the entries table cell and the entry detail stat
+// tile. All money in cents.
 export function DutiesPopover({
   total,
   base,
   additional,
+  adcvd,
   mpf,
   hmf,
+  otherFees,
   estimate = false,
   sailBasis = null,
   deadlineNote = null,
@@ -29,8 +34,10 @@ export function DutiesPopover({
   total: number | null;
   base: number | null;
   additional: number | null;
+  adcvd?: number | null;
   mpf: number | null;
   hmf: number | null;
+  otherFees?: number | null;
   estimate?: boolean;
   sailBasis?: SailBasisValue | null;
   deadlineNote?: string | null;
@@ -43,8 +50,14 @@ export function DutiesPopover({
   const rows: [string, number | null][] = [
     ["Base duty", base],
     ["Additional duties", additional],
+    ...(adcvd !== undefined
+      ? [["AD/CVD deposits", adcvd] as [string, number | null]]
+      : []),
     ["MPF", mpf],
     ["HMF", hmf],
+    ...(otherFees !== undefined
+      ? [["Other fees", otherFees] as [string, number | null]]
+      : []),
   ];
   return (
     <Popover>

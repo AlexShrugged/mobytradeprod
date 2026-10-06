@@ -16,6 +16,7 @@ import {
   not,
   or,
   sql,
+  sum,
   type SQL,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -24,6 +25,7 @@ import type { OpenAlertCounts } from "@/components/entries/audit-badge";
 import { getResolvedLinePartsForEntries } from "./line-parts";
 import type { ResolvedLinePart } from "@/lib/parts/line-parts";
 import { db, schema } from "@/lib/db";
+import type { ChargeTypeValue } from "@/lib/db/schema";
 import { getCurrentOrgId } from "@/lib/org";
 import {
   computeAuthorityBreakdown,
@@ -31,6 +33,12 @@ import {
   type BucketTotal,
 } from "@/lib/duty/authority";
 import { computeExpectedCharges } from "@/lib/duty/calculator";
+import {
+  deriveEntryMoney,
+  EMPTY_CHARGE_SUMS,
+  sumEntryCharges,
+  type EntryChargeSums,
+} from "@/lib/duty/entry-totals";
 import { getReferenceDataForOrg } from "./reference";
 import { resolveSailInfo } from "@/lib/duty/sail";
 import type { ReferenceData, SailBasis } from "@/lib/duty/types";
@@ -68,16 +76,81 @@ const EMPTY_ALERTS: OpenAlertCounts = { error: 0, warning: 0, info: 0 };
 const centsOf = (v: string | null): number | null =>
   v === null ? null : Math.round(Number(v) * 100);
 
-// duty + MPF + HMF; always derived, never stored.
-function dutiesAndFees(
-  totalDuty: string | null,
-  mpfAmount: string | null,
-  hmfAmount: string | null,
-): string | null {
-  const duty = centsOf(totalDuty);
-  if (duty === null) return null;
-  const total = duty + (centsOf(mpfAmount) ?? 0) + (centsOf(hmfAmount) ?? 0);
-  return (total / 100).toFixed(2);
+const dollars = (cents: number | null): string | null =>
+  cents === null ? null : (cents / 100).toFixed(2);
+
+// The header's money as the pages and the assistant read it: block 40's
+// total plus the rows the popover breaks it into. Always derived, never
+// stored (duty/entry-totals.ts): the header fields carry duty, MPF and HMF;
+// AD/CVD deposits and the other Block 43 fees come from the line charges.
+type HeaderMoney = {
+  additionalDuties: string | null;
+  adcvdDeposits: string;
+  otherFees: string;
+  dutiesAndFeesTotal: string | null;
+};
+
+function headerMoney(
+  entry: {
+    totalDuty: string | null;
+    totalBaseDuty: string | null;
+    mpfAmount: string | null;
+    hmfAmount: string | null;
+  },
+  sums: EntryChargeSums,
+): HeaderMoney {
+  const money = deriveEntryMoney(
+    {
+      totalDutyCents: centsOf(entry.totalDuty),
+      totalBaseDutyCents: centsOf(entry.totalBaseDuty),
+      mpfCents: centsOf(entry.mpfAmount),
+      hmfCents: centsOf(entry.hmfAmount),
+    },
+    sums,
+  );
+  return {
+    additionalDuties: dollars(money.additionalDutiesCents),
+    adcvdDeposits: dollars(money.adcvdDepositsCents) as string,
+    otherFees: dollars(money.otherFeesCents) as string,
+    dutiesAndFeesTotal: dollars(money.dutiesAndFeesCents),
+  };
+}
+
+// One grouped scan of the org's declared charges (or just the given
+// entries'), keyed by entry — the list and the KPI rollup never load line
+// rows, so the header money takes its line-side terms from here.
+async function loadChargeSumsByEntry(
+  orgId: string,
+  entryIds?: string[],
+): Promise<Map<string, EntryChargeSums>> {
+  const rows = await db
+    .select({
+      entryId: schema.entryLineItems.entryId,
+      chargeType: schema.entryLineCharges.chargeType,
+      amount: sum(schema.entryLineCharges.amount),
+    })
+    .from(schema.entryLineCharges)
+    .innerJoin(
+      schema.entryLineItems,
+      eq(schema.entryLineItems.id, schema.entryLineCharges.lineItemId),
+    )
+    .where(
+      and(
+        eq(schema.entryLineCharges.orgId, orgId),
+        entryIds ? inArray(schema.entryLineItems.entryId, entryIds) : undefined,
+      ),
+    )
+    .groupBy(schema.entryLineItems.entryId, schema.entryLineCharges.chargeType);
+  const byEntry = new Map<string, { chargeType: ChargeTypeValue; amount: string }[]>();
+  for (const r of rows) {
+    if (r.amount === null) continue;
+    const list = byEntry.get(r.entryId) ?? [];
+    list.push({ chargeType: r.chargeType, amount: r.amount });
+    byEntry.set(r.entryId, list);
+  }
+  return new Map(
+    [...byEntry].map(([entryId, charges]) => [entryId, sumEntryCharges(charges)]),
+  );
 }
 
 // ------------------------------------------------------------ shared helpers
@@ -175,8 +248,13 @@ export type EntryRow = {
   totalEnteredValue: string | null;
   totalDuty: string | null;
   totalBaseDuty: string | null;
+  additionalDuties: string | null;
   mpfAmount: string | null;
   hmfAmount: string | null;
+  /** AD/CVD deposits and the other Block 43 fees (cotton, beef, …) the
+   *  header has no field for: summed from the lines, part of the total. */
+  adcvdDeposits: string;
+  otherFees: string;
   dutiesAndFeesTotal: string | null;
   totalRefund: string | null;
   refundStage: RefundStage | null;
@@ -519,7 +597,14 @@ export async function getEntries(opts: {
   // Per-entry aggregates scoped to this page's entries only.
   const entryIds = rows.map((e) => e.id);
 
-  const [lineCounts, alertCounts, findingCounts, linkedClaims, sailWindows] =
+  const [
+    lineCounts,
+    alertCounts,
+    findingCounts,
+    linkedClaims,
+    sailWindows,
+    chargeSums,
+  ] =
     await Promise.all([
       db
         .select({ entryId: schema.entryLineItems.entryId, value: count() })
@@ -579,6 +664,7 @@ export async function getEntries(opts: {
         },
       }),
       loadSailWindows(),
+      loadChargeSumsByEntry(orgId, entryIds),
     ]);
 
   const lineCountByEntry = new Map(lineCounts.map((r) => [r.entryId, r.value]));
@@ -626,11 +712,7 @@ export async function getEntries(opts: {
     totalBaseDuty: entry.totalBaseDuty,
     mpfAmount: entry.mpfAmount,
     hmfAmount: entry.hmfAmount,
-    dutiesAndFeesTotal: dutiesAndFees(
-      entry.totalDuty,
-      entry.mpfAmount,
-      entry.hmfAmount,
-    ),
+    ...headerMoney(entry, chargeSums.get(entry.id) ?? EMPTY_CHARGE_SUMS),
     totalRefund: entry.totalRefund,
     refundStage: stageByEntry.get(entry.id)?.stage ?? null,
     lineItemCount: lineCountByEntry.get(entry.id) ?? 0,
@@ -859,12 +941,15 @@ export async function getEntrySummaryStats(
 ): Promise<EntrySummaryStats> {
   const orgId = await getCurrentOrgId();
 
-  const [entryRows, claims, openAlerts, futureRows] = await Promise.all([
+  const [entryRows, claims, openAlerts, futureRows, chargeSums] =
+    await Promise.all([
     db.query.entries.findMany({
       where: eq(schema.entries.orgId, orgId),
       columns: {
+        id: true,
         entryDate: true,
         totalDuty: true,
+        totalBaseDuty: true,
         mpfAmount: true,
         hmfAmount: true,
       },
@@ -888,6 +973,7 @@ export async function getEntrySummaryStats(
         ),
       ),
     future ? Promise.resolve(future) : getFutureEntries(),
+    loadChargeSumsByEntry(orgId),
   ]);
 
   const year = todayIso().slice(0, 4);
@@ -895,11 +981,13 @@ export async function getEntrySummaryStats(
   let dutiesAndFeesYtdCents = 0;
   for (const e of entryRows) {
     if (!e.entryDate?.startsWith(year)) continue;
-    const duty = centsOf(e.totalDuty);
-    if (duty === null) continue;
+    const total = centsOf(
+      headerMoney(e, chargeSums.get(e.id) ?? EMPTY_CHARGE_SUMS)
+        .dutiesAndFeesTotal,
+    );
+    if (total === null) continue;
     ytdEntryCount += 1;
-    dutiesAndFeesYtdCents +=
-      duty + (centsOf(e.mpfAmount) ?? 0) + (centsOf(e.hmfAmount) ?? 0);
+    dutiesAndFeesYtdCents += total;
   }
 
   // Rejected claims never reach the money; the rest split paid vs pending
@@ -1111,6 +1199,10 @@ export type EntryDetail = {
   additionalDuties: string | null;
   mpfAmount: string | null;
   hmfAmount: string | null;
+  /** AD/CVD deposits and the other Block 43 fees (cotton, beef, …) the
+   *  header has no field for: summed from the lines, part of the total. */
+  adcvdDeposits: string;
+  otherFees: string;
   dutiesAndFeesTotal: string | null;
   totalRefund: string | null;
   /** Declared charges bucketed by authority (legacy measure semantics). */
@@ -1650,7 +1742,6 @@ export async function getEntryDetail(
     };
   });
 
-  const baseCents = centsOf(entry.totalBaseDuty);
   const dutyCents = centsOf(entry.totalDuty);
 
   return {
@@ -1664,16 +1755,11 @@ export async function getEntryDetail(
     totalEnteredValue: entry.totalEnteredValue,
     totalDuty: entry.totalDuty,
     totalBaseDuty: entry.totalBaseDuty,
-    additionalDuties:
-      dutyCents !== null && baseCents !== null
-        ? ((dutyCents - baseCents) / 100).toFixed(2)
-        : null,
     mpfAmount: entry.mpfAmount,
     hmfAmount: entry.hmfAmount,
-    dutiesAndFeesTotal: dutiesAndFees(
-      entry.totalDuty,
-      entry.mpfAmount,
-      entry.hmfAmount,
+    ...headerMoney(
+      entry,
+      sumEntryCharges(entry.lineItems.flatMap((li) => li.charges)),
     ),
     totalRefund: entry.totalRefund,
     authorityBreakdown: computeAuthorityBreakdown(

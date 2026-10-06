@@ -8,6 +8,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { LineItemDetail } from "@/lib/db/queries/entries";
+import { feeClassLabel } from "@/lib/duty/fee-codes";
 import { formatMoney, formatRate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -47,11 +48,17 @@ export function LineCharges({ line }: { line: LineItemDetail }) {
                 label: c.chargeType,
                 tone: "text-foreground",
               };
+              // A fee charge carries CBP's class code where a measure
+              // carries its Ch99 heading: name the fee the code stands for.
+              const label =
+                c.chargeType === "other_fee"
+                  ? (feeClassLabel(c.htsCode) ?? meta.label)
+                  : meta.label;
               const isExclusion = Number(c.amount) === 0;
               return (
                 <TableRow key={c.id}>
                   <TableCell className={cn("font-medium", meta.tone)}>
-                    {meta.label}
+                    {label}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {c.htsCode ?? "—"}

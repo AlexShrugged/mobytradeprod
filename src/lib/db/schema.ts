@@ -404,9 +404,13 @@ export const entries = pgTable(
       precision: 14,
       scale: 2,
     }),
-    // totalDuty = all duty-type charges (base + additional + AD/CVD),
-    // excluding MPF/HMF/fees. totalBaseDuty is the base-only slice.
-    // "Duties & fees" is always derived in queries, never stored.
+    // totalDuty = the 7501's block 37 "Duty": base + additional (Ch99)
+    // duty, excluding MPF/HMF/fees — AD/CVD deposits usually sit in block
+    // 39 with the fees, though some printouts fold them in (the linker's
+    // header fallback sums them too). totalBaseDuty is the base-only slice.
+    // "Duties & fees" is always derived in queries, never stored
+    // (duty/entry-totals.ts adds the deposits and other fees from the
+    // lines).
     totalDuty: numeric("total_duty", { precision: 12, scale: 2 }),
     totalBaseDuty: numeric("total_base_duty", { precision: 12, scale: 2 }),
     // MPF/HMF are ingested from documents, never computed — CBP applies

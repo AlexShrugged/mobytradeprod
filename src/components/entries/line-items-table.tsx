@@ -34,6 +34,7 @@ import type {
 } from "@/lib/db/queries/entries";
 import { fieldIssue } from "@/lib/variance/field-issue";
 import { pairSiblingAlerts } from "@/lib/variance/grouping";
+import { feeClassLabel } from "@/lib/duty/fee-codes";
 import { formatHts, formatMoney, formatRate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -58,10 +59,15 @@ const chargeTypeLabel: Record<string, string> = {
 
 // The program identity of a charge as it appears on the 7501: the line's own
 // HTS for base duty, the Ch99 code for trade measures, the CBP fee class
-// codes for MPF/HMF.
+// codes for MPF/HMF and the other collected fees (056 cotton, …).
 function chargeProgram(c: LineChargeDetail, lineHts: string) {
   if (c.chargeType === "mpf") return { code: "499", label: "MPF" };
   if (c.chargeType === "hmf") return { code: "501", label: "HMF" };
+  if (c.chargeType === "other_fee")
+    return {
+      code: c.htsCode ?? "—",
+      label: feeClassLabel(c.htsCode) ?? chargeTypeLabel.other_fee,
+    };
   if (c.chargeType === "base_duty")
     return { code: formatHts(lineHts), label: "Base duty" };
   return {

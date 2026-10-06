@@ -390,6 +390,8 @@ export function buildAgentTools(
             additionalDuties: e.additionalDuties,
             mpfAmount: e.mpfAmount,
             hmfAmount: e.hmfAmount,
+            adcvdDeposits: e.adcvdDeposits,
+            otherFees: e.otherFees,
             dutiesAndFeesTotal: e.dutiesAndFeesTotal,
             totalRefund: e.totalRefund,
             effectiveDutyRate: e.effectiveDutyRate,

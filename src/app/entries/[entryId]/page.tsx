@@ -81,8 +81,6 @@ export default async function EntryDetailPage({
     (a) => a.status === "open",
   ).length;
   const openAlertCount = openRuleAlertCount + openNovelFindings.length;
-  const duty = centsOf(entry.totalDuty);
-  const base = centsOf(entry.totalBaseDuty);
   const breakdownTotal = entry.authorityBreakdown.reduce(
     (sum, b) => sum + b.amountCents,
     0,
@@ -161,10 +159,12 @@ export default async function EntryDetailPage({
           value={
             <DutiesPopover
               total={centsOf(entry.dutiesAndFeesTotal)}
-              base={base}
-              additional={duty !== null && base !== null ? duty - base : null}
+              base={centsOf(entry.totalBaseDuty)}
+              additional={centsOf(entry.additionalDuties)}
+              adcvd={centsOf(entry.adcvdDeposits)}
               mpf={centsOf(entry.mpfAmount)}
               hmf={centsOf(entry.hmfAmount)}
+              otherFees={centsOf(entry.otherFees)}
               sailBasis={entry.sailBasis === "exact" ? null : entry.sailBasis}
               align="start"
             />

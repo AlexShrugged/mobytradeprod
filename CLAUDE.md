@@ -415,6 +415,19 @@ Stop only stops rendering — the turn finishes via `after()` and
   now corroborates rule 17 and keeps HMF and exemption eligibility.
   `scripts/backfill-fee-summary.ts` re-reads Block 43 from the stored parse text
   (no Reducto credit), rewrites the header fields, re-audits and re-queues analysis.
+  **"Duties & fees" is the 7501's block 40 total, derived on read**
+  (`duty/entry-totals.ts`, one derivation behind the entry tile, the Entries
+  column, the YTD stat and the assistant): block 37 duty + AD/CVD deposits + MPF
+  + HMF + the other Block 43 fees — the USDA commodity assessments CBP collects
+  under its fee class codes (056 cotton, 053 beef, …; typed `other_fee` on the
+  lines, named by `duty/fee-codes.ts`). Deposits and commodity fees have no
+  per-entry minimum/maximum, so their line rows ARE the collected figures and
+  the tile, line totals, landed cost and authority chart sum the same rows;
+  deposits are added only when the header duty total closes nearer to the sum
+  WITHOUT them (some printouts fold them into block 37, and the reconcile pass
+  accepts either). Diagnosed 2026-10-06 from ASC 231-7396836-0: a $8.54 cotton
+  fee on the line and in Block 43 that the tile omitted, and the same shape had
+  left 12 ASC entries' AD/CVD deposits (up to $8,346) out of the tile.
 - **Quotes are compared as landed cost, and re-compared when tariffs move.**
   `quotes/compare.ts` (pure) prices every sourcing option of a SKU — the
   current `(part, vendor)` sources and every quote line whatever its status —
