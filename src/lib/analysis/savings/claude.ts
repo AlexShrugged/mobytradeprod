@@ -17,7 +17,7 @@ import { buildSavingsUserMessage, SAVINGS_SYSTEM_PROMPT } from "./prompt";
 import { buildSavingsTools, type SavingsCollector } from "./tools";
 import type { PartBundle, SavingsAnalyst, SavingsResult } from "./types";
 
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_DEADLINE_MS = 600_000;
 const DEFAULT_MAX_ITERATIONS = 12;
 const MAX_TOKENS = 16_000;
@@ -84,6 +84,8 @@ export class ClaudeSavingsAnalyst implements SavingsAnalyst {
           ],
           tools,
           max_iterations: this.maxIterations,
+          // Opus 5.5 defaults to medium effort; pin the depth Opus 5 ran at.
+          output_config: { effort: "high" },
           cache_control: { type: "ephemeral" },
         },
         { signal: AbortSignal.timeout(this.deadlineMs) },
@@ -129,7 +131,10 @@ export class ClaudeSavingsAnalyst implements SavingsAnalyst {
             };
           }),
           tool_choice: { type: "none" },
-          output_config: { format: betaZodOutputFormat(savingsReportSchema) },
+          output_config: {
+            format: betaZodOutputFormat(savingsReportSchema),
+            effort: "high",
+          },
         });
         if (response.stop_reason !== "refusal" && response.parsed_output) {
           collector.report = savingsReportSchema.parse(response.parsed_output);

@@ -20,7 +20,7 @@ import type {
   MeasureExtractor,
 } from "./types";
 
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 const CHUNK_SIZE = 15;
 // Env-tunable for large backfills (a full-queue re-stage runs 40+ chunks);
 // the default stays conservative for the daily cron's incremental staging.
@@ -81,7 +81,7 @@ export interface ParseClient {
       max_tokens: number;
       system: string;
       messages: { role: "user"; content: string }[];
-      output_config: { format: unknown };
+      output_config: { format: unknown; effort?: string };
     }): Promise<{
       parsed_output: ParsedChunk | null;
       stop_reason: string | null;
@@ -149,7 +149,8 @@ export class ClaudeMeasureExtractor implements MeasureExtractor {
         max_tokens: 16000,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: buildUserContent(chunk) }],
-        output_config: { format: zodOutputFormat(extractionSchema) },
+        // Opus 5.5 defaults to medium effort; pin the depth Opus 5 ran at.
+        output_config: { format: zodOutputFormat(extractionSchema), effort: "high" },
       });
       // Safety classifiers can decline (stop_reason "refusal") and parsing
       // can fail — both degrade to the stub, never to a thrown error.

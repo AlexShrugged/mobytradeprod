@@ -18,7 +18,7 @@ import type {
   AgentUsage,
 } from "./types";
 
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_DEADLINE_MS = 300_000;
 const DEFAULT_MAX_ITERATIONS = 20;
 const MAX_TOKENS = 16_000;
@@ -101,6 +101,8 @@ export class ClaudeAgent implements AgentRunner {
         tools: input.tools,
         max_iterations: this.maxIterations,
         stream: true,
+        // Opus 5.5 defaults to medium effort; pin the depth Opus 5 ran at.
+        output_config: { effort: "high" },
         // Auto-caching: the SDK re-places the breakpoint on the last
         // cacheable block each iteration, so tools + system + history read
         // from cache from iteration 2 on (analyst precedent).

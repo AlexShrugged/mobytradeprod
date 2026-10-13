@@ -31,9 +31,9 @@ import type { SavingsResult } from "../src/lib/analysis/savings/types";
 import { db, schema } from "../src/lib/db";
 import { loadReferenceDataForOrg } from "../src/lib/duty/reference";
 
-// claude-opus-5 list pricing ($/MTok); cache read 0.1x input, write 1.25x.
+// claude-opus-5-5 list pricing ($/MTok); cache read $0.20, write 1.25x input.
 // Re-verify against current pricing before trusting the dollar column.
-const PRICE = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+const PRICE = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
 
 function estimateCost(u: SavingsResult["usage"]): number {
   return (

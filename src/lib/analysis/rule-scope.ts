@@ -31,7 +31,7 @@ import type {
   RuleReach,
 } from "./rule-relevance";
 
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 // Per attempt; the client retries once (429/529/timeout), so the pass is
 // bounded at ~2× this. The org-rule routes run it in after() ahead of the
 // AFTER_RESPONSE_DRAIN (60s of claims + a 600s analyst deadline) and the

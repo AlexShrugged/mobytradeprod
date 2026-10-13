@@ -62,7 +62,7 @@ describe("ClaudeMeasureExtractor", () => {
         stop_reason: "end_turn",
       };
     });
-    const extractor = new ClaudeMeasureExtractor({ client, model: "claude-opus-5" });
+    const extractor = new ClaudeMeasureExtractor({ client, model: "claude-opus-5-5" });
 
     const [ex] = await extractor.extract([input("9903.88.01")]);
 
@@ -71,7 +71,7 @@ describe("ClaudeMeasureExtractor", () => {
     expect(sent.relatedFederalRegisterNotices[0].documentNumber).toBe("2026-01234");
 
     expect(ex.extractor).toBe("claude");
-    expect(ex.model).toBe("claude-opus-5");
+    expect(ex.model).toBe("claude-opus-5-5");
     expect(ex.effectiveDate.value).toBe("2026-08-01");
     expect(ex.countries.value).toEqual(["CN"]);
   });

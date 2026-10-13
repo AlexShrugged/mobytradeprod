@@ -22,7 +22,7 @@ import type {
   ClassifyResult,
 } from "./types";
 
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_DEADLINE_MS = 120_000;
 const MAX_TOKENS = 4_000;
 const POOL_CAP = 120;
@@ -173,7 +173,8 @@ export class ClaudeClassifier implements Classifier {
             ),
           },
         ],
-        output_config: { format: betaZodOutputFormat(outputSchema) },
+        // Opus 5.5 defaults to medium effort; pin the depth Opus 5 ran at.
+        output_config: { format: betaZodOutputFormat(outputSchema), effort: "high" },
         // Request OPTION, not a body param — inside the params object the
         // SDK serializes it and the API 400s ("signal: Extra inputs are
         // not permitted").

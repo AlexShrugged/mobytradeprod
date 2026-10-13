@@ -23,12 +23,34 @@ import type {
   ToolTraceEntry,
 } from "./types";
 
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 // 600s: at 300s, 2 of 11 first-eval runs hit the deadline on transient
 // investigation-depth variance; both retries finished well under 600s.
 const DEFAULT_DEADLINE_MS = 600_000;
 const DEFAULT_MAX_ITERATIONS = 12;
 const MAX_TOKENS = 16_000;
+
+/** output_config.effort. Defaults to high — the depth the analyst was
+ *  measured at (2026-10-13 benchmark) and what claude-opus-5 ran at by
+ *  default; claude-opus-5-5's own default is medium, so the value is always
+ *  sent. ENTRY_ANALYST_EFFORT overrides. */
+export type AnalystEffort = "low" | "medium" | "high" | "xhigh" | "max";
+const EFFORT_LEVELS: readonly AnalystEffort[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+const DEFAULT_EFFORT: AnalystEffort = "high";
+
+function effortFromEnv(): AnalystEffort {
+  const raw = process.env.ENTRY_ANALYST_EFFORT;
+  return raw && (EFFORT_LEVELS as readonly string[]).includes(raw)
+    ? (raw as AnalystEffort)
+    : DEFAULT_EFFORT;
+}
 
 const NUDGE =
   "Your investigation is over. Emit your final findings report now as structured output — findings you can no longer support with evidence should be dropped, not padded.";
@@ -66,6 +88,10 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
   private readonly client: AnalystClient;
   private readonly stub = new StubEntryAnalyst();
   readonly model: string;
+  readonly effort: AnalystEffort | undefined;
+  /** Prompt caching on the stable prefix (default). The eval harness
+   *  constructs the analyst with it off for a cold run. */
+  readonly promptCache: boolean;
   private readonly deadlineMs: number;
   private readonly maxIterations: number;
 
@@ -73,6 +99,8 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
     opts: {
       client?: AnalystClient;
       model?: string;
+      effort?: AnalystEffort;
+      promptCache?: boolean;
       deadlineMs?: number;
       maxIterations?: number;
     } = {},
@@ -80,6 +108,8 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
     this.client = opts.client ?? (new Anthropic() as unknown as AnalystClient);
     this.model =
       opts.model ?? process.env.ENTRY_ANALYST_MODEL ?? DEFAULT_MODEL;
+    this.effort = opts.effort ?? effortFromEnv();
+    this.promptCache = opts.promptCache ?? true;
     this.deadlineMs =
       opts.deadlineMs ??
       (Number(process.env.ENTRY_ANALYST_DEADLINE_MS) || DEFAULT_DEADLINE_MS);
@@ -120,10 +150,11 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
           ],
           tools,
           max_iterations: this.maxIterations,
+          ...(this.effort ? { output_config: { effort: this.effort } } : {}),
           // Auto-caching: the SDK re-places the breakpoint on the last
           // cacheable block each iteration, so the stable prefix (tools +
           // system + briefing) reads from cache from iteration 2 on.
-          cache_control: { type: "ephemeral" },
+          ...(this.promptCache ? { cache_control: { type: "ephemeral" } } : {}),
         },
         { signal: AbortSignal.timeout(this.deadlineMs) },
       );
@@ -174,7 +205,10 @@ export class ClaudeEntryAnalyst implements EntryAnalyst {
             };
           }),
           tool_choice: { type: "none" },
-          output_config: { format: betaZodOutputFormat(findingsReportSchema) },
+          output_config: {
+            format: betaZodOutputFormat(findingsReportSchema),
+            ...(this.effort ? { effort: this.effort } : {}),
+          },
         });
         if (response.stop_reason !== "refusal" && response.parsed_output) {
           collector.report = findingsReportSchema.parse(response.parsed_output);
