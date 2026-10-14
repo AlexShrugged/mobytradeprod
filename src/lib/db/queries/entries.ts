@@ -242,6 +242,9 @@ export type EntryRow = {
   id: string;
   entryNumber: string;
   entryDate: string | null;
+  /** When the entry's 7501 arrived, as an ISO instant: see
+   *  `entryUploadedAt`. Derived on read, never stored. */
+  uploadedAt: string;
   portOfEntry: string | null;
   entryType: string | null;
   status: string;
@@ -452,15 +455,16 @@ function entriesAuditWhere(audit: Set<EntryAuditState>): SQL | undefined {
   return audit.has("issues") ? issues : not(issues);
 }
 
-/** Newest first under either sort. An entry's upload date is when its 7501
- *  arrived, derived on read, never stored: the upload of the entry summary
- *  linked to it (the latest when a corrected summary followed), a packet
- *  part counting as its packet's upload (parts are re-created on reprocess,
- *  so their own timestamp is the split time), and the entry's creation
- *  when no summary is on file. An invoice or supporting document arriving
- *  later never moves the entry. */
-function entriesOrderBy(sort: EntrySort): SQL[] {
-  if (sort === "entry") return [desc(schema.entries.entryDate)];
+/** An entry's upload date is when its 7501 arrived, derived on read, never
+ *  stored: the upload of the entry summary linked to it (the latest when a
+ *  corrected summary followed), a packet part counting as its packet's
+ *  upload (parts are re-created on reprocess, so their own timestamp is
+ *  the split time), and the entry's creation when no summary is on file.
+ *  An invoice or supporting document arriving later never moves the entry.
+ *  Correlated on the entries table: one expression behind the Upload date
+ *  column and the upload sort, so the list can never show one date and
+ *  order by another. */
+function entryUploadedAt(): SQL<Date | string> {
   const packet = alias(schema.documents, "packet");
   // A query-builder subquery, not a sql`` fragment: the relational query
   // re-aliases every column inside an orderBy fragment to the root table.
@@ -481,10 +485,16 @@ function entriesOrderBy(sort: EntrySort): SQL[] {
         eq(schema.documents.docType, "port_entry"),
       ),
     );
+  return sql<Date | string>`coalesce(${lastUpload}, ${schema.entries.createdAt})`;
+}
+
+/** Newest first under either sort. */
+function entriesOrderBy(sort: EntrySort): SQL[] {
+  if (sort === "entry") return [desc(schema.entries.entryDate)];
   // Ties (seeded rows, entries with no summary on file) fall back to the
   // entry date, then the id keeps paging stable.
   return [
-    sql`coalesce(${lastUpload}, ${schema.entries.createdAt}) desc`,
+    sql`${entryUploadedAt()} desc`,
     desc(schema.entries.entryDate),
     desc(schema.entries.id),
   ];
@@ -604,6 +614,7 @@ export async function getEntries(opts: {
     linkedClaims,
     sailWindows,
     chargeSums,
+    uploads,
   ] =
     await Promise.all([
       db
@@ -665,9 +676,18 @@ export async function getEntries(opts: {
       }),
       loadSailWindows(),
       loadChargeSumsByEntry(orgId, entryIds),
+      db
+        .select({ entryId: schema.entries.id, at: entryUploadedAt() })
+        .from(schema.entries)
+        .where(inArray(schema.entries.id, entryIds)),
     ]);
 
   const lineCountByEntry = new Map(lineCounts.map((r) => [r.entryId, r.value]));
+  // Drivers differ on whether a raw timestamptz comes back as a Date or a
+  // string; ISO on the wire either way.
+  const uploadByEntry = new Map(
+    uploads.map((r) => [r.entryId, new Date(r.at).toISOString()]),
+  );
   const alertsByEntry = new Map<string, OpenAlertCounts>();
   for (const r of alertCounts) {
     const counts = alertsByEntry.get(r.entryId) ?? { ...EMPTY_ALERTS };
@@ -704,6 +724,7 @@ export async function getEntries(opts: {
     id: entry.id,
     entryNumber: entry.entryNumber,
     entryDate: entry.entryDate,
+    uploadedAt: uploadByEntry.get(entry.id) ?? entry.createdAt.toISOString(),
     portOfEntry: entry.portOfEntry,
     entryType: entry.entryType,
     status: deriveEntryStatus(claimsByEntry.get(entry.id) ?? [], today),

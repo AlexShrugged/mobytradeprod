@@ -30,7 +30,7 @@ import type {
   EntryRow,
   FutureEntryRow,
 } from "@/lib/db/queries/entries";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // The list is a union: real entries plus the derived future-entry
@@ -150,6 +150,19 @@ const columns: ColumnDef<EntriesTableRow>[] = [
         )
       ) : (
         formatDate(row.original.entryDate)
+      ),
+  },
+  {
+    id: "uploadedAt",
+    header: "Upload date",
+    cell: ({ row }) =>
+      row.original.kind === "future" ? (
+        // Nothing filed yet, so nothing has been uploaded.
+        <span className="text-muted-foreground">—</span>
+      ) : (
+        <span title={formatDateTime(row.original.uploadedAt)}>
+          {formatDate(new Date(row.original.uploadedAt))}
+        </span>
       ),
   },
   {
